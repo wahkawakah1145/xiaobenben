@@ -218,7 +218,11 @@ fun ParseMethodBadge(method: ParseMethod, modifier: Modifier = Modifier) {
 fun TransactionDetailSheet(
     transaction: LedgerTransaction,
     baseCurrencyCode: String,
-    convertedBaseCents: Long,
+    liveRateToBase: Double,
+    liveConvertedBaseCents: Long,
+    recordedBaseCurrencyCode: String,
+    recordedRateToBase: Double,
+    recordedConvertedBaseCents: Long,
     onDismiss: () -> Unit,
     onConfirmPending: (() -> Unit)? = null,
     onEdit: () -> Unit,
@@ -226,6 +230,8 @@ fun TransactionDetailSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val numberFont = LocalNumberFontFamily.current
+    val isForeignFromCurrentBase = !transaction.currencyCode.equals(baseCurrencyCode, ignoreCase = true)
+    val isForeignFromRecordedBase = !transaction.currencyCode.equals(recordedBaseCurrencyCode, ignoreCase = true)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -278,9 +284,9 @@ fun TransactionDetailSheet(
                         color = transactionTypeColor(transaction.txType),
                         fontWeight = FontWeight.Bold
                     )
-                    if (!transaction.currencyCode.equals(baseCurrencyCode, ignoreCase = true)) {
+                    if (isForeignFromRecordedBase) {
                         Text(
-                            text = "折合 ${formatCurrency(convertedBaseCents, baseCurrencyCode)}",
+                            text = "记账 ≈ ${formatCurrency(recordedConvertedBaseCents, recordedBaseCurrencyCode)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -319,6 +325,62 @@ fun TransactionDetailSheet(
                     }
                 }
                 ParseMethodBadge(method = transaction.txParseMethod)
+            }
+
+            if (isForeignFromCurrentBase || isForeignFromRecordedBase) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("detail_exchange_comparison_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "汇率快照与实时换汇",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "记录当时汇率 (1 ${transaction.currencyCode} = %.4f $recordedBaseCurrencyCode)".format(Locale.US, recordedRateToBase),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = formatCurrency(recordedConvertedBaseCents, recordedBaseCurrencyCode),
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = numberFont),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "当前实时汇率 (1 ${transaction.currencyCode} = %.4f $baseCurrencyCode)".format(Locale.US, liveRateToBase),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = formatCurrency(liveConvertedBaseCents, baseCurrencyCode),
+                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.testTag("detail_live_converted_amount")
+                            )
+                        }
+                    }
+                }
             }
 
             if (!transaction.note.isNullOrBlank()) {

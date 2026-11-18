@@ -96,11 +96,9 @@ fun ParserHubScreen(
     val capturedLogs by NotificationBridge.capturedLogs.collectAsStateWithLifecycle()
     val numberFont = LocalNumberFontFamily.current
 
-    var titleInput by remember { mutableStateOf("95555 招商银行") }
-    var bodyInput by remember {
-        mutableStateOf("【招商银行】您账户8812于11月18日08:30在星巴克(静安寺店)消费人民币42.00元，可用余额3,210.50元。")
-    }
-    var selectedPackage by remember { mutableStateOf("com.cmbchina.pb") }
+    var titleInput by remember { mutableStateOf("") }
+    var bodyInput by remember { mutableStateOf("") }
+    var selectedPackage by remember { mutableStateOf("") }
     var editingRule by remember { mutableStateOf<CustomParsingRule?>(null) }
     var showCreateRuleDialog by remember { mutableStateOf(false) }
 
@@ -167,6 +165,7 @@ fun ParserHubScreen(
                             value = titleInput,
                             onValueChange = { titleInput = it },
                             label = { Text("通知标题 / 银行号码") },
+                            placeholder = { Text("例如：95555 招商银行（或点击上方渠道芯片填入）") },
                             singleLine = true,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -177,6 +176,7 @@ fun ParserHubScreen(
                             value = bodyInput,
                             onValueChange = { bodyInput = it },
                             label = { Text("通知正文") },
+                            placeholder = { Text("粘贴需要测试的银行短信或支付通知内容") },
                             minLines = 2,
                             maxLines = 4,
                             modifier = Modifier
@@ -638,11 +638,14 @@ private fun CustomRuleEditorDialog(
 ) {
     var name by remember { mutableStateOf(initialRule?.name ?: "") }
     var keyword by remember { mutableStateOf(initialRule?.keywordPattern ?: "") }
-    var channel by remember { mutableStateOf(initialRule?.channelName ?: "北京银行") }
-    var packageFilter by remember { mutableStateOf(initialRule?.packageFilter ?: "*") }
+    var channel by remember { mutableStateOf(initialRule?.channelName ?: "") }
+    var packageFilter by remember { mutableStateOf(initialRule?.packageFilter ?: "") }
     var merchantOverride by remember { mutableStateOf(initialRule?.merchantOverride ?: "") }
     var category by remember { mutableStateOf(initialRule?.defaultCategory ?: "自动") }
     var defaultType by remember { mutableStateOf(initialRule?.defaultType ?: "AUTO") }
+    var numberStyle by remember {
+        mutableStateOf(com.example.model.NumberFormatStyle.fromRaw(initialRule?.numberFormatPattern))
+    }
     var errorText by remember { mutableStateOf<String?>(null) }
 
     val typeChoices = listOf(
@@ -685,23 +688,36 @@ private fun CustomRuleEditorDialog(
                     value = channel,
                     onValueChange = { channel = it },
                     label = { Text("归属渠道 / 银行") },
+                    placeholder = { Text("例如：招商银行、支付宝") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = merchantOverride,
                     onValueChange = { merchantOverride = it },
-                    label = { Text("固定商户名（可选，留空自动提取）") },
+                    label = { Text("固定商户名（可选）") },
+                    placeholder = { Text("留空则自动从通知提取") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = packageFilter,
                     onValueChange = { packageFilter = it },
-                    label = { Text("限定包名 (* 表示不限)") },
+                    label = { Text("限定包名（可选）") },
+                    placeholder = { Text("留空或填写 * 表示不限应用") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Text("数字金额格式", style = MaterialTheme.typography.labelMedium)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    com.example.model.NumberFormatStyle.entries.forEach { style ->
+                        FilterChip(
+                            selected = numberStyle == style,
+                            onClick = { numberStyle = style },
+                            label = { Text(style.label) }
+                        )
+                    }
+                }
                 Text("收支类型", style = MaterialTheme.typography.labelMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     typeChoices.forEach { (code, label) ->
@@ -741,6 +757,7 @@ private fun CustomRuleEditorDialog(
                         keywordPattern = keyword.trim(),
                         channelName = channel.trim(),
                         merchantOverride = merchantOverride.trim(),
+                        numberFormatPattern = numberStyle.name,
                         defaultCategory = category,
                         defaultType = defaultType
                     )

@@ -32,6 +32,8 @@ data class TransactionEntity(
     val note: String?,
     val occurredAtMillis: Long,
     val confirmed: Boolean,
+    val recordedBaseCurrencyCode: String = "CNY",
+    val recordedRateToBase: Double = 0.0,
     val createdAtMillis: Long,
     val updatedAtMillis: Long
 ) {
@@ -50,6 +52,8 @@ data class TransactionEntity(
         note = note,
         occurredAtMillis = occurredAtMillis,
         confirmed = confirmed,
+        recordedBaseCurrencyCode = recordedBaseCurrencyCode,
+        recordedRateToBase = recordedRateToBase,
         createdAtMillis = createdAtMillis,
         updatedAtMillis = updatedAtMillis
     )
@@ -70,6 +74,8 @@ data class TransactionEntity(
             note = tx.note,
             occurredAtMillis = tx.occurredAtMillis,
             confirmed = tx.confirmed,
+            recordedBaseCurrencyCode = tx.recordedBaseCurrencyCode.uppercase().ifBlank { "CNY" },
+            recordedRateToBase = tx.recordedRateToBase,
             createdAtMillis = tx.createdAtMillis,
             updatedAtMillis = tx.updatedAtMillis
         )
@@ -86,6 +92,7 @@ data class ParsingRuleEntity(
     val defaultCategory: String,
     val defaultType: String,
     val merchantOverride: String = "",
+    val numberFormatPattern: String = "AUTO",
     val priority: Int = 10,
     val enabled: Boolean,
     val createdAtMillis: Long,
@@ -100,6 +107,7 @@ data class ParsingRuleEntity(
         defaultCategory = defaultCategory,
         defaultType = defaultType,
         merchantOverride = merchantOverride,
+        numberFormatPattern = numberFormatPattern,
         priority = priority,
         enabled = enabled,
         createdAtMillis = createdAtMillis,
@@ -116,6 +124,7 @@ data class ParsingRuleEntity(
             defaultCategory = rule.defaultCategory,
             defaultType = rule.defaultType,
             merchantOverride = rule.merchantOverride,
+            numberFormatPattern = rule.numberFormatPattern,
             priority = rule.priority,
             enabled = rule.enabled,
             createdAtMillis = rule.createdAtMillis,
@@ -237,7 +246,7 @@ interface LedgerDao {
 
 @Database(
     entities = [TransactionEntity::class, ParsingRuleEntity::class, NotificationInquiryEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -282,6 +291,14 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN recordedBaseCurrencyCode TEXT NOT NULL DEFAULT 'CNY'")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN recordedRateToBase REAL NOT NULL DEFAULT 0.0")
+                db.execSQL("ALTER TABLE parsing_rules ADD COLUMN numberFormatPattern TEXT NOT NULL DEFAULT 'AUTO'")
+            }
+        }
+
         fun getInstance(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -289,7 +306,7 @@ abstract class LedgerDatabase : RoomDatabase() {
                     LedgerDatabase::class.java,
                     "smart_ledger.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }

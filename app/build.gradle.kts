@@ -9,7 +9,7 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.yo150.lvshuiqingshan"
+    applicationId = "com.live150yo.lvshuiqingshan"
     minSdk = 24
     targetSdk = 36
     versionCode = (project.findProperty("ciVersionCode") as? String)?.toIntOrNull() ?: 1

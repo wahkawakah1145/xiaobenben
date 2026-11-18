@@ -112,6 +112,8 @@ class WebDavSyncManager {
                             put("note", tx.note ?: JSONObject.NULL)
                             put("occurredAtMillis", tx.occurredAtMillis)
                             put("confirmed", tx.confirmed)
+                            put("recordedBaseCurrencyCode", tx.recordedBaseCurrencyCode)
+                            put("recordedRateToBase", tx.recordedRateToBase)
                             put("createdAtMillis", tx.createdAtMillis)
                             put("updatedAtMillis", tx.updatedAtMillis)
                         })
@@ -128,6 +130,7 @@ class WebDavSyncManager {
                             put("defaultCategory", rule.defaultCategory)
                             put("defaultType", rule.defaultType)
                             put("merchantOverride", rule.merchantOverride)
+                            put("numberFormatPattern", rule.numberFormatPattern)
                             put("priority", rule.priority)
                             put("enabled", rule.enabled)
                             put("createdAtMillis", rule.createdAtMillis)
@@ -219,6 +222,8 @@ class WebDavSyncManager {
                             note = o.optString("note").takeIf { it.isNotBlank() && it != "null" },
                             occurredAtMillis = o.optLong("occurredAtMillis", System.currentTimeMillis()),
                             confirmed = o.optBoolean("confirmed", true),
+                            recordedBaseCurrencyCode = o.optString("recordedBaseCurrencyCode", "CNY").ifBlank { "CNY" },
+                            recordedRateToBase = o.optDouble("recordedRateToBase", 0.0).takeIf { !it.isNaN() } ?: 0.0,
                             createdAtMillis = o.optLong("createdAtMillis", System.currentTimeMillis()),
                             updatedAtMillis = o.optLong("updatedAtMillis", System.currentTimeMillis())
                         )
@@ -240,6 +245,7 @@ class WebDavSyncManager {
                             defaultCategory = o.optString("defaultCategory", "其他"),
                             defaultType = o.optString("defaultType", "EXPENSE"),
                             merchantOverride = o.optString("merchantOverride", ""),
+                            numberFormatPattern = o.optString("numberFormatPattern", "AUTO").ifBlank { "AUTO" },
                             priority = o.optInt("priority", 10),
                             enabled = o.optBoolean("enabled", true),
                             createdAtMillis = o.optLong("createdAtMillis", System.currentTimeMillis()),

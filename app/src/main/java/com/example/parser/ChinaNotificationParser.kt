@@ -1,6 +1,7 @@
 package com.example.parser
 
 import com.example.model.CustomParsingRule
+import com.example.model.NumberFormatStyle
 import com.example.model.ParseMethod
 import com.example.model.ParsedNotificationResult
 import com.example.model.TransactionType
@@ -16,28 +17,39 @@ object ChinaNotificationParser {
 
     private val financialTriggerKeywords = listOf(
         "付款", "消费", "支出", "扣款", "支付", "刷卡", "支取", "转出", "缴费", "代扣",
-        "收款", "入账", "到账", "转入", "工资", "退款", "返现", "收益", "红包",
+        "收款", "入账", "到账", "转入", "存入", "工资", "退款", "返现", "收益", "红包",
         "转账", "还款", "提现", "动账", "交易", "人民币", "RMB", "USD", "HKD", "EUR",
         "JPY", "GBP", "美元", "港币", "日元", "欧元", "英镑", "¥", "￥", "$", "€", "£", "元"
     )
 
+    private val refundKeywords = listOf(
+        "退款", "退回", "退货", "返现", "冲正", "已退款", "退还"
+    )
+
     private val incomeKeywords = listOf(
-        "收款", "入账", "到账", "转入", "工资", "薪资", "奖金", "退款", "返现", "收益", "分红", "报销", "收入", "退回"
+        "收入", "入账", "到账", "存入", "转入", "工资", "薪资", "奖金", "发薪", "报销",
+        "收益", "分红", "利息", "收到来自", "已收款", "成功收款", "收款", "贷记", "向你转账"
     )
 
     private val transferKeywords = listOf(
-        "转账", "还款", "提现", "零钱通转入", "余额宝转入", "信用卡还款", "资金归集"
+        "信用卡还款", "自动还款", "零钱通转入", "余额宝转入", "资金归集", "账户互转", "提现", "转账"
     )
 
     private val expenseKeywords = listOf(
-        "付款", "消费", "支出", "扣款", "支付", "刷卡", "支取", "转出", "缴费", "代扣", "扣费", "买入", "下单"
+        "支出", "扣款", "扣费", "代扣", "刷卡", "消费", "付款", "已支付", "成功支付",
+        "支付", "支取", "转出", "缴费", "买入", "下单", "借记", "汇出"
     )
 
+    private val amountNumberRegexToken =
+        """([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{1,3}(?:\s[0-9]{3})+(?:[.,][0-9]{1,2})?|[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]{1,2}|[0-9]+(?:[.,][0-9]{1,2})?)"""
+
     private val amountPatterns = listOf(
-        Regex("""(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|美元|港币|港元|欧元|日元|英镑|新币|韩元|澳元|加元|澳门元|新台币|HK\$|US\$|S\$|A\$|C\$|NT\$|MOP\$|[¥￥$€£₩])\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)""", RegexOption.IGNORE_CASE),
-        Regex("""(?:金额|付款|消费|支出|扣款|支付|入账|到账|收款|转入|转出|支取|转账|还款)[为:：]?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:元|美元|港币|港元|日元|欧元|英镑|円)?"""),
-        Regex("""([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:元|美元|港币|港元|日元|欧元|英镑|円|USD|HKD|EUR|JPY|GBP)""", RegexOption.IGNORE_CASE)
+        Regex("""(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|美元|港币|港元|欧元|日元|英镑|新币|韩元|澳元|加元|澳门元|新台币|HK\$|US\$|S\$|A\$|C\$|NT\$|MOP\$|[¥￥$€£₩])\s*[+\-]?\s*$amountNumberRegexToken""", RegexOption.IGNORE_CASE),
+        Regex("""(?:金额|付款|消费|支出|扣款|扣费|支付|入账|到账|存入|收款|转入|转出|支取|转账|还款)[为:：]?\s*[+\-]?\s*$amountNumberRegexToken\s*(?:元|美元|港币|港元|日元|欧元|英镑|円)?"""),
+        Regex("""$amountNumberRegexToken\s*(?:元|美元|港币|港元|日元|欧元|英镑|円|USD|HKD|EUR|JPY|GBP)""", RegexOption.IGNORE_CASE)
     )
+
+    private val standaloneNumberRegex = Regex("""(?<![0-9a-zA-Z.:/])$amountNumberRegexToken(?![0-9a-zA-Z:/])""")
 
     private val cardTailPatterns = listOf(
         Regex("""尾号\s*(\d{4})"""),
@@ -92,9 +104,6 @@ object ChinaNotificationParser {
         if (combined.isBlank()) return null
         if (noiseKeywords.any { combined.contains(it) }) return null
 
-        val amountCents = extractAmountCents(combined) ?: return null
-        val currencyCode = detectCurrencyCode(combined)
-
         val matchedCustomRule = customRules
             .filter { it.enabled }
             .sortedWith(
@@ -102,11 +111,20 @@ object ChinaNotificationParser {
                     .thenByDescending { it.keywordPattern.length }
             )
             .firstOrNull { rule ->
-                (rule.packageFilter == "*" || rule.packageFilter == packageName) &&
+                (rule.packageFilter == "*" || rule.packageFilter.isBlank() || rule.packageFilter == packageName) &&
                     rule.keywordPattern.isNotBlank() &&
                     runCatching { Regex(rule.keywordPattern, RegexOption.IGNORE_CASE).containsMatchIn(combined) }
                         .getOrElse { combined.contains(rule.keywordPattern, ignoreCase = true) }
             }
+
+        val ruleNumberStyle = NumberFormatStyle.fromRaw(matchedCustomRule?.numberFormatPattern)
+        val allowLoose = matchedCustomRule != null && matchedCustomRule.priority > 0
+        val amountCents = extractAmountCents(
+            text = combined,
+            numberStyle = ruleNumberStyle,
+            allowLooseStandaloneNumber = allowLoose
+        ) ?: return null
+        val currencyCode = detectCurrencyCode(combined)
 
         val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
         val channel = matchedCustomRule?.channelName?.takeIf { it.isNotBlank() }
@@ -188,12 +206,15 @@ object ChinaNotificationParser {
         )
     }
 
-    fun suggestRuleKeyword(
+    fun extractKeywordCandidates(
         title: String,
         content: String,
-        merchant: String,
-        channel: String
-    ): String {
+        merchant: String = "",
+        channel: String = ""
+    ): List<String> {
+        val candidates = LinkedHashSet<String>()
+        val combined = "$title $content".trim()
+
         val cleanMerchant = merchant.trim()
         if (cleanMerchant.length >= 2 &&
             !cleanMerchant.endsWith("消费") &&
@@ -201,21 +222,108 @@ object ChinaNotificationParser {
             !cleanMerchant.endsWith("转账") &&
             cleanMerchant != "未知商户"
         ) {
-            return cleanMerchant.take(20)
+            candidates.add(cleanMerchant.take(20))
         }
-        val bracketed = Regex("""[【\[「"“]([^】\]」"”]{2,16})[】\]」"”]""").find("$title $content")
-            ?.groupValues?.get(1)?.trim()
-        if (!bracketed.isNullOrBlank()) return bracketed
-        if (channel.isNotBlank() && channel != "未知渠道") return channel
-        val cleanTitle = title.trim().replace(Regex("""\s+"""), "")
-        if (cleanTitle.length >= 2) return cleanTitle.take(16)
-        return content.trim().take(12)
+
+        Regex("""[【\[「"“]([^】\]」"”]{2,18})[】\]」"”]""").findAll(combined).forEach { match ->
+            val token = match.groupValues[1].trim()
+            if (token.length >= 2 && !token.all { it.isDigit() }) {
+                candidates.add(token)
+            }
+        }
+
+        if (channel.isNotBlank() && channel != "未知渠道") {
+            candidates.add(channel)
+        }
+
+        val actionTokens = listOf(
+            "消费", "扣款", "付款", "支出", "刷卡", "收款", "入账", "到账",
+            "退款", "退回", "返现", "工资", "转入", "转出", "转账", "还款", "代扣"
+        )
+        actionTokens.forEach { token ->
+            if (combined.contains(token)) candidates.add(token)
+        }
+
+        val stripped = combined
+            .replace(Regex("""\d{1,2}月\d{1,2}日"""), " ")
+            .replace(Regex("""\d{1,2}:\d{2}(?::\d{2})?"""), " ")
+            .replace(Regex("""(?:尾号|账户)\s*\d{4}"""), " ")
+            .replace(Regex("""[0-9]{1,3}(?:[,\s.][0-9]{3})*(?:[.,][0-9]{1,2})?\s*(?:元|美元|港币|港元|日元|欧元|英镑|円)?"""), " ")
+
+        stripped.split(Regex("""[\s，。、：:；;!！?？()（）【】\[\]「」"“”/\\|]+"""))
+            .map { it.trim() }
+            .filter { token ->
+                token.length in 2..14 &&
+                    !token.all { ch -> ch.isDigit() || ch == '.' || ch == ',' } &&
+                    token !in listOf("您账户", "您尾号", "可用余额", "人民币", "明细", "提醒", "通知")
+            }
+            .take(8)
+            .forEach { candidates.add(it) }
+
+        return candidates.take(10).toList()
+    }
+
+    fun suggestRuleKeyword(
+        title: String,
+        content: String,
+        merchant: String,
+        channel: String
+    ): String {
+        return extractKeywordCandidates(title, content, merchant, channel).firstOrNull()
+            ?: title.trim().replace(Regex("""\s+"""), "").take(16).ifBlank { content.trim().take(12) }
+    }
+
+    fun detectNumberFormatStyle(text: String): NumberFormatStyle {
+        val cleaned = stripBalanceAndDates(text)
+        return when {
+            Regex("""\d{1,3}(?:\.\d{3})+,\d{1,2}""").containsMatchIn(cleaned) ||
+                Regex("""(?<![\d.,])\d+,\d{2}(?!\d)""").containsMatchIn(cleaned) ->
+                NumberFormatStyle.DOT_THOUSANDS_COMMA
+            Regex("""\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?""").containsMatchIn(cleaned) ->
+                NumberFormatStyle.COMMA_THOUSANDS_DOT
+            else -> NumberFormatStyle.AUTO
+        }
+    }
+
+    fun parseNormalizedAmountCents(
+        rawNumber: String,
+        style: NumberFormatStyle = NumberFormatStyle.AUTO
+    ): Long? {
+        val compact = rawNumber.trim().replace(" ", "")
+        if (compact.isEmpty()) return null
+
+        val normalizedDoubleStr = when (style) {
+            NumberFormatStyle.DOT_THOUSANDS_COMMA -> {
+                if (compact.contains(",")) {
+                    compact.replace(".", "").replace(",", ".")
+                } else {
+                    compact
+                }
+            }
+            NumberFormatStyle.PLAIN_INTEGER -> {
+                compact.replace(",", "").replace(".", "")
+            }
+            NumberFormatStyle.AUTO, NumberFormatStyle.COMMA_THOUSANDS_DOT -> {
+                when {
+                    // Explicit European dot thousands + comma decimal e.g. 2.111,10
+                    Regex("""^\d{1,3}(?:\.\d{3})+,\d{1,2}$""").matches(compact) ->
+                        compact.replace(".", "").replace(",", ".")
+                    // Pure comma decimal e.g. 2111,10 (comma not followed by 3 digits)
+                    Regex("""^\d+,\d{1,2}$""").matches(compact) ->
+                        compact.replace(",", ".")
+                    // Standard 2,111.10 or 2111.10 or 2,111 -> identical after removing grouping commas
+                    else -> compact.replace(",", "")
+                }
+            }
+        }
+
+        val value = normalizedDoubleStr.toDoubleOrNull() ?: return null
+        if (value <= 0.0 || value > 10_000_000.0) return null
+        return (value * 100.0).roundToLong()
     }
 
     fun detectCurrencyCode(text: String): String {
-        val sanitized = text
-            .replace(Regex("""(?:可用余额|当前余额|账户余额|交易后余额|余额|可用额度)[为:：]?\s*(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*[0-9,.]+(?:元|美元|港币|日元|欧元|英镑)?"""), "")
-        val target = sanitized.ifBlank { text }
+        val target = stripBalanceAndDates(text).ifBlank { text }
 
         return when {
             target.contains("HKD", ignoreCase = true) || target.contains("HK$") ||
@@ -244,22 +352,44 @@ object ChinaNotificationParser {
         }
     }
 
-    fun extractAmountCents(text: String): Long? {
-        val sanitized = text
-            .replace(Regex("""(?:可用余额|当前余额|账户余额|交易后余额|余额|可用额度)[为:：]?\s*(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*[0-9,.]+(?:元|美元|港币|日元|欧元|英镑)?"""), "")
-        val target = sanitized.ifBlank { text }
+    fun extractAmountCents(
+        text: String,
+        numberStyle: NumberFormatStyle = NumberFormatStyle.AUTO,
+        allowLooseStandaloneNumber: Boolean = false
+    ): Long? {
+        val target = stripBalanceAndDates(text).ifBlank { text }
 
         for (pattern in amountPatterns) {
             val match = pattern.find(target)
             if (match != null) {
-                val rawNum = match.groupValues[1].replace(",", "")
-                val yuan = rawNum.toDoubleOrNull()
-                if (yuan != null && yuan > 0.0 && yuan <= 10_000_000.0) {
-                    return (yuan * 100.0).roundToLong()
+                val cents = parseNormalizedAmountCents(match.groupValues[1], numberStyle)
+                if (cents != null) return cents
+            }
+        }
+
+        if (allowLooseStandaloneNumber) {
+            val sanitizedForLoose = target
+                .replace(Regex("""(?:尾号|账户|卡号)\s*\d{4}"""), " ")
+                .replace(Regex("""\d{4}\s*卡"""), " ")
+            standaloneNumberRegex.findAll(sanitizedForLoose).forEach { match ->
+                val raw = match.groupValues[1]
+                // Avoid matching bare 4-digit year/card-tail unless it has decimal or grouping separator
+                val hasFormatting = raw.contains('.') || raw.contains(',') || raw.contains(' ')
+                if (hasFormatting || raw.length != 4) {
+                    val cents = parseNormalizedAmountCents(raw, numberStyle)
+                    if (cents != null) return cents
                 }
             }
         }
         return null
+    }
+
+    private fun stripBalanceAndDates(text: String): String {
+        return text
+            .replace(Regex("""(?:可用余额|当前余额|账户余额|交易后余额|余额|可用额度)[为:：]?\s*(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*[0-9,.\s]+(?:元|美元|港币|日元|欧元|英镑)?"""), " ")
+            .replace(Regex("""\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?"""), " ")
+            .replace(Regex("""\d{1,2}月\d{1,2}日"""), " ")
+            .replace(Regex("""\d{1,2}:\d{2}(?::\d{2})?"""), " ")
     }
 
     private fun detectChannel(packageName: String, text: String): String {
@@ -285,16 +415,61 @@ object ChinaNotificationParser {
         }
     }
 
-    private fun detectTransactionType(text: String): TransactionType {
-        val hasIncome = incomeKeywords.any { text.contains(it) }
-        val hasExpense = expenseKeywords.any { text.contains(it) }
-        val hasTransfer = transferKeywords.any { text.contains(it) }
+    fun detectTransactionType(text: String): TransactionType {
+        // Strip brand/descriptor words that misleadingly contain "支付" or "收款"
+        val cleaned = text
+            .replace("微信支付", " ")
+            .replace("支付宝", " ")
+            .replace("云闪付", " ")
+            .replace("支付方式", " ")
+            .replace("付款方式", " ")
+            .replace("收款方", " ")
+            .replace("收款人", " ")
+            .replace("收款商户", " ")
+            .replace("消费金融", " ")
+            .replace("消费积分", " ")
+
+        val hasPositiveSign = Regex("""(?:^|[\s:：])\+ ?(?:人民币|RMB|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*\d""").containsMatchIn(cleaned)
+        val hasNegativeSign = Regex("""(?:^|[\s:：])- ?(?:人民币|RMB|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*\d""").containsMatchIn(cleaned)
+        if (hasPositiveSign && !hasNegativeSign) return TransactionType.INCOME
+
+        // Refund / reversal takes precedence even when mentioning original consumption
+        if (refundKeywords.any { cleaned.contains(it) }) {
+            return TransactionType.INCOME
+        }
+
+        val firstIncomeIdx = incomeKeywords
+            .mapNotNull { kw -> cleaned.indexOf(kw).takeIf { it >= 0 }?.let { it to kw } }
+            .minByOrNull { it.first }
+        val firstExpenseIdx = expenseKeywords
+            .mapNotNull { kw -> cleaned.indexOf(kw).takeIf { it >= 0 }?.let { it to kw } }
+            .minByOrNull { it.first }
+        val hasTransferCue = transferKeywords.any { cleaned.contains(it) }
 
         return when {
-            hasIncome && !hasExpense -> TransactionType.INCOME
-            hasTransfer && !text.contains("消费") && !text.contains("向") -> TransactionType.TRANSFER
-            hasExpense -> TransactionType.EXPENSE
-            hasIncome -> TransactionType.INCOME
+            firstIncomeIdx != null && firstExpenseIdx == null -> TransactionType.INCOME
+            firstExpenseIdx != null && firstIncomeIdx == null -> {
+                if (hasTransferCue && !cleaned.contains("消费") && !cleaned.contains("向") && !cleaned.contains("扣款")) {
+                    TransactionType.TRANSFER
+                } else {
+                    TransactionType.EXPENSE
+                }
+            }
+            firstIncomeIdx != null && firstExpenseIdx != null -> {
+                // Strong income nouns like 工资 / 薪资 / 到账 / 入账 / 收入 beat passive mentions
+                val strongIncome = listOf("工资", "薪资", "奖金", "收入", "入账", "到账", "存入", "转入", "报销", "收到来自")
+                    .any { cleaned.contains(it) }
+                val strongExpense = listOf("支出", "消费", "扣款", "扣费", "刷卡", "向.*付款".toRegex().pattern)
+                    .any { cleaned.contains(it) || Regex("""向.{1,20}付款""").containsMatchIn(cleaned) }
+                when {
+                    strongIncome && !strongExpense -> TransactionType.INCOME
+                    strongExpense && !strongIncome -> TransactionType.EXPENSE
+                    firstIncomeIdx.first < firstExpenseIdx.first -> TransactionType.INCOME
+                    else -> TransactionType.EXPENSE
+                }
+            }
+            hasNegativeSign -> TransactionType.EXPENSE
+            hasTransferCue -> TransactionType.TRANSFER
             else -> TransactionType.EXPENSE
         }
     }
@@ -337,7 +512,7 @@ object ChinaNotificationParser {
         return when {
             text.contains("工资") || text.contains("薪资") -> "工资发放"
             text.contains("理财") && text.contains("收益") -> "理财收益"
-            text.contains("退款") -> "${channel}退款"
+            text.contains("退款") || text.contains("退回") -> "${channel}退款"
             type == TransactionType.INCOME -> "${channel}收款"
             type == TransactionType.TRANSFER -> "${channel}转账"
             else -> "${channel}消费"
@@ -350,7 +525,7 @@ object ChinaNotificationParser {
             return when {
                 combined.contains("工资") || combined.contains("薪资") || combined.contains("奖金") -> "工资奖金"
                 combined.contains("理财") || combined.contains("收益") || combined.contains("利息") || combined.contains("分红") -> "理财收益"
-                combined.contains("退款") || combined.contains("返现") -> "退款返现"
+                combined.contains("退款") || combined.contains("退回") || combined.contains("返现") -> "退款返现"
                 else -> "转账收款"
             }
         }
@@ -382,3 +557,4 @@ object ChinaNotificationParser {
         }
     }
 }
+

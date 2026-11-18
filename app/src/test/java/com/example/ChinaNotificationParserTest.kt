@@ -277,4 +277,118 @@ class ChinaNotificationParserTest {
         assertEquals("第二条自定义金句", com.example.parser.FinanceHumorTips.tipAt(1, customRaw))
         assertEquals("第一条自定义金句", com.example.parser.FinanceHumorTips.tipAt(2, customRaw))
     }
+
+    @Test
+    fun parsesEquivalentNumberFormatsIdenticallyAndSupportsLearnedFormats() {
+        val plain = ChinaNotificationParser.parse(
+            packageName = "com.custom.bank",
+            title = "银行动账提醒",
+            content = "【XX银行】您的账户入账人民币2111.10元。"
+        )
+        val grouped = ChinaNotificationParser.parse(
+            packageName = "com.custom.bank",
+            title = "银行动账提醒",
+            content = "【XX银行】您的账户入账人民币2,111.10元。"
+        )
+        assertNotNull(plain)
+        assertNotNull(grouped)
+        assertEquals(211110L, plain!!.amountCents)
+        assertEquals(plain.amountCents, grouped!!.amountCents)
+        assertEquals(
+            com.example.model.NumberFormatStyle.COMMA_THOUSANDS_DOT,
+            ChinaNotificationParser.detectNumberFormatStyle("入账人民币2,111.10元")
+        )
+
+        val euroRule = com.example.model.CustomParsingRule(
+            name = "欧区账单",
+            packageFilter = "*",
+            keywordPattern = "EuroPay",
+            channelName = "EuroPay",
+            defaultCategory = "购物消费",
+            defaultType = "AUTO",
+            numberFormatPattern = com.example.model.NumberFormatStyle.DOT_THOUSANDS_COMMA.name,
+            priority = 20,
+            enabled = true
+        )
+        val euroTx = ChinaNotificationParser.parse(
+            packageName = "com.euro.pay",
+            title = "EuroPay 通知",
+            content = "EuroPay 扣款 EUR 2.111,10",
+            customRules = listOf(euroRule)
+        )
+        assertNotNull(euroTx)
+        assertEquals(211110L, euroTx!!.amountCents)
+        assertEquals("EUR", euroTx.currencyCode)
+        assertEquals(TransactionType.EXPENSE, euroTx.type)
+    }
+
+    @Test
+    fun accuratelyDistinguishesIncomeRefundAndExpenseDespiteBrandKeywords() {
+        val wechatIncome = ChinaNotificationParser.parse(
+            packageName = "com.tencent.mm",
+            title = "微信支付",
+            content = "微信支付：收到来自张三的转账 100.00元。"
+        )
+        assertNotNull(wechatIncome)
+        assertEquals(TransactionType.INCOME, wechatIncome!!.type)
+        assertEquals(10000L, wechatIncome.amountCents)
+
+        val alipayIncome = ChinaNotificationParser.parse(
+            packageName = "com.eg.android.AlipayGphone",
+            title = "支付宝通知",
+            content = "支付宝收款到账50.00元，支付方式：余额。"
+        )
+        assertNotNull(alipayIncome)
+        assertEquals(TransactionType.INCOME, alipayIncome!!.type)
+        assertEquals(5000L, alipayIncome.amountCents)
+
+        val refundIncome = ChinaNotificationParser.parse(
+            packageName = "com.android.mms",
+            title = "95555 招商银行",
+            content = "【招商银行】您尾号8812卡信用卡消费退款人民币120.00元已退回。"
+        )
+        assertNotNull(refundIncome)
+        assertEquals(TransactionType.INCOME, refundIncome!!.type)
+        assertEquals(12000L, refundIncome.amountCents)
+
+        val candidates = ChinaNotificationParser.extractKeywordCandidates(
+            title = "企业园区卡通知",
+            content = "【园区一卡通】您在职工食堂消费18.00元。",
+            merchant = "职工食堂",
+            channel = "未知渠道"
+        )
+        org.junit.Assert.assertTrue(candidates.contains("职工食堂"))
+        org.junit.Assert.assertTrue(candidates.contains("园区一卡通"))
+    }
+
+    @Test
+    fun historicalSnapshotDiffersFromUpdatedLiveExchangeRate() {
+        val recordedRate = com.example.data.CurrencyExchangeManager.rateBetween(
+            fromCurrency = "USD",
+            toCurrency = "CNY",
+            ratesToCny = mapOf("CNY" to 1.0, "USD" to 7.10)
+        )
+        val recordedCents = com.example.data.CurrencyExchangeManager.convertCents(
+            amountCents = 1000L,
+            fromCurrency = "USD",
+            toCurrency = "CNY",
+            ratesToCny = mapOf("CNY" to 1.0, "USD" to 7.10)
+        )
+        val liveRate = com.example.data.CurrencyExchangeManager.rateBetween(
+            fromCurrency = "USD",
+            toCurrency = "CNY",
+            ratesToCny = mapOf("CNY" to 1.0, "USD" to 7.35)
+        )
+        val liveCents = com.example.data.CurrencyExchangeManager.convertCents(
+            amountCents = 1000L,
+            fromCurrency = "USD",
+            toCurrency = "CNY",
+            ratesToCny = mapOf("CNY" to 1.0, "USD" to 7.35)
+        )
+        assertEquals(7.10, recordedRate, 0.0001)
+        assertEquals(7100L, recordedCents)
+        assertEquals(7.35, liveRate, 0.0001)
+        assertEquals(7350L, liveCents)
+    }
 }
+

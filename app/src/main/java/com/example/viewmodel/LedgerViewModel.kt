@@ -295,7 +295,9 @@ class LedgerViewModel(
         channel: String,
         learnRule: Boolean,
         ruleKeyword: String,
-        ruleName: String
+        ruleName: String,
+        numberFormatPattern: String = com.example.model.NumberFormatStyle.AUTO.name,
+        ruleDefaultType: String = "AUTO"
     ) {
         viewModelScope.launch {
             repository.resolveInquiryAndLearnRule(
@@ -308,7 +310,9 @@ class LedgerViewModel(
                 channel = channel,
                 learnRule = learnRule,
                 ruleKeyword = ruleKeyword,
-                ruleName = ruleName
+                ruleName = ruleName,
+                numberFormatPattern = numberFormatPattern,
+                ruleDefaultType = ruleDefaultType
             )
                 .onFailure { _actionMessage.value = "处理失败：${it.localizedMessage ?: "请检查输入"}" }
         }
@@ -558,6 +562,33 @@ class LedgerViewModel(
             toCurrency = settingsState.value.baseCurrencyCode,
             ratesToCny = exchangeRateState.value.ratesToCny
         )
+    }
+
+    fun liveRateToBase(tx: LedgerTransaction): Double {
+        return CurrencyExchangeManager.rateBetween(
+            fromCurrency = tx.currencyCode,
+            toCurrency = settingsState.value.baseCurrencyCode,
+            ratesToCny = exchangeRateState.value.ratesToCny
+        )
+    }
+
+    fun recordedSnapshotDisplay(tx: LedgerTransaction): Triple<String, Double, Long> {
+        val base = if (tx.recordedRateToBase > 0.0) {
+            tx.recordedBaseCurrencyCode.ifBlank { settingsState.value.baseCurrencyCode }
+        } else {
+            settingsState.value.baseCurrencyCode
+        }
+        val rate = if (tx.recordedRateToBase > 0.0) {
+            tx.recordedRateToBase
+        } else {
+            CurrencyExchangeManager.rateBetween(
+                fromCurrency = tx.currencyCode,
+                toCurrency = base,
+                ratesToCny = exchangeRateState.value.ratesToCny
+            )
+        }
+        val cents = kotlin.math.round(tx.amountCents * rate).toLong()
+        return Triple(base, rate, cents)
     }
 
     companion object {

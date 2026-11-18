@@ -110,16 +110,24 @@ class LedgerRepository(
         channel: String,
         learnRule: Boolean,
         ruleKeyword: String,
-        ruleName: String
+        ruleName: String,
+        numberFormatPattern: String = com.example.model.NumberFormatStyle.AUTO.name,
+        ruleDefaultType: String = "AUTO"
     ): Result<Unit> {
         return try {
             require(amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万" }
             val now = System.currentTimeMillis()
+            val cleanCurrency = CurrencyCatalog.resolve(currencyCode).code
             val cleanMerchant = merchant.trim().ifBlank { category }
             val cleanChannel = channel.trim().ifBlank { "未知渠道" }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val rates = settingsStore.getExchangeRateStateOnce().ratesToCny
+            val baseCode = CurrencyCatalog.resolve(settings.baseCurrencyCode).code
+            val snapshotRate = CurrencyExchangeManager.rateBetween(cleanCurrency, baseCode, rates)
+
             val tx = LedgerTransaction(
                 amountCents = amountCents,
-                currencyCode = CurrencyCatalog.resolve(currencyCode).code,
+                currencyCode = cleanCurrency,
                 type = type.name,
                 category = category.trim().ifBlank { "其他" },
                 merchant = cleanMerchant,
@@ -132,6 +140,8 @@ class LedgerRepository(
                 note = "经询问确认并学习",
                 occurredAtMillis = inquiry.occurredAtMillis,
                 confirmed = true,
+                recordedBaseCurrencyCode = baseCode,
+                recordedRateToBase = snapshotRate,
                 createdAtMillis = now,
                 updatedAtMillis = now
             )
@@ -146,6 +156,11 @@ class LedgerRepository(
                         it.keywordPattern.equals(cleanKeyword, ignoreCase = true) ||
                             (it.priority > 0 && it.name.equals(cleanName, ignoreCase = true))
                     }
+                val normalizedRuleType = if (ruleDefaultType.equals("AUTO", ignoreCase = true)) {
+                    "AUTO"
+                } else {
+                    TransactionType.fromRaw(ruleDefaultType).name
+                }
                 val ruleToSave = (existingRule ?: CustomParsingRule()).copy(
                     name = cleanName,
                     packageFilter = existingRule?.packageFilter
@@ -153,8 +168,9 @@ class LedgerRepository(
                     keywordPattern = cleanKeyword,
                     channelName = cleanChannel.take(60),
                     defaultCategory = category.trim().ifBlank { "其他" }.take(40),
-                    defaultType = type.name,
+                    defaultType = normalizedRuleType,
                     merchantOverride = cleanMerchant.take(60),
+                    numberFormatPattern = com.example.model.NumberFormatStyle.fromRaw(numberFormatPattern).name,
                     priority = 20,
                     enabled = true,
                     updatedAtMillis = now
@@ -178,9 +194,18 @@ class LedgerRepository(
             require(tx.amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万" }
             val now = System.currentTimeMillis()
             val id = tx.id.ifBlank { UUID.randomUUID().toString() }
+            val resolvedCurrency = CurrencyCatalog.resolve(tx.currencyCode).code
+            val (baseCode, snapshotRate) = if (tx.recordedRateToBase > 0.0) {
+                CurrencyCatalog.resolve(tx.recordedBaseCurrencyCode).code to tx.recordedRateToBase
+            } else {
+                val settings = settingsStore.getBudgetSettingsOnce()
+                val rates = settingsStore.getExchangeRateStateOnce().ratesToCny
+                val base = CurrencyCatalog.resolve(settings.baseCurrencyCode).code
+                base to CurrencyExchangeManager.rateBetween(resolvedCurrency, base, rates)
+            }
             val normalized = tx.copy(
                 id = id,
-                currencyCode = CurrencyCatalog.resolve(tx.currencyCode).code,
+                currencyCode = resolvedCurrency,
                 merchant = tx.merchant.trim().ifBlank { "未知商户" }.take(120),
                 channel = tx.channel.trim().ifBlank { "未知渠道" }.take(60),
                 category = tx.category.trim().ifBlank { "其他" }.take(40),
@@ -188,6 +213,8 @@ class LedgerRepository(
                 rawNotification = tx.rawNotification?.trim()?.takeIf { it.isNotEmpty() }?.take(600),
                 note = tx.note?.trim()?.takeIf { it.isNotEmpty() }?.take(200),
                 occurredAtMillis = tx.occurredAtMillis.coerceAtLeast(1L),
+                recordedBaseCurrencyCode = baseCode,
+                recordedRateToBase = snapshotRate,
                 createdAtMillis = tx.createdAtMillis.takeIf { it > 0L } ?: now,
                 updatedAtMillis = now
             )
@@ -277,7 +304,21 @@ class LedgerRepository(
 
     suspend fun importTransactions(items: List<LedgerTransaction>): Result<Int> {
         return try {
-            val valid = items.filter { it.amountCents in 1L..1_000_000_000L }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val rates = settingsStore.getExchangeRateStateOnce().ratesToCny
+            val base = CurrencyCatalog.resolve(settings.baseCurrencyCode).code
+            val valid = items.filter { it.amountCents in 1L..1_000_000_000L }.map { tx ->
+                if (tx.recordedRateToBase > 0.0) {
+                    tx
+                } else {
+                    val code = CurrencyCatalog.resolve(tx.currencyCode).code
+                    tx.copy(
+                        currencyCode = code,
+                        recordedBaseCurrencyCode = base,
+                        recordedRateToBase = CurrencyExchangeManager.rateBetween(code, base, rates)
+                    )
+                }
+            }
             if (valid.isNotEmpty()) {
                 dao.upsertTransactions(valid.map { TransactionEntity.fromDomain(it) })
             }
@@ -317,6 +358,7 @@ class LedgerRepository(
                 defaultCategory = rule.defaultCategory.trim().ifBlank { "自动" }.take(40),
                 defaultType = normalizedType,
                 merchantOverride = rule.merchantOverride.trim().take(60),
+                numberFormatPattern = com.example.model.NumberFormatStyle.fromRaw(rule.numberFormatPattern).name,
                 priority = rule.priority,
                 createdAtMillis = rule.createdAtMillis.takeIf { it > 0L } ?: now,
                 updatedAtMillis = now

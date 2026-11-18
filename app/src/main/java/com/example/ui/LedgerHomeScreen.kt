@@ -79,6 +79,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.data.CurrencyExchangeManager
 import com.example.model.AppearanceSettings
@@ -91,6 +94,7 @@ import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
 import com.example.model.LedgerTransaction
 import com.example.model.NotificationInquiry
+import com.example.model.NumberFormatStyle
 import com.example.model.TransactionType
 import com.example.parser.ChinaNotificationParser
 import com.example.parser.FinanceHumorTips
@@ -439,11 +443,12 @@ fun LedgerHomeScreen(
                                 items = itemsForDay,
                                 key = { it.id.ifBlank { "${it.occurredAtMillis}_${it.merchant}" } }
                             ) { tx ->
-                                val converted = viewModel.convertToBaseCents(tx)
+                                val (recordedBase, recordedRate, recordedCents) = viewModel.recordedSnapshotDisplay(tx)
                                 TransactionRowCard(
                                     transaction = tx,
-                                    baseCurrencyCode = baseCurrency,
-                                    convertedBaseCents = converted,
+                                    recordedBaseCurrencyCode = recordedBase,
+                                    recordedRateToBase = recordedRate,
+                                    recordedBaseCents = recordedCents,
                                     cornerRadius = rowCornerRadius,
                                     verticalPadding = rowVerticalPadding,
                                     showChannelBadge = appearance.showChannelBadge,
@@ -474,10 +479,15 @@ fun LedgerHomeScreen(
     }
 
     selectedTransaction?.let { tx ->
+        val (recordedBase, recordedRate, recordedCents) = viewModel.recordedSnapshotDisplay(tx)
         TransactionDetailSheet(
             transaction = tx,
             baseCurrencyCode = baseCurrency,
-            convertedBaseCents = viewModel.convertToBaseCents(tx),
+            liveRateToBase = viewModel.liveRateToBase(tx),
+            liveConvertedBaseCents = viewModel.convertToBaseCents(tx),
+            recordedBaseCurrencyCode = recordedBase,
+            recordedRateToBase = recordedRate,
+            recordedConvertedBaseCents = recordedCents,
             onDismiss = { selectedTransaction = null },
             onConfirmPending = if (!tx.confirmed) {
                 {
@@ -549,7 +559,7 @@ fun LedgerHomeScreen(
                 viewModel.dismissInquiry(inquiry.id)
                 resolvingInquiry = null
             },
-            onConfirm = { amountCents, currencyCode, type, category, merchant, channel, learnRule, ruleKeyword, ruleName ->
+            onConfirm = { amountCents, currencyCode, type, category, merchant, channel, learnRule, ruleKeyword, ruleName, numberFormatPattern, ruleDefaultType ->
                 viewModel.resolveInquiry(
                     inquiry = inquiry,
                     amountCents = amountCents,
@@ -560,7 +570,9 @@ fun LedgerHomeScreen(
                     channel = channel,
                     learnRule = learnRule,
                     ruleKeyword = ruleKeyword,
-                    ruleName = ruleName
+                    ruleName = ruleName,
+                    numberFormatPattern = numberFormatPattern,
+                    ruleDefaultType = ruleDefaultType
                 )
                 resolvingInquiry = null
             }
@@ -569,7 +581,11 @@ fun LedgerHomeScreen(
 
     if (showEasterEggDialog) {
         AlertDialog(
-            onDismissRequest = { showEasterEggDialog = false },
+            onDismissRequest = { /* 必须点击指定按钮才能关闭 */ },
+            properties = DialogProperties(
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
+            ),
             title = { Text("彩蛋发现") },
             text = {
                 Text(
@@ -578,7 +594,10 @@ fun LedgerHomeScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { showEasterEggDialog = false }) {
+                Button(
+                    onClick = { showEasterEggDialog = false },
+                    modifier = Modifier.testTag("easter_egg_close_button")
+                ) {
                     Text("继续搬砖")
                 }
             }
@@ -756,6 +775,7 @@ private fun NotificationInquirySectionCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ResolveInquiryDialog(
     inquiry: NotificationInquiry,
@@ -771,7 +791,9 @@ private fun ResolveInquiryDialog(
         channel: String,
         learnRule: Boolean,
         ruleKeyword: String,
-        ruleName: String
+        ruleName: String,
+        numberFormatPattern: String,
+        ruleDefaultType: String
     ) -> Unit
 ) {
     val initialAmount = if (inquiry.suggestedAmountCents > 0L) {
@@ -794,15 +816,25 @@ private fun ResolveInquiryDialog(
         mutableStateOf(inquiry.suggestedCategory.ifBlank { "餐饮美食" })
     }
     var learnRule by remember(inquiry.id) { mutableStateOf(true) }
-    val initialKeyword = remember(inquiry.id) {
-        ChinaNotificationParser.suggestRuleKeyword(
+
+    val keywordCandidates = remember(inquiry.id) {
+        ChinaNotificationParser.extractKeywordCandidates(
             title = inquiry.title,
             content = inquiry.content,
             merchant = inquiry.suggestedMerchant,
             channel = inquiry.suggestedChannel
         )
     }
-    var ruleKeyword by remember(inquiry.id) { mutableStateOf(initialKeyword) }
+    var selectedKeywords by remember(inquiry.id) {
+        mutableStateOf(listOfNotNull(keywordCandidates.firstOrNull()))
+    }
+    var customExtraKeyword by remember(inquiry.id) { mutableStateOf("") }
+    var numberFormatStyle by remember(inquiry.id) {
+        mutableStateOf(ChinaNotificationParser.detectNumberFormatStyle("${inquiry.title} ${inquiry.content}"))
+    }
+    var followAutoTypeInRule by remember(inquiry.id) { mutableStateOf(true) }
+    var showManualKeywordInput by remember(inquiry.id) { mutableStateOf(false) }
+
     var ruleName by remember(inquiry.id) {
         mutableStateOf(
             if (merchant.isNotBlank()) "学习 · $merchant" else "学习 · $channel"
@@ -818,6 +850,13 @@ private fun ResolveInquiryDialog(
         }
     }
     val currencyOptions = remember { CurrencyCatalog.currencies.take(6) }
+
+    val resolvedKeyword = remember(selectedKeywords, customExtraKeyword) {
+        (selectedKeywords + customExtraKeyword.trim())
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString("|")
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -950,7 +989,7 @@ private fun ResolveInquiryDialog(
                     Column(modifier = Modifier.weight(1f)) {
                         Text("自动更新识别规则", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            text = "下次遇到同关键词通知直接套用上述渠道与分类",
+                            text = "优先点选下方提取的关键词与数字格式即可",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -962,20 +1001,100 @@ private fun ResolveInquiryDialog(
                 }
 
                 if (learnRule) {
-                    OutlinedTextField(
-                        value = ruleKeyword,
-                        onValueChange = { ruleKeyword = it },
-                        label = { Text("匹配关键词（支持正则）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                    if (keywordCandidates.isNotEmpty()) {
+                        Text(
+                            text = "点选提取的关键词（可多选组合）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            keywordCandidates.forEach { kw ->
+                                val selected = kw in selectedKeywords
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = {
+                                        selectedKeywords = if (selected) {
+                                            selectedKeywords - kw
+                                        } else {
+                                            selectedKeywords + kw
+                                        }
+                                    },
+                                    label = { Text(kw) }
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "学习的数字格式",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    OutlinedTextField(
-                        value = ruleName,
-                        onValueChange = { ruleName = it },
-                        label = { Text("规则名称") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        NumberFormatStyle.entries.forEach { style ->
+                            FilterChip(
+                                selected = numberFormatStyle == style,
+                                onClick = { numberFormatStyle = style },
+                                label = { Text(style.label) }
+                            )
+                        }
+                    }
+                    Text(
+                        text = "示例：${numberFormatStyle.example}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    Text(
+                        text = "规则收支类型",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = followAutoTypeInRule,
+                            onClick = { followAutoTypeInRule = true },
+                            label = { Text("智能区分收支") }
+                        )
+                        FilterChip(
+                            selected = !followAutoTypeInRule,
+                            onClick = { followAutoTypeInRule = false },
+                            label = { Text("固定为${txType.label}") }
+                        )
+                    }
+
+                    TextButton(
+                        onClick = { showManualKeywordInput = !showManualKeywordInput },
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                    ) {
+                        Text(
+                            if (showManualKeywordInput) "收起手动调整" else "手动补充关键词或规则名（当前：$resolvedKeyword）",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+
+                    if (showManualKeywordInput) {
+                        OutlinedTextField(
+                            value = customExtraKeyword,
+                            onValueChange = { customExtraKeyword = it },
+                            label = { Text("追加关键词或正则（可选）") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = ruleName,
+                            onValueChange = { ruleName = it },
+                            label = { Text("规则名称") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
         },
@@ -1005,8 +1124,10 @@ private fun ResolveInquiryDialog(
                         merchant.trim().ifBlank { channel.ifBlank { "未知商户" } },
                         channel.trim().ifBlank { "未知渠道" },
                         learnRule,
-                        ruleKeyword.trim(),
-                        ruleName.trim()
+                        resolvedKeyword.ifBlank { channel },
+                        ruleName.trim(),
+                        numberFormatStyle.name,
+                        if (followAutoTypeInRule) "AUTO" else txType.name
                     )
                 }
             ) {
@@ -1322,8 +1443,9 @@ private fun MonthlySummaryCard(
 @Composable
 private fun TransactionRowCard(
     transaction: LedgerTransaction,
-    baseCurrencyCode: String,
-    convertedBaseCents: Long,
+    recordedBaseCurrencyCode: String,
+    recordedRateToBase: Double,
+    recordedBaseCents: Long,
     cornerRadius: Dp,
     verticalPadding: Dp,
     showChannelBadge: Boolean,
@@ -1332,7 +1454,7 @@ private fun TransactionRowCard(
 ) {
     val typeColor = transactionTypeColor(transaction.txType)
     val numberFont = LocalNumberFontFamily.current
-    val isForeign = !transaction.currencyCode.equals(baseCurrencyCode, ignoreCase = true)
+    val isForeign = !transaction.currencyCode.equals(recordedBaseCurrencyCode, ignoreCase = true)
 
     Card(
         shape = RoundedCornerShape(cornerRadius),
@@ -1417,7 +1539,11 @@ private fun TransactionRowCard(
                 )
                 if (isForeign) {
                     Text(
-                        text = "≈ ${formatCurrency(convertedBaseCents, baseCurrencyCode)}",
+                        text = "当时汇率 %.2f · ≈ %s".format(
+                            Locale.US,
+                            recordedRateToBase,
+                            formatCurrency(recordedBaseCents, recordedBaseCurrencyCode)
+                        ),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

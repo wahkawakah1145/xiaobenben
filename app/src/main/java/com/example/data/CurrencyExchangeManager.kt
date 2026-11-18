@@ -91,6 +91,20 @@ class CurrencyExchangeManager {
     companion object {
         private const val RATE_ENDPOINT = "https://open.er-api.com/v6/latest/CNY"
 
+        fun rateBetween(
+            fromCurrency: String,
+            toCurrency: String,
+            ratesToCny: Map<String, Double>
+        ): Double {
+            val from = fromCurrency.uppercase().ifBlank { "CNY" }
+            val to = toCurrency.uppercase().ifBlank { "CNY" }
+            if (from == to) return 1.0
+            val fromToCny = if (from == "CNY") 1.0 else (ratesToCny[from] ?: CurrencyCatalog.resolve(from).defaultRateToCny)
+            val toToCny = if (to == "CNY") 1.0 else (ratesToCny[to] ?: CurrencyCatalog.resolve(to).defaultRateToCny)
+            if (toToCny <= 0.0) return 1.0
+            return fromToCny / toToCny
+        }
+
         fun convertCents(
             amountCents: Long,
             fromCurrency: String,
@@ -100,13 +114,8 @@ class CurrencyExchangeManager {
             val from = fromCurrency.uppercase().ifBlank { "CNY" }
             val to = toCurrency.uppercase().ifBlank { "CNY" }
             if (from == to) return amountCents
-
-            val fromToCny = if (from == "CNY") 1.0 else (ratesToCny[from] ?: CurrencyCatalog.resolve(from).defaultRateToCny)
-            val toToCny = if (to == "CNY") 1.0 else (ratesToCny[to] ?: CurrencyCatalog.resolve(to).defaultRateToCny)
-            if (toToCny <= 0.0) return amountCents
-
-            val cnyCents = amountCents * fromToCny
-            return (cnyCents / toToCny).roundToLong()
+            val rate = rateBetween(from, to, ratesToCny)
+            return (amountCents * rate).roundToLong()
         }
     }
 }

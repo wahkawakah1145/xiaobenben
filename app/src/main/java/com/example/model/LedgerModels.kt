@@ -147,6 +147,18 @@ data class AppearanceSettings(
     val customTipsRaw: String = ""
 )
 
+enum class NumberFormatStyle(val label: String, val example: String) {
+    AUTO("自动等价识别", "2111.10 与 2,111.10 等价"),
+    COMMA_THOUSANDS_DOT("逗号千分位", "2,111.10 / 2111.10"),
+    DOT_THOUSANDS_COMMA("欧式逗号小数", "2.111,10 / 2111,10"),
+    PLAIN_INTEGER("无小数整数", "2111 / 2,111");
+
+    companion object {
+        fun fromRaw(raw: String?): NumberFormatStyle =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: AUTO
+    }
+}
+
 data class LedgerTransaction(
     val id: String = UUID.randomUUID().toString(),
     val amountCents: Long = 0L,
@@ -162,6 +174,8 @@ data class LedgerTransaction(
     val note: String? = null,
     val occurredAtMillis: Long = System.currentTimeMillis(),
     val confirmed: Boolean = true,
+    val recordedBaseCurrencyCode: String = "CNY",
+    val recordedRateToBase: Double = 0.0,
     val createdAtMillis: Long = System.currentTimeMillis(),
     val updatedAtMillis: Long = System.currentTimeMillis()
 ) {
@@ -180,6 +194,7 @@ data class CustomParsingRule(
     val defaultCategory: String = "自动",
     val defaultType: String = "AUTO",
     val merchantOverride: String = "",
+    val numberFormatPattern: String = NumberFormatStyle.AUTO.name,
     val priority: Int = 10,
     val enabled: Boolean = true,
     val createdAtMillis: Long = System.currentTimeMillis(),
