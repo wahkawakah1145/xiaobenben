@@ -127,6 +127,8 @@ class WebDavSyncManager {
                             put("channelName", rule.channelName)
                             put("defaultCategory", rule.defaultCategory)
                             put("defaultType", rule.defaultType)
+                            put("merchantOverride", rule.merchantOverride)
+                            put("priority", rule.priority)
                             put("enabled", rule.enabled)
                             put("createdAtMillis", rule.createdAtMillis)
                             put("updatedAtMillis", rule.updatedAtMillis)
@@ -237,6 +239,8 @@ class WebDavSyncManager {
                             channelName = o.optString("channelName", "其他"),
                             defaultCategory = o.optString("defaultCategory", "其他"),
                             defaultType = o.optString("defaultType", "EXPENSE"),
+                            merchantOverride = o.optString("merchantOverride", ""),
+                            priority = o.optInt("priority", 10),
                             enabled = o.optBoolean("enabled", true),
                             createdAtMillis = o.optLong("createdAtMillis", System.currentTimeMillis()),
                             updatedAtMillis = o.optLong("updatedAtMillis", System.currentTimeMillis())

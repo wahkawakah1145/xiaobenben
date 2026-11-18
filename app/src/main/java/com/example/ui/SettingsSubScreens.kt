@@ -379,7 +379,7 @@ fun CurrencySettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text("汇率数据库", style = MaterialTheme.typography.titleMedium)
                                 val timeHint = if (exchangeRates.updatedAtMillis > 0L) {
                                     "上次更新：${formatDateTimeFull(exchangeRates.updatedAtMillis)}"
@@ -391,6 +391,30 @@ fun CurrencySettingsScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                Surface(
+                                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = "数据源：${exchangeRates.dataSource}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.testTag("exchange_rate_source_label")
+                                        )
+                                        if (exchangeRates.rateDateText.isNotBlank()) {
+                                            Text(
+                                                text = "牌价发布：${exchangeRates.rateDateText}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -815,6 +839,81 @@ fun AppearanceSettingsScreen(
                                     viewModel.saveAppearanceSettings(appearance.copy(showParseBadge = it))
                                 }
                             )
+                        }
+                    }
+                }
+            }
+
+            item(key = "home_tips_customization") {
+                var tagInput by remember(appearance.tipTagText) { mutableStateOf(appearance.tipTagText) }
+                var tipsContentInput by remember(appearance.customTipsRaw) { mutableStateOf(appearance.customTipsRaw) }
+
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("首页顶部 Tips 文案与轮换内容", style = MaterialTheme.typography.titleMedium)
+
+                        OutlinedTextField(
+                            value = tagInput,
+                            onValueChange = { next ->
+                                tagInput = next.take(16)
+                                viewModel.saveAppearanceSettings(appearance.copy(tipTagText = tagInput))
+                            },
+                            label = { Text("Tag 标签文案") },
+                            placeholder = { Text("金钱真相") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("tips_tag_input")
+                        )
+
+                        OutlinedTextField(
+                            value = tipsContentInput,
+                            onValueChange = { next ->
+                                tipsContentInput = next
+                                viewModel.saveAppearanceSettings(appearance.copy(customTipsRaw = next))
+                            },
+                            label = { Text("自定义轮换内容（每行一条，留空则使用默认词库）") },
+                            placeholder = { Text("每行一条句子，点击首页横幅即可轮换展示") },
+                            minLines = 4,
+                            maxLines = 8,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("tips_custom_content_input")
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    val defaultText = com.example.parser.FinanceHumorTips.defaultTipsMultiline()
+                                    tipsContentInput = defaultText
+                                    viewModel.saveAppearanceSettings(appearance.copy(customTipsRaw = defaultText))
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("填入内置内容编辑")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    tagInput = "金钱真相"
+                                    tipsContentInput = ""
+                                    viewModel.saveAppearanceSettings(
+                                        appearance.copy(tipTagText = "金钱真相", customTipsRaw = "")
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("恢复默认")
+                            }
                         }
                     }
                 }

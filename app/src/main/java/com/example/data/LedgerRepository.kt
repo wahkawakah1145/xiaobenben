@@ -7,6 +7,8 @@ import com.example.model.CurrencyCatalog
 import com.example.model.CustomParsingRule
 import com.example.model.ExchangeRateState
 import com.example.model.LedgerTransaction
+import com.example.model.NotificationInquiry
+import com.example.model.ParseMethod
 import com.example.model.TransactionType
 import com.example.model.WebDavConfig
 import kotlinx.coroutines.CancellationException
@@ -25,6 +27,9 @@ class LedgerRepository(
 
     fun observeTransactions(): Flow<List<LedgerTransaction>> =
         dao.observeAllTransactions().map { list -> list.map { it.toDomain() } }
+
+    fun observeInquiries(): Flow<List<com.example.model.NotificationInquiry>> =
+        dao.observeInquiries().map { list -> list.map { it.toDomain() } }
 
     fun observeParsingRules(): Flow<List<CustomParsingRule>> =
         dao.observeAllRules().map { list -> list.map { it.toDomain() } }
@@ -46,6 +51,127 @@ class LedgerRepository(
 
     suspend fun getAllTransactionsOnce(): List<LedgerTransaction> =
         dao.getAllTransactionsOnce().map { it.toDomain() }
+
+    suspend fun ensureDefaultRulesSeeded() {
+        val count = dao.getRuleCount()
+        if (count == 0 && !settingsStore.isRulesSeeded()) {
+            val defaults = defaultSeededRules()
+            dao.upsertRules(defaults.map { ParsingRuleEntity.fromDomain(it) })
+            settingsStore.markRulesSeeded()
+        }
+    }
+
+    suspend fun resetDefaultRules(): Result<Unit> {
+        return try {
+            val existing = dao.getAllRulesOnce().map { it.toDomain() }
+            val existingIds = existing.map { it.id }.toSet()
+            val toInsert = defaultSeededRules().filter { it.id !in existingIds }
+            if (toInsert.isNotEmpty()) {
+                dao.upsertRules(toInsert.map { ParsingRuleEntity.fromDomain(it) })
+            }
+            settingsStore.markRulesSeeded()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun addInquiry(inquiry: com.example.model.NotificationInquiry): Result<Unit> {
+        return try {
+            dao.upsertInquiry(NotificationInquiryEntity.fromDomain(inquiry))
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun dismissInquiry(inquiryId: String): Result<Unit> {
+        return try {
+            dao.deleteInquiryById(inquiryId)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun resolveInquiryAndLearnRule(
+        inquiry: com.example.model.NotificationInquiry,
+        amountCents: Long,
+        currencyCode: String,
+        type: TransactionType,
+        category: String,
+        merchant: String,
+        channel: String,
+        learnRule: Boolean,
+        ruleKeyword: String,
+        ruleName: String
+    ): Result<Unit> {
+        return try {
+            require(amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万" }
+            val now = System.currentTimeMillis()
+            val cleanMerchant = merchant.trim().ifBlank { category }
+            val cleanChannel = channel.trim().ifBlank { "未知渠道" }
+            val tx = LedgerTransaction(
+                amountCents = amountCents,
+                currencyCode = CurrencyCatalog.resolve(currencyCode).code,
+                type = type.name,
+                category = category.trim().ifBlank { "其他" },
+                merchant = cleanMerchant,
+                channel = cleanChannel,
+                cardLastFour = inquiry.cardLastFour,
+                sourceApp = com.example.parser.ChinaPaymentCatalog
+                    .resolveSourceApp(inquiry.packageName, "${inquiry.title} ${inquiry.content}").name,
+                parseMethod = ParseMethod.RULE_ENGINE.name,
+                rawNotification = "${inquiry.title}: ${inquiry.content}".take(600),
+                note = "经询问确认并学习",
+                occurredAtMillis = inquiry.occurredAtMillis,
+                confirmed = true,
+                createdAtMillis = now,
+                updatedAtMillis = now
+            )
+            dao.upsertTransaction(TransactionEntity.fromDomain(tx))
+
+            if (learnRule && ruleKeyword.trim().isNotBlank()) {
+                val cleanKeyword = ruleKeyword.trim().take(200)
+                val cleanName = ruleName.trim().ifBlank { "$cleanMerchant · ${cleanCategoryOrType(category)}" }.take(80)
+                val existingRule = dao.getAllRulesOnce()
+                    .map { it.toDomain() }
+                    .firstOrNull {
+                        it.keywordPattern.equals(cleanKeyword, ignoreCase = true) ||
+                            (it.priority > 0 && it.name.equals(cleanName, ignoreCase = true))
+                    }
+                val ruleToSave = (existingRule ?: CustomParsingRule()).copy(
+                    name = cleanName,
+                    packageFilter = existingRule?.packageFilter
+                        ?: inquiry.packageName.takeIf { it.isNotBlank() && it != "manual.bench" } ?: "*",
+                    keywordPattern = cleanKeyword,
+                    channelName = cleanChannel.take(60),
+                    defaultCategory = category.trim().ifBlank { "其他" }.take(40),
+                    defaultType = type.name,
+                    merchantOverride = cleanMerchant.take(60),
+                    priority = 20,
+                    enabled = true,
+                    updatedAtMillis = now
+                )
+                dao.upsertRule(ParsingRuleEntity.fromDomain(ruleToSave))
+            }
+
+            dao.deleteInquiryById(inquiry.id)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun cleanCategoryOrType(category: String): String = category.ifBlank { "规则" }
 
     suspend fun addTransaction(tx: LedgerTransaction): Result<String> {
         return try {
@@ -168,7 +294,7 @@ class LedgerRepository(
         dao.upsertTransactions(items.map { TransactionEntity.fromDomain(it) })
     }
 
-    suspend fun addParsingRule(rule: CustomParsingRule): Result<Unit> {
+    suspend fun saveParsingRule(rule: CustomParsingRule): Result<Unit> {
         return try {
             val name = rule.name.trim()
             val keyword = rule.keywordPattern.trim()
@@ -177,14 +303,21 @@ class LedgerRepository(
                 "规则名称、匹配关键词和渠道不能为空"
             }
             val now = System.currentTimeMillis()
+            val normalizedType = if (rule.defaultType.equals("AUTO", ignoreCase = true)) {
+                "AUTO"
+            } else {
+                TransactionType.fromRaw(rule.defaultType).name
+            }
             val normalized = rule.copy(
                 id = rule.id.ifBlank { UUID.randomUUID().toString() },
                 name = name.take(80),
                 packageFilter = rule.packageFilter.trim().ifBlank { "*" }.take(120),
                 keywordPattern = keyword.take(200),
                 channelName = channel.take(60),
-                defaultCategory = rule.defaultCategory.trim().ifBlank { "其他" }.take(40),
-                defaultType = TransactionType.fromRaw(rule.defaultType).name,
+                defaultCategory = rule.defaultCategory.trim().ifBlank { "自动" }.take(40),
+                defaultType = normalizedType,
+                merchantOverride = rule.merchantOverride.trim().take(60),
+                priority = rule.priority,
                 createdAtMillis = rule.createdAtMillis.takeIf { it > 0L } ?: now,
                 updatedAtMillis = now
             )
@@ -246,8 +379,14 @@ class LedgerRepository(
         }
     }
 
-    suspend fun saveExchangeRates(ratesToCny: Map<String, Double>, updatedAtMillis: Long, status: String) {
-        settingsStore.saveExchangeRates(ratesToCny, updatedAtMillis, status)
+    suspend fun saveExchangeRates(
+        ratesToCny: Map<String, Double>,
+        updatedAtMillis: Long,
+        status: String,
+        dataSource: String,
+        rateDateText: String
+    ) {
+        settingsStore.saveExchangeRates(ratesToCny, updatedAtMillis, status, dataSource, rateDateText)
     }
 
     suspend fun saveWebDavConfig(config: WebDavConfig): Result<Unit> {
@@ -263,5 +402,117 @@ class LedgerRepository(
 
     suspend fun updateWebDavSyncStatus(millis: Long, status: String) {
         settingsStore.updateWebDavSyncStatus(millis, status)
+    }
+
+    companion object {
+        fun defaultSeededRules(): List<CustomParsingRule> {
+            val now = 1700000000000L
+            return listOf(
+                CustomParsingRule(
+                    id = "builtin_alipay",
+                    name = "支付宝通用规则",
+                    packageFilter = "com.eg.android.AlipayGphone",
+                    keywordPattern = "支付宝|花呗|余额宝|付款|收款",
+                    channelName = "支付宝",
+                    defaultCategory = "自动",
+                    defaultType = "AUTO",
+                    priority = 0,
+                    enabled = true,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                ),
+                CustomParsingRule(
+                    id = "builtin_wechat",
+                    name = "微信支付通用规则",
+                    packageFilter = "com.tencent.mm",
+                    keywordPattern = "微信支付|零钱|微信转账|付款|收款",
+                    channelName = "微信支付",
+                    defaultCategory = "自动",
+                    defaultType = "AUTO",
+                    priority = 0,
+                    enabled = true,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                ),
+                CustomParsingRule(
+                    id = "builtin_unionpay",
+                    name = "云闪付通用规则",
+                    packageFilter = "com.unionpay",
+                    keywordPattern = "云闪付|银联|95516",
+                    channelName = "云闪付",
+                    defaultCategory = "自动",
+                    defaultType = "AUTO",
+                    priority = 0,
+                    enabled = true,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                ),
+                CustomParsingRule(
+                    id = "builtin_cmb",
+                    name = "招商银行短信/App",
+                    packageFilter = "*",
+                    keywordPattern = "招商银行|95555",
+                    channelName = "招商银行",
+                    defaultCategory = "自动",
+                    defaultType = "AUTO",
+                    priority = 0,
+                    enabled = true,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                ),
+                CustomParsingRule(
+                    id = "builtin_icbc",
+                    name = "工商银行短信/App",
+                    packageFilter = "*",
+                    keywordPattern = "工商银行|95588",
+                    channelName = "工商银行",
+                    defaultCategory = "自动",
+                    defaultType = "AUTO",
+                    priority = 0,
+                    enabled = true,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                ),
+                CustomParsingRule(
+                    id = "builtin_ccb",
+                    name = "建设银行短信/App",
+                    packageFilter = "*",
+                    keywordPattern = "建设银行|95533",
+                    channelName = "建设银行",
+                    defaultCategory = "自动",
+                    defaultType = "AUTO",
+                    priority = 0,
+                    enabled = true,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                ),
+                CustomParsingRule(
+                    id = "builtin_abc",
+                    name = "农业银行短信/App",
+                    packageFilter = "*",
+                    keywordPattern = "农业银行|95599",
+                    channelName = "农业银行",
+                    defaultCategory = "自动",
+                    defaultType = "AUTO",
+                    priority = 0,
+                    enabled = true,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                ),
+                CustomParsingRule(
+                    id = "builtin_boc",
+                    name = "中国银行短信/App",
+                    packageFilter = "*",
+                    keywordPattern = "中国银行|95566",
+                    channelName = "中国银行",
+                    defaultCategory = "自动",
+                    defaultType = "AUTO",
+                    priority = 0,
+                    enabled = true,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                )
+            )
+        }
     }
 }

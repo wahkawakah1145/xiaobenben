@@ -25,12 +25,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Rule
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material3.AlertDialog
@@ -98,7 +101,8 @@ fun ParserHubScreen(
         mutableStateOf("【招商银行】您账户8812于11月18日08:30在星巴克(静安寺店)消费人民币42.00元，可用余额3,210.50元。")
     }
     var selectedPackage by remember { mutableStateOf("com.cmbchina.pb") }
-    var showAddRuleDialog by remember { mutableStateOf(false) }
+    var editingRule by remember { mutableStateOf<CustomParsingRule?>(null) }
+    var showCreateRuleDialog by remember { mutableStateOf(false) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -260,12 +264,31 @@ fun ParserHubScreen(
                                         shape = RoundedCornerShape(12.dp),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text(
-                                            text = state.message,
-                                            color = ExpenseCoral,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.padding(12.dp)
-                                        )
+                                        Column(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                text = state.message,
+                                                color = ExpenseCoral,
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                            OutlinedButton(
+                                                onClick = {
+                                                    viewModel.enqueueInquiryFromTestBench(
+                                                        packageName = selectedPackage,
+                                                        title = titleInput,
+                                                        content = bodyInput,
+                                                        parsed = null
+                                                    )
+                                                },
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Icon(Icons.Rounded.HelpOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("加入首页「待询问」并学习规则")
+                                            }
+                                        }
                                     }
                                 }
 
@@ -328,21 +351,48 @@ fun ParserHubScreen(
                                                 }
                                                 ParseMethodBadge(method = result.parseMethod)
                                             }
-                                            Button(
-                                                onClick = {
-                                                    viewModel.saveParsedResult(
-                                                        parsed = result,
-                                                        rawTitle = state.rawTitle,
-                                                        rawContent = state.rawContent
-                                                    )
-                                                },
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .testTag("bench_save_parsed_button")
+                                            if (result.needsInquiry) {
+                                                Text(
+                                                    text = "置信度较低（${result.inquiryReason}），后台收到同类通知将主动向你询问",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.tertiary
+                                                )
+                                            }
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
-                                                Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text("确认入账")
+                                                if (result.needsInquiry) {
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            viewModel.enqueueInquiryFromTestBench(
+                                                                packageName = selectedPackage,
+                                                                title = state.rawTitle,
+                                                                content = state.rawContent,
+                                                                parsed = result
+                                                            )
+                                                        },
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Text("转为询问学习")
+                                                    }
+                                                }
+                                                Button(
+                                                    onClick = {
+                                                        viewModel.saveParsedResult(
+                                                            parsed = result,
+                                                            rawTitle = state.rawTitle,
+                                                            rawContent = state.rawContent
+                                                        )
+                                                    },
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .testTag("bench_save_parsed_button")
+                                                ) {
+                                                    Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text("确认入账")
+                                                }
                                             }
                                         }
                                     }
@@ -353,7 +403,7 @@ fun ParserHubScreen(
                 }
             }
 
-            // 2. Custom Parsing Rules
+            // 2. Editable Parsing Rules
             item(key = "custom_rules_header") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -365,15 +415,20 @@ fun ParserHubScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Icon(Icons.AutoMirrored.Rounded.Rule, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Text("自定义匹配规则", style = MaterialTheme.typography.titleMedium)
+                        Text("识别规则（点击可编辑）", style = MaterialTheme.typography.titleMedium)
                     }
-                    TextButton(
-                        onClick = { showAddRuleDialog = true },
-                        modifier = Modifier.testTag("add_custom_rule_button")
-                    ) {
-                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("新建规则")
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { viewModel.resetDefaultRules() }) {
+                            Text("恢复默认")
+                        }
+                        TextButton(
+                            onClick = { showCreateRuleDialog = true },
+                            modifier = Modifier.testTag("add_custom_rule_button")
+                        ) {
+                            Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("新建")
+                        }
                     }
                 }
             }
@@ -398,7 +453,7 @@ fun ParserHubScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    text = "尚未添加自定义规则。已内置支付宝、微信支付、云闪付及 ${ChinaPaymentCatalog.channels.size} 家主流渠道与银行识别。",
+                                    text = "当前没有规则，可点击右上角「新建」或「恢复默认」。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(14.dp)
@@ -409,6 +464,7 @@ fun ParserHubScreen(
                         items(rState.data, key = { it.id }) { rule ->
                             CustomRuleCard(
                                 rule = rule,
+                                onEdit = { editingRule = rule },
                                 onToggle = { enabled -> viewModel.toggleCustomRule(rule.id, enabled) },
                                 onDelete = { viewModel.deleteCustomRule(rule.id) }
                             )
@@ -476,7 +532,6 @@ fun ParserHubScreen(
                                     titleInput = ch.sampleNotificationTitle
                                     bodyInput = ch.sampleNotificationBody
                                     selectedPackage = ch.packageNames.firstOrNull() ?: "com.android.mms"
-                                    onShowMessage("已填入「${ch.name}」样例")
                                 }
                             ) {
                                 Text(
@@ -492,12 +547,24 @@ fun ParserHubScreen(
         }
     }
 
-    if (showAddRuleDialog) {
-        AddCustomRuleDialog(
-            onDismiss = { showAddRuleDialog = false },
-            onConfirm = { name, pkg, keyword, channel, category, type ->
-                viewModel.addCustomRule(name, pkg, keyword, channel, category, type)
-                showAddRuleDialog = false
+    if (showCreateRuleDialog) {
+        CustomRuleEditorDialog(
+            initialRule = null,
+            onDismiss = { showCreateRuleDialog = false },
+            onSave = { rule ->
+                viewModel.saveOrUpdateCustomRule(rule)
+                showCreateRuleDialog = false
+            }
+        )
+    }
+
+    editingRule?.let { targetRule ->
+        CustomRuleEditorDialog(
+            initialRule = targetRule,
+            onDismiss = { editingRule = null },
+            onSave = { updated ->
+                viewModel.saveOrUpdateCustomRule(updated)
+                editingRule = null
             }
         )
     }
@@ -506,27 +573,45 @@ fun ParserHubScreen(
 @Composable
 private fun CustomRuleCard(
     rule: CustomParsingRule,
+    onEdit: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit
 ) {
+    val typeLabel = when {
+        rule.defaultType.equals("AUTO", ignoreCase = true) -> "自动识别"
+        else -> TransactionType.fromRaw(rule.defaultType).label
+    }
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onEdit)
+            .testTag("rule_card_${rule.id}")
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(rule.name, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    text = "关键词: ${rule.keywordPattern} → ${rule.channelName} · ${rule.defaultCategory}",
+                    text = "关键词: ${rule.keywordPattern} → ${rule.channelName} · ${rule.defaultCategory} ($typeLabel)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(
+                onClick = onEdit,
+                modifier = Modifier.testTag("edit_rule_button_${rule.id}")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Edit,
+                    contentDescription = "编辑规则",
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
             Switch(
@@ -546,37 +631,45 @@ private fun CustomRuleCard(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AddCustomRuleDialog(
+private fun CustomRuleEditorDialog(
+    initialRule: CustomParsingRule?,
     onDismiss: () -> Unit,
-    onConfirm: (
-        name: String,
-        packageFilter: String,
-        keywordPattern: String,
-        channelName: String,
-        defaultCategory: String,
-        defaultType: TransactionType
-    ) -> Unit
+    onSave: (CustomParsingRule) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
-    var keyword by remember { mutableStateOf("") }
-    var channel by remember { mutableStateOf("北京银行") }
-    var packageFilter by remember { mutableStateOf("*") }
-    var category by remember { mutableStateOf("餐饮美食") }
-    var txType by remember { mutableStateOf(TransactionType.EXPENSE) }
+    var name by remember { mutableStateOf(initialRule?.name ?: "") }
+    var keyword by remember { mutableStateOf(initialRule?.keywordPattern ?: "") }
+    var channel by remember { mutableStateOf(initialRule?.channelName ?: "北京银行") }
+    var packageFilter by remember { mutableStateOf(initialRule?.packageFilter ?: "*") }
+    var merchantOverride by remember { mutableStateOf(initialRule?.merchantOverride ?: "") }
+    var category by remember { mutableStateOf(initialRule?.defaultCategory ?: "自动") }
+    var defaultType by remember { mutableStateOf(initialRule?.defaultType ?: "AUTO") }
     var errorText by remember { mutableStateOf<String?>(null) }
+
+    val typeChoices = listOf(
+        "AUTO" to "自动判断",
+        TransactionType.EXPENSE.name to TransactionType.EXPENSE.label,
+        TransactionType.INCOME.name to TransactionType.INCOME.label,
+        TransactionType.TRANSFER.name to TransactionType.TRANSFER.label
+    )
+    val categoryChoices = listOf("自动") + CategoryCatalog.allCategories
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新建通知识别规则") },
+        title = { Text(if (initialRule == null) "新建通知识别规则" else "编辑识别规则") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it; errorText = null },
                     label = { Text("规则名称") },
                     placeholder = { Text("例如：公司食堂") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rule_editor_name_input")
                 )
                 OutlinedTextField(
                     value = keyword,
@@ -584,12 +677,21 @@ private fun AddCustomRuleDialog(
                     label = { Text("匹配关键词 / 正则") },
                     placeholder = { Text("例如：员工食堂|北京银行") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rule_editor_keyword_input")
                 )
                 OutlinedTextField(
                     value = channel,
                     onValueChange = { channel = it },
                     label = { Text("归属渠道 / 银行") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = merchantOverride,
+                    onValueChange = { merchantOverride = it },
+                    label = { Text("固定商户名（可选，留空自动提取）") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -600,23 +702,24 @@ private fun AddCustomRuleDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("默认分类", style = MaterialTheme.typography.labelMedium)
+                Text("收支类型", style = MaterialTheme.typography.labelMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CategoryCatalog.expenseCategories.take(6).forEach { cat ->
+                    typeChoices.forEach { (code, label) ->
                         FilterChip(
-                            selected = category == cat,
-                            onClick = { category = cat },
-                            label = { Text(cat) }
+                            selected = defaultType.equals(code, ignoreCase = true),
+                            onClick = { defaultType = code },
+                            label = { Text(label) }
                         )
                     }
                 }
                 HorizontalDivider()
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TransactionType.entries.forEach { t ->
+                Text("默认分类", style = MaterialTheme.typography.labelMedium)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    categoryChoices.forEach { cat ->
                         FilterChip(
-                            selected = txType == t,
-                            onClick = { txType = t },
-                            label = { Text(t.label) }
+                            selected = category == cat,
+                            onClick = { category = cat },
+                            label = { Text(cat) }
                         )
                     }
                 }
@@ -626,13 +729,25 @@ private fun AddCustomRuleDialog(
             }
         },
         confirmButton = {
-            Button(onClick = {
-                if (name.isBlank() || keyword.isBlank() || channel.isBlank()) {
-                    errorText = "请完整填写规则名称、关键词和渠道"
-                    return@Button
-                }
-                onConfirm(name, packageFilter, keyword, channel, category, txType)
-            }) {
+            Button(
+                onClick = {
+                    if (name.isBlank() || keyword.isBlank() || channel.isBlank()) {
+                        errorText = "请完整填写规则名称、关键词和渠道"
+                        return@Button
+                    }
+                    val updated = (initialRule ?: CustomParsingRule(priority = 10)).copy(
+                        name = name.trim(),
+                        packageFilter = packageFilter.trim().ifBlank { "*" },
+                        keywordPattern = keyword.trim(),
+                        channelName = channel.trim(),
+                        merchantOverride = merchantOverride.trim(),
+                        defaultCategory = category,
+                        defaultType = defaultType
+                    )
+                    onSave(updated)
+                },
+                modifier = Modifier.testTag("rule_editor_save_button")
+            ) {
                 Text("保存规则")
             }
         },

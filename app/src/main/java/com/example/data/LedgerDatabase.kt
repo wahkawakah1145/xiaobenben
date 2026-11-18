@@ -85,6 +85,8 @@ data class ParsingRuleEntity(
     val channelName: String,
     val defaultCategory: String,
     val defaultType: String,
+    val merchantOverride: String = "",
+    val priority: Int = 10,
     val enabled: Boolean,
     val createdAtMillis: Long,
     val updatedAtMillis: Long
@@ -97,6 +99,8 @@ data class ParsingRuleEntity(
         channelName = channelName,
         defaultCategory = defaultCategory,
         defaultType = defaultType,
+        merchantOverride = merchantOverride,
+        priority = priority,
         enabled = enabled,
         createdAtMillis = createdAtMillis,
         updatedAtMillis = updatedAtMillis
@@ -111,9 +115,68 @@ data class ParsingRuleEntity(
             channelName = rule.channelName,
             defaultCategory = rule.defaultCategory,
             defaultType = rule.defaultType,
+            merchantOverride = rule.merchantOverride,
+            priority = rule.priority,
             enabled = rule.enabled,
             createdAtMillis = rule.createdAtMillis,
             updatedAtMillis = rule.updatedAtMillis
+        )
+    }
+}
+
+@Entity(tableName = "notification_inquiries")
+data class NotificationInquiryEntity(
+    @PrimaryKey val id: String,
+    val packageName: String,
+    val appLabel: String,
+    val title: String,
+    val content: String,
+    val suggestedAmountCents: Long,
+    val suggestedCurrencyCode: String,
+    val suggestedType: String,
+    val suggestedCategory: String,
+    val suggestedMerchant: String,
+    val suggestedChannel: String,
+    val cardLastFour: String?,
+    val reason: String,
+    val occurredAtMillis: Long,
+    val createdAtMillis: Long
+) {
+    fun toDomain(): com.example.model.NotificationInquiry = com.example.model.NotificationInquiry(
+        id = id,
+        packageName = packageName,
+        appLabel = appLabel,
+        title = title,
+        content = content,
+        suggestedAmountCents = suggestedAmountCents,
+        suggestedCurrencyCode = suggestedCurrencyCode,
+        suggestedType = suggestedType,
+        suggestedCategory = suggestedCategory,
+        suggestedMerchant = suggestedMerchant,
+        suggestedChannel = suggestedChannel,
+        cardLastFour = cardLastFour,
+        reason = reason,
+        occurredAtMillis = occurredAtMillis,
+        createdAtMillis = createdAtMillis
+    )
+
+    companion object {
+        fun fromDomain(inq: com.example.model.NotificationInquiry): NotificationInquiryEntity = NotificationInquiryEntity(
+            id = inq.id,
+            packageName = inq.packageName,
+            appLabel = inq.appLabel,
+            title = inq.title,
+            content = inq.content,
+            suggestedAmountCents = inq.suggestedAmountCents,
+            suggestedCurrencyCode = inq.suggestedCurrencyCode,
+            suggestedType = inq.suggestedType,
+            suggestedCategory = inq.suggestedCategory,
+            suggestedMerchant = inq.suggestedMerchant,
+            suggestedChannel = inq.suggestedChannel,
+            cardLastFour = inq.cardLastFour,
+            reason = inq.reason,
+            occurredAtMillis = inq.occurredAtMillis,
+            createdAtMillis = inq.createdAtMillis
         )
     }
 }
@@ -141,11 +204,14 @@ interface LedgerDao {
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteTransactionById(id: String)
 
-    @Query("SELECT * FROM parsing_rules ORDER BY createdAtMillis DESC")
+    @Query("SELECT * FROM parsing_rules ORDER BY priority DESC, createdAtMillis DESC")
     fun observeAllRules(): Flow<List<ParsingRuleEntity>>
 
-    @Query("SELECT * FROM parsing_rules ORDER BY createdAtMillis DESC")
+    @Query("SELECT * FROM parsing_rules ORDER BY priority DESC, createdAtMillis DESC")
     suspend fun getAllRulesOnce(): List<ParsingRuleEntity>
+
+    @Query("SELECT COUNT(*) FROM parsing_rules")
+    suspend fun getRuleCount(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRule(entity: ParsingRuleEntity)
@@ -158,11 +224,20 @@ interface LedgerDao {
 
     @Query("DELETE FROM parsing_rules WHERE id = :id")
     suspend fun deleteRuleById(id: String)
+
+    @Query("SELECT * FROM notification_inquiries ORDER BY occurredAtMillis DESC")
+    fun observeInquiries(): Flow<List<NotificationInquiryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertInquiry(entity: NotificationInquiryEntity)
+
+    @Query("DELETE FROM notification_inquiries WHERE id = :id")
+    suspend fun deleteInquiryById(id: String)
 }
 
 @Database(
-    entities = [TransactionEntity::class, ParsingRuleEntity::class],
-    version = 2,
+    entities = [TransactionEntity::class, ParsingRuleEntity::class, NotificationInquiryEntity::class],
+    version = 3,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -178,6 +253,35 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE parsing_rules ADD COLUMN merchantOverride TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE parsing_rules ADD COLUMN priority INTEGER NOT NULL DEFAULT 10")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `notification_inquiries` (
+                        `id` TEXT NOT NULL,
+                        `packageName` TEXT NOT NULL,
+                        `appLabel` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `content` TEXT NOT NULL,
+                        `suggestedAmountCents` INTEGER NOT NULL,
+                        `suggestedCurrencyCode` TEXT NOT NULL,
+                        `suggestedType` TEXT NOT NULL,
+                        `suggestedCategory` TEXT NOT NULL,
+                        `suggestedMerchant` TEXT NOT NULL,
+                        `suggestedChannel` TEXT NOT NULL,
+                        `cardLastFour` TEXT,
+                        `reason` TEXT NOT NULL,
+                        `occurredAtMillis` INTEGER NOT NULL,
+                        `createdAtMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -185,7 +289,7 @@ abstract class LedgerDatabase : RoomDatabase() {
                     LedgerDatabase::class.java,
                     "smart_ledger.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

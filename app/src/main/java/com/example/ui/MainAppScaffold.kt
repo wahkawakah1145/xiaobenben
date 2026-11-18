@@ -127,11 +127,20 @@ fun AppNavigation() {
             var isListenerEnabled by remember {
                 mutableStateOf(NotificationBridge.isNotificationListenerEnabled(context))
             }
+            var isAccessibilityEnabled by remember {
+                mutableStateOf(NotificationBridge.isAccessibilityServiceEnabled(context))
+            }
+            var isIgnoringBattery by remember {
+                mutableStateOf(NotificationBridge.isIgnoringBatteryOptimizations(context))
+            }
 
             DisposableEffect(lifecycleOwner) {
                 val observer = LifecycleEventObserver { _, event ->
                     if (event == Lifecycle.Event.ON_RESUME) {
                         isListenerEnabled = NotificationBridge.isNotificationListenerEnabled(context)
+                        isAccessibilityEnabled = NotificationBridge.isAccessibilityServiceEnabled(context)
+                        isIgnoringBattery = NotificationBridge.isIgnoringBatteryOptimizations(context)
+                        NotificationBridge.requestListenerRebind(context)
                     }
                 }
                 lifecycleOwner.lifecycle.addObserver(observer)
@@ -139,9 +148,17 @@ fun AppNavigation() {
             }
 
             val transactionsState by viewModel.transactionsState.collectAsStateWithLifecycle()
+            val inquiries by viewModel.inquiriesState.collectAsStateWithLifecycle()
             val settings by viewModel.settingsState.collectAsStateWithLifecycle()
             val exchangeRates by viewModel.exchangeRateState.collectAsStateWithLifecycle()
             val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
+
+            LaunchedEffect(settings.rootKeepAliveEnabled) {
+                viewModel.checkRootStatus()
+                if (settings.rootKeepAliveEnabled) {
+                    viewModel.applyRootKeepAlive(context)
+                }
+            }
 
             val snackbarHostState = remember { SnackbarHostState() }
             val scope = rememberCoroutineScope()
@@ -264,6 +281,7 @@ fun AppNavigation() {
                             composable(ROUTE_LEDGER) {
                                 LedgerHomeScreen(
                                     transactionsState = transactionsState,
+                                    inquiries = inquiries,
                                     settings = settings,
                                     appearance = appearance,
                                     exchangeRates = exchangeRates,
@@ -284,6 +302,8 @@ fun AppNavigation() {
                                 SettingsScreen(
                                     settings = settings,
                                     isListenerEnabled = isListenerEnabled,
+                                    isAccessibilityEnabled = isAccessibilityEnabled,
+                                    isIgnoringBattery = isIgnoringBattery,
                                     viewModel = viewModel,
                                     onShowMessage = { msg ->
                                         scope.launch { snackbarHostState.showSnackbar(msg) }

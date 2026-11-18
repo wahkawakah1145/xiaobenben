@@ -13,6 +13,7 @@ import com.example.model.CurrencyCatalog
 import com.example.model.CustomParsingRule
 import com.example.model.ExchangeRateState
 import com.example.model.LedgerTransaction
+import com.example.model.NotificationInquiry
 import com.example.model.ParseMethod
 import com.example.model.ParsedNotificationResult
 import com.example.model.SourceApp
@@ -20,6 +21,8 @@ import com.example.model.TransactionType
 import com.example.model.WebDavConfig
 import com.example.parser.ChinaNotificationParser
 import com.example.parser.LocalSpendingAnalyzer
+import com.example.service.RootKeepAliveManager
+import com.example.service.RootKeepAliveStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -73,6 +76,12 @@ class LedgerViewModel(
     private val exchangeManager: CurrencyExchangeManager = CurrencyExchangeManager()
 ) : ViewModel() {
 
+    init {
+        viewModelScope.launch {
+            repository.ensureDefaultRulesSeeded()
+        }
+    }
+
     val transactionsState: StateFlow<UiState<List<LedgerTransaction>>> =
         repository.observeTransactions()
             .map<List<LedgerTransaction>, UiState<List<LedgerTransaction>>> { UiState.Success(it) }
@@ -84,6 +93,18 @@ class LedgerViewModel(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
                 initialValue = UiState.Loading
+            )
+
+    val inquiriesState: StateFlow<List<NotificationInquiry>> =
+        repository.observeInquiries()
+            .catch { error ->
+                if (error is CancellationException) throw error
+                emit(emptyList())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                initialValue = emptyList()
             )
 
     val rulesState: StateFlow<UiState<List<CustomParsingRule>>> =
@@ -159,6 +180,9 @@ class LedgerViewModel(
     private val _importUiState = MutableStateFlow<ImportUiState>(ImportUiState.Idle)
     val importUiState: StateFlow<ImportUiState> = _importUiState.asStateFlow()
 
+    private val _rootStatusState = MutableStateFlow(RootKeepAliveStatus())
+    val rootStatusState: StateFlow<RootKeepAliveStatus> = _rootStatusState.asStateFlow()
+
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
 
@@ -203,9 +227,6 @@ class LedgerViewModel(
                 confirmed = true
             )
             repository.addTransaction(tx)
-                .onSuccess {
-                    _actionMessage.value = "已记录：${merchant.ifBlank { category }} ${resolvedCurrency.symbol}%.2f".format(amountCents / 100.0)
-                }
                 .onFailure {
                     _actionMessage.value = "记录失败：${it.localizedMessage ?: "请检查输入"}"
                 }
@@ -239,7 +260,6 @@ class LedgerViewModel(
                 occurredAtMillis = occurredAtMillis,
                 confirmed = confirmed
             )
-                .onSuccess { _actionMessage.value = "已更新账单" }
                 .onFailure { _actionMessage.value = "更新失败：${it.localizedMessage ?: "请重试"}" }
         }
     }
@@ -247,7 +267,6 @@ class LedgerViewModel(
     fun confirmTransaction(txId: String) {
         viewModelScope.launch {
             repository.confirmTransaction(txId)
-                .onSuccess { _actionMessage.value = "已确认入账" }
                 .onFailure { _actionMessage.value = "确认失败" }
         }
     }
@@ -255,7 +274,6 @@ class LedgerViewModel(
     fun confirmAllPendingTransactions() {
         viewModelScope.launch {
             repository.confirmAllPendingTransactions()
-                .onSuccess { _actionMessage.value = "已全部确认入账" }
                 .onFailure { _actionMessage.value = "确认失败" }
         }
     }
@@ -263,8 +281,68 @@ class LedgerViewModel(
     fun deleteTransaction(txId: String) {
         viewModelScope.launch {
             repository.deleteTransaction(txId)
-                .onSuccess { _actionMessage.value = "已删除账单" }
                 .onFailure { _actionMessage.value = "删除失败：${it.localizedMessage ?: "请重试"}" }
+        }
+    }
+
+    fun resolveInquiry(
+        inquiry: NotificationInquiry,
+        amountCents: Long,
+        currencyCode: String,
+        type: TransactionType,
+        category: String,
+        merchant: String,
+        channel: String,
+        learnRule: Boolean,
+        ruleKeyword: String,
+        ruleName: String
+    ) {
+        viewModelScope.launch {
+            repository.resolveInquiryAndLearnRule(
+                inquiry = inquiry,
+                amountCents = amountCents,
+                currencyCode = currencyCode,
+                type = type,
+                category = category,
+                merchant = merchant,
+                channel = channel,
+                learnRule = learnRule,
+                ruleKeyword = ruleKeyword,
+                ruleName = ruleName
+            )
+                .onFailure { _actionMessage.value = "处理失败：${it.localizedMessage ?: "请检查输入"}" }
+        }
+    }
+
+    fun dismissInquiry(inquiryId: String) {
+        viewModelScope.launch {
+            repository.dismissInquiry(inquiryId)
+        }
+    }
+
+    fun enqueueInquiryFromTestBench(
+        packageName: String,
+        title: String,
+        content: String,
+        parsed: ParsedNotificationResult?
+    ) {
+        viewModelScope.launch {
+            val inquiry = NotificationInquiry(
+                packageName = packageName.ifBlank { "manual.bench" },
+                appLabel = parsed?.channel ?: "通知测试",
+                title = title,
+                content = content,
+                suggestedAmountCents = parsed?.amountCents ?: 0L,
+                suggestedCurrencyCode = parsed?.currencyCode ?: ChinaNotificationParser.detectCurrencyCode("$title $content"),
+                suggestedType = parsed?.type?.name ?: TransactionType.EXPENSE.name,
+                suggestedCategory = parsed?.category ?: "其他",
+                suggestedMerchant = parsed?.merchant ?: title.take(30),
+                suggestedChannel = parsed?.channel ?: "未知渠道",
+                cardLastFour = parsed?.cardLastFour,
+                reason = parsed?.inquiryReason?.ifBlank { "等待补充信息并学习规则" } ?: "未能自动识别，等待补充"
+            )
+            repository.addInquiry(inquiry)
+            _parseBenchState.value = ParseBenchState.Idle
         }
     }
 
@@ -289,7 +367,7 @@ class LedgerViewModel(
         if (parsed != null && parsed.isFinancialTransaction) {
             _parseBenchState.value = ParseBenchState.Parsed(parsed, title, content)
         } else {
-            _parseBenchState.value = ParseBenchState.Error("未能识别出有效金额（或命中验证码过滤规则）")
+            _parseBenchState.value = ParseBenchState.Error("未能准确识别金额或格式（可点击下方转为待询问学习规则）")
         }
     }
 
@@ -299,7 +377,6 @@ class LedgerViewModel(
         rawContent: String
     ) {
         viewModelScope.launch {
-            val symbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
             val tx = LedgerTransaction(
                 amountCents = parsed.amountCents,
                 currencyCode = parsed.currencyCode,
@@ -317,7 +394,6 @@ class LedgerViewModel(
             )
             repository.addTransaction(tx)
                 .onSuccess {
-                    _actionMessage.value = "已入账：${parsed.merchant} $symbol%.2f".format(parsed.amountCents / 100.0)
                     _parseBenchState.value = ParseBenchState.Idle
                 }
                 .onFailure { error ->
@@ -326,27 +402,17 @@ class LedgerViewModel(
         }
     }
 
-    fun addCustomRule(
-        name: String,
-        packageFilter: String,
-        keywordPattern: String,
-        channelName: String,
-        defaultCategory: String,
-        defaultType: TransactionType
-    ) {
+    fun saveOrUpdateCustomRule(rule: CustomParsingRule) {
         viewModelScope.launch {
-            val rule = CustomParsingRule(
-                name = name,
-                packageFilter = packageFilter.ifBlank { "*" },
-                keywordPattern = keywordPattern,
-                channelName = channelName,
-                defaultCategory = defaultCategory,
-                defaultType = defaultType.name,
-                enabled = true
-            )
-            repository.addParsingRule(rule)
-                .onSuccess { _actionMessage.value = "已保存规则「$name」" }
-                .onFailure { _actionMessage.value = "添加规则失败：${it.localizedMessage ?: "请检查输入"}" }
+            repository.saveParsingRule(rule)
+                .onFailure { _actionMessage.value = "保存规则失败：${it.localizedMessage ?: "请检查输入"}" }
+        }
+    }
+
+    fun resetDefaultRules() {
+        viewModelScope.launch {
+            repository.resetDefaultRules()
+                .onFailure { _actionMessage.value = "恢复默认规则失败" }
         }
     }
 
@@ -360,7 +426,6 @@ class LedgerViewModel(
     fun deleteCustomRule(ruleId: String) {
         viewModelScope.launch {
             repository.deleteParsingRule(ruleId)
-                .onSuccess { _actionMessage.value = "已删除规则" }
                 .onFailure { _actionMessage.value = "删除规则失败" }
         }
     }
@@ -368,7 +433,6 @@ class LedgerViewModel(
     fun saveSettings(settings: BudgetSettings) {
         viewModelScope.launch {
             repository.saveSettings(settings)
-                .onSuccess { _actionMessage.value = "设置已保存" }
                 .onFailure { _actionMessage.value = "保存设置失败" }
         }
     }
@@ -380,18 +444,33 @@ class LedgerViewModel(
         }
     }
 
+    fun checkRootStatus() {
+        viewModelScope.launch {
+            _rootStatusState.value = RootKeepAliveManager.checkRootAvailable()
+        }
+    }
+
+    fun applyRootKeepAlive(context: android.content.Context) {
+        viewModelScope.launch {
+            val result = RootKeepAliveManager.applyRootKeepAlive(context)
+            _rootStatusState.value = result
+            val current = settingsState.value
+            if (current.rootKeepAliveEnabled != result.isRootAvailable && result.isRootAvailable) {
+                repository.saveSettings(current.copy(rootKeepAliveEnabled = true))
+            }
+        }
+    }
+
     fun updateExchangeRateDatabase() {
         viewModelScope.launch {
             _rateUpdateState.value = RateUpdateState.Loading
             exchangeManager.refreshRatesDatabase(repository)
                 .onSuccess { updated ->
                     _rateUpdateState.value = RateUpdateState.Success(updated.lastStatus)
-                    _actionMessage.value = updated.lastStatus
                 }
                 .onFailure { err ->
                     val msg = err.message ?: "汇率更新失败"
                     _rateUpdateState.value = RateUpdateState.Error(msg)
-                    _actionMessage.value = msg
                 }
         }
     }
@@ -423,7 +502,6 @@ class LedgerViewModel(
     fun saveWebDavConfig(config: WebDavConfig) {
         viewModelScope.launch {
             repository.saveWebDavConfig(config)
-                .onSuccess { _actionMessage.value = "WebDAV 配置已保存" }
                 .onFailure { _actionMessage.value = "保存 WebDAV 配置失败" }
         }
     }

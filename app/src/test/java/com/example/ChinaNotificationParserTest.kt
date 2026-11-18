@@ -223,4 +223,58 @@ class ChinaNotificationParserTest {
         org.junit.Assert.assertTrue(summary.contains("¥72.00"))
         org.junit.Assert.assertFalse(summary.contains("PendingItem"))
     }
+
+    @Test
+    fun uncertainNotificationTriggersInquiryAndLearnedRuleResolvesIt() {
+        val ambiguous = ChinaNotificationParser.parse(
+            packageName = "com.custom.wallet",
+            title = "电子钱包通知",
+            content = "【电子钱包】完成交易128.00元，请留意账单明细。"
+        )
+        assertNotNull(ambiguous)
+        org.junit.Assert.assertTrue(ambiguous!!.needsInquiry)
+        assertEquals("未知渠道", ambiguous.channel)
+
+        val keyword = ChinaNotificationParser.suggestRuleKeyword(
+            title = "电子钱包通知",
+            content = "【电子钱包】完成交易128.00元",
+            merchant = ambiguous.merchant,
+            channel = ambiguous.channel
+        )
+        assertEquals("电子钱包", keyword)
+
+        val learnedRule = com.example.model.CustomParsingRule(
+            name = "学习 · 电子钱包",
+            packageFilter = "*",
+            keywordPattern = keyword,
+            channelName = "企业电子钱包",
+            defaultCategory = "餐饮美食",
+            defaultType = TransactionType.EXPENSE.name,
+            merchantOverride = "园区福利社",
+            priority = 20,
+            enabled = true
+        )
+        val resolved = ChinaNotificationParser.parse(
+            packageName = "com.custom.wallet",
+            title = "电子钱包通知",
+            content = "【电子钱包】完成交易128.00元，请留意账单明细。",
+            customRules = listOf(learnedRule)
+        )
+        assertNotNull(resolved)
+        org.junit.Assert.assertFalse(resolved!!.needsInquiry)
+        assertEquals("企业电子钱包", resolved.channel)
+        assertEquals("餐饮美食", resolved.category)
+        assertEquals("园区福利社", resolved.merchant)
+        assertEquals(0.96f, resolved.confidence)
+    }
+
+    @Test
+    fun customTipsOverrideDefaultListAndWrapSafely() {
+        val customRaw = "第一条自定义金句\n\n第二条自定义金句"
+        val effective = com.example.parser.FinanceHumorTips.effectiveTips(customRaw)
+        assertEquals(2, effective.size)
+        assertEquals("第一条自定义金句", com.example.parser.FinanceHumorTips.tipAt(0, customRaw))
+        assertEquals("第二条自定义金句", com.example.parser.FinanceHumorTips.tipAt(1, customRaw))
+        assertEquals("第一条自定义金句", com.example.parser.FinanceHumorTips.tipAt(2, customRaw))
+    }
 }

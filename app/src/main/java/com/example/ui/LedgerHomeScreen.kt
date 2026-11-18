@@ -22,18 +22,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.PendingActions
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -47,6 +52,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -54,6 +60,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -68,6 +75,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -76,11 +84,15 @@ import com.example.data.CurrencyExchangeManager
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CardDensity
+import com.example.model.CategoryCatalog
+import com.example.model.CurrencyCatalog
 import com.example.model.ExchangeRateState
 import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
 import com.example.model.LedgerTransaction
+import com.example.model.NotificationInquiry
 import com.example.model.TransactionType
+import com.example.parser.ChinaNotificationParser
 import com.example.parser.FinanceHumorTips
 import com.example.service.NotificationBridge
 import com.example.ui.components.ChannelBadge
@@ -98,11 +110,14 @@ import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
 import java.util.Calendar
+import java.util.Locale
+import kotlin.math.roundToLong
 import kotlin.random.Random
 
 @Composable
 fun LedgerHomeScreen(
     transactionsState: UiState<List<LedgerTransaction>>,
+    inquiries: List<NotificationInquiry>,
     settings: BudgetSettings,
     appearance: AppearanceSettings,
     exchangeRates: ExchangeRateState,
@@ -116,8 +131,29 @@ fun LedgerHomeScreen(
     var selectedFilter by remember { mutableStateOf("全部") }
     var selectedTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
     var editingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
+    var resolvingInquiry by remember { mutableStateOf<NotificationInquiry?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
-    var tipIndex by remember { mutableIntStateOf(Random.nextInt(FinanceHumorTips.tips.size)) }
+    var showEasterEggDialog by remember { mutableStateOf(false) }
+    var bannerTapCount by remember { mutableIntStateOf(0) }
+    var lastBannerTapMillis by remember { mutableLongStateOf(0L) }
+    val activeTips = remember(appearance.customTipsRaw) {
+        FinanceHumorTips.effectiveTips(appearance.customTipsRaw)
+    }
+    var tipIndex by remember { mutableIntStateOf(Random.nextInt(activeTips.size.coerceAtLeast(1))) }
+    val tipTagText = appearance.tipTagText.ifBlank { "金钱真相" }
+    val currentTipText = FinanceHumorTips.tipAt(tipIndex, appearance.customTipsRaw)
+    val onTipBannerTapped: () -> Unit = {
+        tipIndex += 1
+        val now = System.currentTimeMillis()
+        val nextCount = if (now - lastBannerTapMillis <= 3000L) bannerTapCount + 1 else 1
+        lastBannerTapMillis = now
+        if (nextCount >= 7) {
+            bannerTapCount = 0
+            showEasterEggDialog = true
+        } else {
+            bannerTapCount = nextCount
+        }
+    }
 
     val filterOptions = listOf("全部", "支出", "收入", "外币", "支付宝", "微信支付", "银行卡", "云闪付")
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
@@ -215,8 +251,19 @@ fun LedgerHomeScreen(
             if (appearance.homeHeaderOrder == HomeHeaderOrder.TIPS_TOP) {
                 item(key = "humor_tip_top") {
                     HumorFinanceTipCard(
-                        tipText = FinanceHumorTips.tipAt(tipIndex),
-                        onNextTip = { tipIndex += 1 }
+                        tagText = tipTagText,
+                        tipText = currentTipText,
+                        onNextTip = onTipBannerTapped
+                    )
+                }
+            }
+
+            if (inquiries.isNotEmpty()) {
+                item(key = "notification_inquiries_section") {
+                    NotificationInquirySectionCard(
+                        inquiries = inquiries,
+                        onResolve = { resolvingInquiry = it },
+                        onDismiss = { viewModel.dismissInquiry(it.id) }
                     )
                 }
             }
@@ -258,8 +305,9 @@ fun LedgerHomeScreen(
             if (appearance.homeHeaderOrder == HomeHeaderOrder.SUMMARY_TOP) {
                 item(key = "humor_tip_below_summary") {
                     HumorFinanceTipCard(
-                        tipText = FinanceHumorTips.tipAt(tipIndex),
-                        onNextTip = { tipIndex += 1 }
+                        tagText = tipTagText,
+                        tipText = currentTipText,
+                        onNextTip = onTipBannerTapped
                     )
                 }
             }
@@ -492,10 +540,55 @@ fun LedgerHomeScreen(
             }
         )
     }
+    resolvingInquiry?.let { inquiry ->
+        ResolveInquiryDialog(
+            inquiry = inquiry,
+            defaultCurrencyCode = baseCurrency,
+            onDismiss = { resolvingInquiry = null },
+            onIgnore = {
+                viewModel.dismissInquiry(inquiry.id)
+                resolvingInquiry = null
+            },
+            onConfirm = { amountCents, currencyCode, type, category, merchant, channel, learnRule, ruleKeyword, ruleName ->
+                viewModel.resolveInquiry(
+                    inquiry = inquiry,
+                    amountCents = amountCents,
+                    currencyCode = currencyCode,
+                    type = type,
+                    category = category,
+                    merchant = merchant,
+                    channel = channel,
+                    learnRule = learnRule,
+                    ruleKeyword = ruleKeyword,
+                    ruleName = ruleName
+                )
+                resolvingInquiry = null
+            }
+        )
+    }
+
+    if (showEasterEggDialog) {
+        AlertDialog(
+            onDismissRequest = { showEasterEggDialog = false },
+            title = { Text("彩蛋发现") },
+            text = {
+                Text(
+                    text = "老实赚钱，很枯燥吧？！",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showEasterEggDialog = false }) {
+                    Text("继续搬砖")
+                }
+            }
+        )
+    }
 }
 
 @Composable
 private fun HumorFinanceTipCard(
+    tagText: String,
     tipText: String,
     onNextTip: () -> Unit
 ) {
@@ -519,7 +612,7 @@ private fun HumorFinanceTipCard(
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
-                    text = "金钱真相",
+                    text = tagText,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.secondary,
                     fontWeight = FontWeight.Bold,
@@ -540,6 +633,387 @@ private fun HumorFinanceTipCard(
             )
         }
     }
+}
+
+@Composable
+private fun NotificationInquirySectionCard(
+    inquiries: List<NotificationInquiry>,
+    onResolve: (NotificationInquiry) -> Unit,
+    onDismiss: (NotificationInquiry) -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("notification_inquiry_section_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.HelpOutline,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary
+                )
+                Text(
+                    text = "待识别询问 (${inquiries.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "确认后可自动学习规则",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            inquiries.take(4).forEach { inquiry ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onResolve(inquiry) }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = inquiry.title.ifBlank { inquiry.appLabel },
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Surface(
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = inquiry.reason.ifBlank { "待补充信息" },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = inquiry.content,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val amountLabel = if (inquiry.suggestedAmountCents > 0L) {
+                                "猜想 ${formatCurrency(inquiry.suggestedAmountCents, inquiry.suggestedCurrencyCode)} · ${inquiry.suggestedChannel}"
+                            } else {
+                                "渠道 ${inquiry.suggestedChannel}"
+                            }
+                            Text(
+                                text = amountLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                TextButton(onClick = { onDismiss(inquiry) }) {
+                                    Text("忽略")
+                                }
+                                Button(
+                                    onClick = { onResolve(inquiry) },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                ) {
+                                    Text("告知并学习")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ResolveInquiryDialog(
+    inquiry: NotificationInquiry,
+    defaultCurrencyCode: String,
+    onDismiss: () -> Unit,
+    onIgnore: () -> Unit,
+    onConfirm: (
+        amountCents: Long,
+        currencyCode: String,
+        type: TransactionType,
+        category: String,
+        merchant: String,
+        channel: String,
+        learnRule: Boolean,
+        ruleKeyword: String,
+        ruleName: String
+    ) -> Unit
+) {
+    val initialAmount = if (inquiry.suggestedAmountCents > 0L) {
+        String.format(Locale.US, "%.2f", inquiry.suggestedAmountCents / 100.0)
+    } else ""
+    var amountText by remember(inquiry.id) { mutableStateOf(initialAmount) }
+    var currencyCode by remember(inquiry.id) {
+        mutableStateOf(inquiry.suggestedCurrencyCode.ifBlank { defaultCurrencyCode })
+    }
+    var txType by remember(inquiry.id) {
+        mutableStateOf(TransactionType.fromRaw(inquiry.suggestedType))
+    }
+    var merchant by remember(inquiry.id) {
+        mutableStateOf(inquiry.suggestedMerchant.ifBlank { inquiry.title.take(20) })
+    }
+    var channel by remember(inquiry.id) {
+        mutableStateOf(inquiry.suggestedChannel.ifBlank { inquiry.appLabel.ifBlank { "银行卡" } })
+    }
+    var category by remember(inquiry.id) {
+        mutableStateOf(inquiry.suggestedCategory.ifBlank { "餐饮美食" })
+    }
+    var learnRule by remember(inquiry.id) { mutableStateOf(true) }
+    val initialKeyword = remember(inquiry.id) {
+        ChinaNotificationParser.suggestRuleKeyword(
+            title = inquiry.title,
+            content = inquiry.content,
+            merchant = inquiry.suggestedMerchant,
+            channel = inquiry.suggestedChannel
+        )
+    }
+    var ruleKeyword by remember(inquiry.id) { mutableStateOf(initialKeyword) }
+    var ruleName by remember(inquiry.id) {
+        mutableStateOf(
+            if (merchant.isNotBlank()) "学习 · $merchant" else "学习 · $channel"
+        )
+    }
+    var amountError by remember { mutableStateOf<String?>(null) }
+
+    val availableCategories = remember(txType) {
+        when (txType) {
+            TransactionType.INCOME -> CategoryCatalog.incomeCategories
+            TransactionType.TRANSFER -> listOf("转账红包", "其他")
+            TransactionType.EXPENSE -> CategoryCatalog.expenseCategories
+        }
+    }
+    val currencyOptions = remember { CurrencyCatalog.currencies.take(6) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Rounded.AutoFixHigh, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text("确认通知并学习规则")
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "${inquiry.title} (${inquiry.packageName})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = inquiry.content,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TransactionType.entries.forEach { t ->
+                        FilterChip(
+                            selected = txType == t,
+                            onClick = {
+                                txType = t
+                                val validCats = when (t) {
+                                    TransactionType.INCOME -> CategoryCatalog.incomeCategories
+                                    TransactionType.TRANSFER -> listOf("转账红包", "其他")
+                                    TransactionType.EXPENSE -> CategoryCatalog.expenseCategories
+                                }
+                                if (category !in validCats) category = validCats.first()
+                            },
+                            label = { Text(t.label) }
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = {
+                        amountText = it
+                        amountError = null
+                    },
+                    label = { Text("金额") },
+                    isError = amountError != null,
+                    supportingText = amountError?.let { err -> { Text(err) } },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    currencyOptions.forEach { c ->
+                        FilterChip(
+                            selected = currencyCode == c.code,
+                            onClick = { currencyCode = c.code },
+                            label = { Text("${c.code} ${c.symbol}") }
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = merchant,
+                    onValueChange = { merchant = it },
+                    label = { Text("商户 / 对方名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = channel,
+                    onValueChange = { channel = it },
+                    label = { Text("支付渠道 / 银行") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Text(
+                    text = "分类",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    availableCategories.forEach { cat ->
+                        FilterChip(
+                            selected = category == cat,
+                            onClick = { category = cat },
+                            label = { Text(cat) }
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("自动更新识别规则", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            text = "下次遇到同关键词通知直接套用上述渠道与分类",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = learnRule,
+                        onCheckedChange = { learnRule = it }
+                    )
+                }
+
+                if (learnRule) {
+                    OutlinedTextField(
+                        value = ruleKeyword,
+                        onValueChange = { ruleKeyword = it },
+                        label = { Text("匹配关键词（支持正则）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = ruleName,
+                        onValueChange = { ruleName = it },
+                        label = { Text("规则名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onIgnore) {
+                    Text("非账单")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val yuan = amountText.trim().replace(",", "").toDoubleOrNull()
+                    if (yuan == null || yuan <= 0.0 || yuan > 10_000_000.0) {
+                        amountError = "请输入有效金额"
+                        return@Button
+                    }
+                    onConfirm(
+                        (yuan * 100.0).roundToLong(),
+                        currencyCode,
+                        txType,
+                        category,
+                        merchant.trim().ifBlank { channel.ifBlank { "未知商户" } },
+                        channel.trim().ifBlank { "未知渠道" },
+                        learnRule,
+                        ruleKeyword.trim(),
+                        ruleName.trim()
+                    )
+                }
+            ) {
+                Text("确认记账")
+            }
+        }
+    )
 }
 
 @Composable

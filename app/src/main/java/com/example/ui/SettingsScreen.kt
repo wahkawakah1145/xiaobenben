@@ -23,6 +23,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.Rule
+import androidx.compose.material.icons.rounded.AccessibilityNew
+import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.CurrencyExchange
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -55,6 +58,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.BudgetSettings
 import com.example.model.CurrencyCatalog
 import com.example.service.NotificationBridge
@@ -67,6 +71,8 @@ import kotlin.math.roundToLong
 fun SettingsScreen(
     settings: BudgetSettings,
     isListenerEnabled: Boolean,
+    isAccessibilityEnabled: Boolean,
+    isIgnoringBattery: Boolean,
     viewModel: LedgerViewModel,
     onShowMessage: (String) -> Unit,
     onOpenParser: () -> Unit,
@@ -77,6 +83,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val rootStatus by viewModel.rootStatusState.collectAsStateWithLifecycle()
     var budgetInput by remember(settings.monthlyBudgetCents) {
         mutableStateOf("%.0f".format(settings.monthlyBudgetCents / 100.0))
     }
@@ -248,7 +255,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 3. System Permissions
+            // 3. System Permissions & Keep-Alive (Accessibility / Root)
             item(key = "permissions_card") {
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -264,7 +271,7 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Icon(Icons.Rounded.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text("系统权限", style = MaterialTheme.typography.titleMedium)
+                            Text("系统权限与进程保活", style = MaterialTheme.typography.titleMedium)
                         }
 
                         Row(
@@ -297,6 +304,115 @@ fun SettingsScreen(
                             Icon(Icons.Rounded.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(if (isListenerEnabled) "管理通知使用权" else "开启通知读取权限")
+                        }
+
+                        HorizontalDivider()
+
+                        // Accessibility Keep-Alive
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("无障碍保活守护", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = if (isAccessibilityEnabled) "运行中 · 断开时自动重绑监听" else "未开启 · 可辅助防止后台被杀",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isAccessibilityEnabled) IncomeJade else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { NotificationBridge.openAccessibilitySettings(context) },
+                                modifier = Modifier.testTag("settings_accessibility_button")
+                            ) {
+                                Icon(Icons.Rounded.AccessibilityNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(if (isAccessibilityEnabled) "已开启" else "去开启")
+                            }
+                        }
+
+                        // Battery Optimization Whitelist
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("忽略电池优化", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = if (isIgnoringBattery) "已加入电池白名单" else "建议设为不限制后台耗电",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isIgnoringBattery) IncomeJade else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (!isIgnoringBattery) {
+                                OutlinedButton(
+                                    onClick = { NotificationBridge.requestIgnoreBatteryOptimizations(context) },
+                                    modifier = Modifier.testTag("settings_battery_button")
+                                ) {
+                                    Icon(Icons.Rounded.BatteryChargingFull, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("去设置")
+                                }
+                            } else {
+                                Icon(Icons.Rounded.CheckCircle, contentDescription = "已优化", tint = IncomeJade)
+                            }
+                        }
+
+                        HorizontalDivider()
+
+                        // Root Keep-Alive
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Root 进程保活", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        text = if (rootStatus.lastResultMessage.isNotBlank()) {
+                                            rootStatus.lastResultMessage
+                                        } else {
+                                            "通过 su 设置 Doze 白名单、后台常驻与进程优先级"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (rootStatus.isRootAvailable) IncomeJade else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = settings.rootKeepAliveEnabled,
+                                    onCheckedChange = { checked ->
+                                        viewModel.saveSettings(settings.copy(rootKeepAliveEnabled = checked))
+                                        if (checked) {
+                                            viewModel.applyRootKeepAlive(context)
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("toggle_root_keepalive")
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { viewModel.checkRootStatus() },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("检测 su 权限")
+                                }
+                                Button(
+                                    onClick = { viewModel.applyRootKeepAlive(context) },
+                                    modifier = Modifier
+                                        .weight(1.3f)
+                                        .testTag("apply_root_keepalive_button")
+                                ) {
+                                    Icon(Icons.Rounded.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("执行 Root 保活")
+                                }
+                            }
                         }
 
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

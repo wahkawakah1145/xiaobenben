@@ -32,6 +32,8 @@ class SettingsDataStore(private val context: Context) {
         val SMART_SEMANTIC_ENABLED = booleanPreferencesKey("smart_semantic_enabled")
         val NOTIFY_ON_RECORDED = booleanPreferencesKey("notify_on_recorded")
         val BASE_CURRENCY_CODE = stringPreferencesKey("base_currency_code")
+        val ROOT_KEEP_ALIVE_ENABLED = booleanPreferencesKey("root_keep_alive_enabled")
+        val RULES_SEEDED = booleanPreferencesKey("default_rules_seeded_v1")
 
         val WEBDAV_URL = stringPreferencesKey("webdav_url")
         val WEBDAV_USERNAME = stringPreferencesKey("webdav_username")
@@ -48,10 +50,14 @@ class SettingsDataStore(private val context: Context) {
         val FAB_PLACEMENT = stringPreferencesKey("appearance_fab_placement")
         val SHOW_CHANNEL_BADGE = booleanPreferencesKey("appearance_show_channel_badge")
         val SHOW_PARSE_BADGE = booleanPreferencesKey("appearance_show_parse_badge")
+        val TIP_TAG_TEXT = stringPreferencesKey("appearance_tip_tag_text")
+        val CUSTOM_TIPS_RAW = stringPreferencesKey("appearance_custom_tips_raw")
 
         val EXCHANGE_RATES_JSON = stringPreferencesKey("exchange_rates_json")
         val EXCHANGE_RATES_UPDATED_AT = longPreferencesKey("exchange_rates_updated_at")
         val EXCHANGE_RATES_STATUS = stringPreferencesKey("exchange_rates_status")
+        val EXCHANGE_RATES_SOURCE = stringPreferencesKey("exchange_rates_source")
+        val EXCHANGE_RATES_DATE_TEXT = stringPreferencesKey("exchange_rates_date_text")
     }
 
     val budgetSettingsFlow: Flow<BudgetSettings> = context.smartLedgerDataStore.data.map { prefs ->
@@ -61,7 +67,8 @@ class SettingsDataStore(private val context: Context) {
             requireManualConfirm = prefs[Keys.REQUIRE_MANUAL_CONFIRM] ?: false,
             smartSemanticEnabled = prefs[Keys.SMART_SEMANTIC_ENABLED] ?: true,
             notifyOnRecorded = prefs[Keys.NOTIFY_ON_RECORDED] ?: true,
-            baseCurrencyCode = prefs[Keys.BASE_CURRENCY_CODE] ?: "CNY"
+            baseCurrencyCode = prefs[Keys.BASE_CURRENCY_CODE] ?: "CNY",
+            rootKeepAliveEnabled = prefs[Keys.ROOT_KEEP_ALIVE_ENABLED] ?: false
         )
     }
 
@@ -85,7 +92,9 @@ class SettingsDataStore(private val context: Context) {
             homeHeaderOrder = HomeHeaderOrder.fromRaw(prefs[Keys.HOME_HEADER_ORDER]),
             fabPlacement = FabPlacement.fromRaw(prefs[Keys.FAB_PLACEMENT]),
             showChannelBadge = prefs[Keys.SHOW_CHANNEL_BADGE] ?: true,
-            showParseBadge = prefs[Keys.SHOW_PARSE_BADGE] ?: true
+            showParseBadge = prefs[Keys.SHOW_PARSE_BADGE] ?: true,
+            tipTagText = prefs[Keys.TIP_TAG_TEXT] ?: "金钱真相",
+            customTipsRaw = prefs[Keys.CUSTOM_TIPS_RAW] ?: ""
         )
     }
 
@@ -94,7 +103,9 @@ class SettingsDataStore(private val context: Context) {
         ExchangeRateState(
             ratesToCny = parsed,
             updatedAtMillis = prefs[Keys.EXCHANGE_RATES_UPDATED_AT] ?: 0L,
-            lastStatus = prefs[Keys.EXCHANGE_RATES_STATUS] ?: ""
+            lastStatus = prefs[Keys.EXCHANGE_RATES_STATUS] ?: "",
+            dataSource = prefs[Keys.EXCHANGE_RATES_SOURCE] ?: "内置参考汇率（初始基准）",
+            rateDateText = prefs[Keys.EXCHANGE_RATES_DATE_TEXT] ?: ""
         )
     }
 
@@ -104,6 +115,15 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun getExchangeRateStateOnce(): ExchangeRateState = exchangeRateStateFlow.first()
 
+    suspend fun isRulesSeeded(): Boolean =
+        context.smartLedgerDataStore.data.first()[Keys.RULES_SEEDED] ?: false
+
+    suspend fun markRulesSeeded() {
+        context.smartLedgerDataStore.edit { prefs ->
+            prefs[Keys.RULES_SEEDED] = true
+        }
+    }
+
     suspend fun saveBudgetSettings(settings: BudgetSettings) {
         context.smartLedgerDataStore.edit { prefs ->
             prefs[Keys.MONTHLY_BUDGET_CENTS] = settings.monthlyBudgetCents.coerceIn(0L, 1_000_000_000L)
@@ -112,6 +132,7 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.SMART_SEMANTIC_ENABLED] = settings.smartSemanticEnabled
             prefs[Keys.NOTIFY_ON_RECORDED] = settings.notifyOnRecorded
             prefs[Keys.BASE_CURRENCY_CODE] = CurrencyCatalog.resolve(settings.baseCurrencyCode).code
+            prefs[Keys.ROOT_KEEP_ALIVE_ENABLED] = settings.rootKeepAliveEnabled
         }
     }
 
@@ -143,10 +164,18 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.FAB_PLACEMENT] = settings.fabPlacement.name
             prefs[Keys.SHOW_CHANNEL_BADGE] = settings.showChannelBadge
             prefs[Keys.SHOW_PARSE_BADGE] = settings.showParseBadge
+            prefs[Keys.TIP_TAG_TEXT] = settings.tipTagText.trim().ifBlank { "金钱真相" }
+            prefs[Keys.CUSTOM_TIPS_RAW] = settings.customTipsRaw
         }
     }
 
-    suspend fun saveExchangeRates(ratesToCny: Map<String, Double>, updatedAtMillis: Long, status: String) {
+    suspend fun saveExchangeRates(
+        ratesToCny: Map<String, Double>,
+        updatedAtMillis: Long,
+        status: String,
+        dataSource: String,
+        rateDateText: String
+    ) {
         val json = JSONObject().apply {
             ratesToCny.forEach { (code, value) ->
                 if (value > 0.0) put(code, value)
@@ -156,6 +185,8 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.EXCHANGE_RATES_JSON] = json
             prefs[Keys.EXCHANGE_RATES_UPDATED_AT] = updatedAtMillis
             prefs[Keys.EXCHANGE_RATES_STATUS] = status
+            prefs[Keys.EXCHANGE_RATES_SOURCE] = dataSource
+            prefs[Keys.EXCHANGE_RATES_DATE_TEXT] = rateDateText
         }
     }
 

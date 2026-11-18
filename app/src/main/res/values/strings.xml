@@ -1,6 +1,8 @@
 <resources>
     <string name="app_name">小本本</string>
     <string name="notification_listener_label">小本本通知记账服务</string>
+    <string name="accessibility_service_label">小本本无障碍保活守护</string>
+    <string name="accessibility_service_description">用于在后台保持小本本通知监听服务稳定运行，并在系统断开时自动重新绑定</string>
     <string name="nav_ledger">账单</string>
     <string name="nav_analytics">收支分析</string>
     <string name="nav_settings">设置</string>

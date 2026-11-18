@@ -20,9 +20,19 @@ object FinanceHumorTips {
         "高收益承诺通常对应两种结局：要么是骗局，要么你是那个流动性提供者。"
     )
 
-    fun tipAt(index: Int): String {
-        if (tips.isEmpty()) return ""
-        val safeIdx = ((index % tips.size) + tips.size) % tips.size
-        return tips[safeIdx]
+    fun effectiveTips(customRaw: String): List<String> {
+        val customLines = customRaw.lines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        return if (customLines.isNotEmpty()) customLines else tips
+    }
+
+    fun defaultTipsMultiline(): String = tips.joinToString("\n")
+
+    fun tipAt(index: Int, customRaw: String = ""): String {
+        val active = effectiveTips(customRaw)
+        if (active.isEmpty()) return ""
+        val safeIdx = ((index % active.size) + active.size) % active.size
+        return active[safeIdx]
     }
 }

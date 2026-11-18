@@ -95,6 +95,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         occurredAt: Long
     ) {
         val repository = LedgerRepository(applicationContext)
+        repository.ensureDefaultRulesSeeded()
         val settings = repository.getSettingsOnce()
         if (!settings.autoRecordEnabled) {
             NotificationBridge.appendLog(
@@ -118,14 +119,84 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         )
 
         if (parsed == null || !parsed.isFinancialTransaction || parsed.amountCents <= 0L) {
-            NotificationBridge.appendLog(
+            if (ChinaNotificationParser.hasUncertainFinancialCue(packageName, title, content)) {
+                val inquiry = com.example.model.NotificationInquiry(
+                    packageName = packageName,
+                    appLabel = appLabel,
+                    title = title,
+                    content = content,
+                    suggestedAmountCents = 0L,
+                    suggestedCurrencyCode = ChinaNotificationParser.detectCurrencyCode("$title $content"),
+                    suggestedType = com.example.model.TransactionType.EXPENSE.name,
+                    suggestedCategory = "其他",
+                    suggestedMerchant = title.ifBlank { appLabel }.take(40),
+                    suggestedChannel = appLabel,
+                    reason = "未能自动提取金额或模板，等待确认并生成规则",
+                    occurredAtMillis = occurredAt
+                )
+                repository.addInquiry(inquiry)
+                NotificationBridge.appendLog(
+                    packageName = packageName,
+                    appLabel = appLabel,
+                    title = title,
+                    content = content,
+                    status = "待询问确认",
+                    summary = inquiry.reason
+                )
+                if (settings.notifyOnRecorded) {
+                    NotificationBridge.postRecordedConfirmation(
+                        context = applicationContext,
+                        title = "小本本需要你确认一条通知 ($appLabel)",
+                        body = "${title.ifBlank { content }} — 点击进入软件补充并学习规则"
+                    )
+                }
+            } else {
+                NotificationBridge.appendLog(
+                    packageName = packageName,
+                    appLabel = appLabel,
+                    title = title,
+                    content = content,
+                    status = "未能识别金额",
+                    summary = "非动账通知"
+                )
+            }
+            return
+        }
+
+        if (parsed.needsInquiry) {
+            val inquiry = com.example.model.NotificationInquiry(
                 packageName = packageName,
                 appLabel = appLabel,
                 title = title,
                 content = content,
-                status = "未能识别金额",
-                summary = "非动账通知或格式未命中规则"
+                suggestedAmountCents = parsed.amountCents,
+                suggestedCurrencyCode = parsed.currencyCode,
+                suggestedType = parsed.type.name,
+                suggestedCategory = parsed.category,
+                suggestedMerchant = parsed.merchant,
+                suggestedChannel = parsed.channel,
+                cardLastFour = parsed.cardLastFour,
+                reason = parsed.inquiryReason.ifBlank { "信息不够明确，请确认后学习为规则" },
+                occurredAtMillis = occurredAt
             )
+            repository.addInquiry(inquiry)
+            val currencySymbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
+            val formattedAmount = "$currencySymbol%.2f".format(parsed.amountCents / 100.0)
+            NotificationBridge.appendLog(
+                packageName = packageName,
+                appLabel = parsed.channel,
+                title = title,
+                content = content,
+                status = "待询问确认",
+                summary = "$formattedAmount · ${inquiry.reason}"
+            )
+            if (settings.notifyOnRecorded) {
+                NotificationBridge.postRecordedConfirmation(
+                    context = applicationContext,
+                    title = "小本本不确定这笔账单 ($formattedAmount)",
+                    body = "${inquiry.reason} — 点击进入确认并自动更新规则"
+                )
+            }
             return
         }
 

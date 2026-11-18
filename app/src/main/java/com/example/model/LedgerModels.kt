@@ -76,7 +76,9 @@ object CurrencyCatalog {
 data class ExchangeRateState(
     val ratesToCny: Map<String, Double> = CurrencyCatalog.defaultRatesToCny,
     val updatedAtMillis: Long = 0L,
-    val lastStatus: String = ""
+    val lastStatus: String = "",
+    val dataSource: String = "内置参考汇率（初始基准）",
+    val rateDateText: String = ""
 )
 
 enum class ThemeMode(val label: String) {
@@ -140,7 +142,9 @@ data class AppearanceSettings(
     val homeHeaderOrder: HomeHeaderOrder = HomeHeaderOrder.TIPS_TOP,
     val fabPlacement: FabPlacement = FabPlacement.BOTTOM_END,
     val showChannelBadge: Boolean = true,
-    val showParseBadge: Boolean = true
+    val showParseBadge: Boolean = true,
+    val tipTagText: String = "金钱真相",
+    val customTipsRaw: String = ""
 )
 
 data class LedgerTransaction(
@@ -173,11 +177,31 @@ data class CustomParsingRule(
     val packageFilter: String = "*",
     val keywordPattern: String = "",
     val channelName: String = "",
-    val defaultCategory: String = "其他",
-    val defaultType: String = TransactionType.EXPENSE.name,
+    val defaultCategory: String = "自动",
+    val defaultType: String = "AUTO",
+    val merchantOverride: String = "",
+    val priority: Int = 10,
     val enabled: Boolean = true,
     val createdAtMillis: Long = System.currentTimeMillis(),
     val updatedAtMillis: Long = System.currentTimeMillis()
+)
+
+data class NotificationInquiry(
+    val id: String = UUID.randomUUID().toString(),
+    val packageName: String = "",
+    val appLabel: String = "",
+    val title: String = "",
+    val content: String = "",
+    val suggestedAmountCents: Long = 0L,
+    val suggestedCurrencyCode: String = "CNY",
+    val suggestedType: String = TransactionType.EXPENSE.name,
+    val suggestedCategory: String = "其他",
+    val suggestedMerchant: String = "",
+    val suggestedChannel: String = "未知渠道",
+    val cardLastFour: String? = null,
+    val reason: String = "",
+    val occurredAtMillis: Long = System.currentTimeMillis(),
+    val createdAtMillis: Long = System.currentTimeMillis()
 )
 
 data class BudgetSettings(
@@ -186,7 +210,8 @@ data class BudgetSettings(
     val requireManualConfirm: Boolean = false,
     val smartSemanticEnabled: Boolean = true,
     val notifyOnRecorded: Boolean = true,
-    val baseCurrencyCode: String = "CNY"
+    val baseCurrencyCode: String = "CNY",
+    val rootKeepAliveEnabled: Boolean = false
 )
 
 data class WebDavConfig(
@@ -210,7 +235,9 @@ data class ParsedNotificationResult(
     val sourceApp: SourceApp,
     val parseMethod: ParseMethod,
     val confidence: Float,
-    val reasoning: String
+    val reasoning: String,
+    val needsInquiry: Boolean = false,
+    val inquiryReason: String = ""
 )
 
 data class CapturedNotificationLog(

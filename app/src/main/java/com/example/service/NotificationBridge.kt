@@ -33,8 +33,15 @@ object NotificationBridge {
     private val _serviceConnected = MutableStateFlow(false)
     val serviceConnected: StateFlow<Boolean> = _serviceConnected.asStateFlow()
 
+    private val _accessibilityConnected = MutableStateFlow(false)
+    val accessibilityConnected: StateFlow<Boolean> = _accessibilityConnected.asStateFlow()
+
     fun setServiceConnected(connected: Boolean) {
         _serviceConnected.value = connected
+    }
+
+    fun setAccessibilityConnected(connected: Boolean) {
+        _accessibilityConnected.value = connected
     }
 
     fun appendLog(
@@ -61,6 +68,52 @@ object NotificationBridge {
     fun isNotificationListenerEnabled(context: Context): Boolean {
         return NotificationManagerCompat.getEnabledListenerPackages(context)
             .contains(context.packageName)
+    }
+
+    fun isAccessibilityServiceEnabled(context: Context): Boolean {
+        val enabled = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ).orEmpty()
+        val expectedShort = "${context.packageName}/${AutoBookkeepingAccessibilityService::class.java.name}"
+        val expectedCompact = "${context.packageName}/.service.AutoBookkeepingAccessibilityService"
+        return enabled.contains(expectedShort) || enabled.contains(expectedCompact) || _accessibilityConnected.value
+    }
+
+    fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+        val pm = context.getSystemService(android.os.PowerManager::class.java) ?: return false
+        return pm.isIgnoringBatteryOptimizations(context.packageName)
+    }
+
+    fun requestIgnoreBatteryOptimizations(context: Context) {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = android.net.Uri.parse("package:${context.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(intent) }
+            .onFailure {
+                val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                runCatching { context.startActivity(fallback) }
+            }
+    }
+
+    fun openAccessibilitySettings(context: Context) {
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    }
+
+    fun requestListenerRebind(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isNotificationListenerEnabled(context)) {
+            runCatching {
+                android.service.notification.NotificationListenerService.requestRebind(
+                    android.content.ComponentName(context, AutoBookkeepingNotificationService::class.java)
+                )
+            }
+        }
     }
 
     fun hasPostNotificationPermission(context: Context): Boolean {

@@ -69,6 +69,18 @@ object ChinaNotificationParser {
         }
     }
 
+    fun hasUncertainFinancialCue(packageName: String, title: String, content: String): Boolean {
+        val combined = "$title $content"
+        if (combined.isBlank()) return false
+        if (noiseKeywords.any { combined.contains(it) }) return false
+        val cueCount = financialTriggerKeywords.count { combined.contains(it, ignoreCase = true) }
+        return if (ChinaPaymentCatalog.isWatchedPackage(packageName)) {
+            cueCount >= 1
+        } else {
+            cueCount >= 2
+        }
+    }
+
     fun parse(
         packageName: String,
         title: String,
@@ -83,39 +95,74 @@ object ChinaNotificationParser {
         val amountCents = extractAmountCents(combined) ?: return null
         val currencyCode = detectCurrencyCode(combined)
 
-        val matchedCustomRule = customRules.firstOrNull { rule ->
-            rule.enabled &&
+        val matchedCustomRule = customRules
+            .filter { it.enabled }
+            .sortedWith(
+                compareByDescending<CustomParsingRule> { it.priority }
+                    .thenByDescending { it.keywordPattern.length }
+            )
+            .firstOrNull { rule ->
                 (rule.packageFilter == "*" || rule.packageFilter == packageName) &&
-                runCatching { Regex(rule.keywordPattern, RegexOption.IGNORE_CASE).containsMatchIn(combined) }
-                    .getOrElse { combined.contains(rule.keywordPattern, ignoreCase = true) }
-        }
+                    rule.keywordPattern.isNotBlank() &&
+                    runCatching { Regex(rule.keywordPattern, RegexOption.IGNORE_CASE).containsMatchIn(combined) }
+                        .getOrElse { combined.contains(rule.keywordPattern, ignoreCase = true) }
+            }
 
         val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
-        val channel = matchedCustomRule?.channelName
+        val channel = matchedCustomRule?.channelName?.takeIf { it.isNotBlank() }
             ?: detectChannel(packageName, combined)
-        val type = matchedCustomRule?.let { TransactionType.fromRaw(it.defaultType) }
-            ?: detectTransactionType(combined)
+        val type = if (matchedCustomRule != null && !matchedCustomRule.defaultType.equals("AUTO", ignoreCase = true)) {
+            TransactionType.fromRaw(matchedCustomRule.defaultType)
+        } else {
+            detectTransactionType(combined)
+        }
         val cardLastFour = extractCardLastFour(combined)
-        val merchant = extractMerchant(combined, channel, type, enableLocalSemanticPass)
-        val category = matchedCustomRule?.defaultCategory?.takeIf { it != "其他" }
-            ?: inferCategory(merchant, combined, type)
+        val extractedMerchant = extractMerchant(combined, channel, type, enableLocalSemanticPass)
+        val merchant = matchedCustomRule?.merchantOverride?.trim()?.takeIf { it.isNotBlank() }
+            ?: extractedMerchant
+
+        val hasExplicitRuleCategory = matchedCustomRule != null &&
+            matchedCustomRule.defaultCategory.isNotBlank() &&
+            matchedCustomRule.defaultCategory != "自动" &&
+            matchedCustomRule.defaultCategory != "其他"
+        val category = if (hasExplicitRuleCategory) {
+            matchedCustomRule!!.defaultCategory
+        } else {
+            inferCategory(merchant, combined, type)
+        }
+
+        val isHighPriorityCustomMatch = matchedCustomRule != null &&
+            (matchedCustomRule.priority > 0 || hasExplicitRuleCategory)
 
         val usedSemanticHeuristics = enableLocalSemanticPass &&
-            matchedCustomRule == null &&
+            !isHighPriorityCustomMatch &&
             (merchant != "${channel}消费" && channel != "未知渠道")
 
         val parseMethod = when {
-            matchedCustomRule != null -> ParseMethod.RULE_ENGINE
+            isHighPriorityCustomMatch -> ParseMethod.RULE_ENGINE
             usedSemanticHeuristics -> ParseMethod.LOCAL_NLP
             else -> ParseMethod.RULE_ENGINE
         }
 
+        val hasGenericMerchant = merchant == "${channel}消费" ||
+            merchant == "${channel}收款" ||
+            merchant == "${channel}转账"
+
         val confidence = when {
-            matchedCustomRule != null -> 0.96f
-            merchant != "${channel}消费" && channel != "未知渠道" -> 0.92f
-            channel != "未知渠道" -> 0.80f
-            else -> 0.65f
+            isHighPriorityCustomMatch -> 0.96f
+            channel != "未知渠道" && !hasGenericMerchant && category != "其他" -> 0.92f
+            channel != "未知渠道" && category != "其他" -> 0.88f
+            channel != "未知渠道" -> 0.78f
+            else -> 0.62f
         }
+
+        val uncertaintyReasons = buildList {
+            if (channel == "未知渠道") add("未知渠道")
+            if (category == "其他" && type != TransactionType.TRANSFER) add("未能确定分类")
+            if (hasGenericMerchant && !isHighPriorityCustomMatch) add("未提取到明确商户")
+        }
+        val needsInquiry = !isHighPriorityCustomMatch &&
+            (confidence < 0.85f || channel == "未知渠道" || (category == "其他" && hasGenericMerchant))
 
         return ParsedNotificationResult(
             isFinancialTransaction = true,
@@ -133,8 +180,36 @@ object ChinaNotificationParser {
                 "命中规则「${matchedCustomRule.name}」"
             } else {
                 "识别渠道「$channel」· 分类「$category」· 币种 $currencyCode"
-            }
+            },
+            needsInquiry = needsInquiry,
+            inquiryReason = if (needsInquiry) {
+                uncertaintyReasons.distinct().joinToString("、").ifBlank { "格式不够明确，需确认" }
+            } else ""
         )
+    }
+
+    fun suggestRuleKeyword(
+        title: String,
+        content: String,
+        merchant: String,
+        channel: String
+    ): String {
+        val cleanMerchant = merchant.trim()
+        if (cleanMerchant.length >= 2 &&
+            !cleanMerchant.endsWith("消费") &&
+            !cleanMerchant.endsWith("收款") &&
+            !cleanMerchant.endsWith("转账") &&
+            cleanMerchant != "未知商户"
+        ) {
+            return cleanMerchant.take(20)
+        }
+        val bracketed = Regex("""[【\[「"“]([^】\]」"”]{2,16})[】\]」"”]""").find("$title $content")
+            ?.groupValues?.get(1)?.trim()
+        if (!bracketed.isNullOrBlank()) return bracketed
+        if (channel.isNotBlank() && channel != "未知渠道") return channel
+        val cleanTitle = title.trim().replace(Regex("""\s+"""), "")
+        if (cleanTitle.length >= 2) return cleanTitle.take(16)
+        return content.trim().take(12)
     }
 
     fun detectCurrencyCode(text: String): String {

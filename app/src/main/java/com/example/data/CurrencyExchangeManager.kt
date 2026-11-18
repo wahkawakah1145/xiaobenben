@@ -39,6 +39,16 @@ class CurrencyExchangeManager {
                 val ratesObj = json.optJSONObject("rates")
                     ?: return@withContext Result.failure(IllegalStateException("汇率数据格式无法识别"))
 
+                val providerUrl = json.optString("provider").trim()
+                val rateDateText = json.optString("time_last_update_utc")
+                    .replace(" +0000", " UTC")
+                    .trim()
+                val sourceLabel = if (providerUrl.isNotBlank()) {
+                    "ExchangeRate-API ($providerUrl · 基准 CNY)"
+                } else {
+                    "ExchangeRate-API (open.er-api.com · 基准 CNY)"
+                }
+
                 val updatedMap = CurrencyCatalog.defaultRatesToCny.toMutableMap()
                 var updatedCount = 0
                 CurrencyCatalog.currencies.forEach { info ->
@@ -55,12 +65,20 @@ class CurrencyExchangeManager {
 
                 val now = System.currentTimeMillis()
                 val status = "已更新 $updatedCount 种货币汇率"
-                repository.saveExchangeRates(updatedMap, now, status)
+                repository.saveExchangeRates(
+                    ratesToCny = updatedMap,
+                    updatedAtMillis = now,
+                    status = status,
+                    dataSource = sourceLabel,
+                    rateDateText = rateDateText
+                )
                 Result.success(
                     ExchangeRateState(
                         ratesToCny = updatedMap,
                         updatedAtMillis = now,
-                        lastStatus = status
+                        lastStatus = status,
+                        dataSource = sourceLabel,
+                        rateDateText = rateDateText
                     )
                 )
             } catch (e: CancellationException) {
