@@ -12,10 +12,15 @@ android {
     applicationId = "com.aistudio.smartledger.zjzqkm"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = (project.findProperty("ciVersionCode") as? String)?.toIntOrNull() ?: 1
+    versionName = (project.findProperty("ciVersionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    if (project.hasProperty("armv8Only")) {
+      ndk {
+        abiFilters += listOf("arm64-v8a")
+      }
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,

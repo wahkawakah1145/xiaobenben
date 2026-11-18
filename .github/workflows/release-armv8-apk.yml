@@ -1,0 +1,105 @@
+name: Release ARMv8 APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag name (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Resolve Release version metadata
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION_NAME="${TAG#v}"
+          VERSION_CODE="${{ github.run_number }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Release signing keystore
+        run: |
+          KEYSTORE_FILE="${RUNNER_TEMP}/upload-release.jks"
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ] && [ -n "${{ secrets.STORE_PASSWORD }}" ] && [ -n "${{ secrets.KEY_PASSWORD }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "${KEYSTORE_FILE}"
+            echo "KEYSTORE_PATH=${KEYSTORE_FILE}" >> "$GITHUB_ENV"
+            echo "STORE_PASSWORD=${{ secrets.STORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          else
+            echo "::notice::No custom KEYSTORE_BASE64 secret configured; generating an ephemeral release keystore for CI packaging."
+            PASS="zhijizhang-ci-release"
+            keytool -genkeypair -v \
+              -keystore "${KEYSTORE_FILE}" \
+              -storepass "${PASS}" \
+              -alias upload \
+              -keypass "${PASS}" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=ZhiJiZhang, OU=Android, O=Local, L=Beijing, S=Beijing, C=CN"
+            echo "KEYSTORE_PATH=${KEYSTORE_FILE}" >> "$GITHUB_ENV"
+            echo "STORE_PASSWORD=${PASS}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${PASS}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest
+
+      - name: Build ARMv8 (arm64-v8a) Release APK
+        run: |
+          gradle :app:assembleRelease \
+            -Parmv8Only \
+            -PciVersionName="${{ steps.meta.outputs.version_name }}" \
+            -PciVersionCode="${{ steps.meta.outputs.version_code }}"
+
+      - name: Package ARMv8 APK artifact
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk \
+            "dist/zhijizhang-${{ steps.meta.outputs.tag }}-arm64-v8a.apk"
+          ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "智记账 ${{ steps.meta.outputs.tag }} (ARMv8 / arm64-v8a)"
+          body: |
+            纯本地离线运行 + 可选 WebDAV 同步备份版本。
+            - 架构：`arm64-v8a` (ARMv8)
+            - 最低系统要求：Android 7.0 (API 24)+
+            - 直接下载下方 `.apk` 文件安装到手机即可使用。
+          files: dist/zhijizhang-*-arm64-v8a.apk
