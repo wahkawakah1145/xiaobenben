@@ -10,8 +10,8 @@ android {
 
   defaultConfig {
     applicationId = "com.live150yo.lvshuiqingshan"
-    minSdk = 24
-    targetSdk = 36
+    minSdk = 30
+    targetSdk = 37
     versionCode = (project.findProperty("ciVersionCode") as? String)?.toIntOrNull() ?: 1
     versionName = (project.findProperty("ciVersionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.0"
 

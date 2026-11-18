@@ -446,6 +446,14 @@ class LedgerRepository(
         settingsStore.updateWebDavSyncStatus(millis, status)
     }
 
+    suspend fun markLocalBackupCompleted(millis: Long) {
+        settingsStore.markLocalBackupCompleted(millis)
+    }
+
+    suspend fun markBackupReminderSent(millis: Long) {
+        settingsStore.markBackupReminderSent(millis)
+    }
+
     companion object {
         fun defaultSeededRules(): List<CustomParsingRule> {
             val now = 1700000000000L

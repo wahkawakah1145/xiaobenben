@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.CurrencyExchangeManager
 import com.example.data.ImportPreviewResult
 import com.example.data.LedgerRepository
+import com.example.data.LocalBackupManager
 import com.example.data.ManualImportManager
 import com.example.data.WebDavSyncManager
 import com.example.model.AppearanceSettings
@@ -21,6 +22,8 @@ import com.example.model.TransactionType
 import com.example.model.WebDavConfig
 import com.example.parser.ChinaNotificationParser
 import com.example.parser.LocalSpendingAnalyzer
+import com.example.service.BackupReminderScheduler
+import com.example.service.NotificationBridge
 import com.example.service.RootKeepAliveManager
 import com.example.service.RootKeepAliveStatus
 import kotlinx.coroutines.CancellationException
@@ -68,6 +71,13 @@ sealed interface ImportUiState {
     data object Idle : ImportUiState
     data class Ready(val preview: ImportPreviewResult) : ImportUiState
     data class Error(val message: String) : ImportUiState
+}
+
+sealed interface LocalBackupActionState {
+    data object Idle : LocalBackupActionState
+    data class Working(val label: String) : LocalBackupActionState
+    data class Success(val message: String) : LocalBackupActionState
+    data class Error(val message: String) : LocalBackupActionState
 }
 
 class LedgerViewModel(
@@ -179,6 +189,9 @@ class LedgerViewModel(
 
     private val _importUiState = MutableStateFlow<ImportUiState>(ImportUiState.Idle)
     val importUiState: StateFlow<ImportUiState> = _importUiState.asStateFlow()
+
+    private val _localBackupActionState = MutableStateFlow<LocalBackupActionState>(LocalBackupActionState.Idle)
+    val localBackupActionState: StateFlow<LocalBackupActionState> = _localBackupActionState.asStateFlow()
 
     private val _rootStatusState = MutableStateFlow(RootKeepAliveStatus())
     val rootStatusState: StateFlow<RootKeepAliveStatus> = _rootStatusState.asStateFlow()
@@ -537,6 +550,88 @@ class LedgerViewModel(
             webDavSyncManager.restoreFromWebDav(config, repository)
                 .onSuccess { msg -> _webDavActionState.value = WebDavActionState.Success(msg) }
                 .onFailure { err -> _webDavActionState.value = WebDavActionState.Error(err.message ?: "恢复失败") }
+        }
+    }
+
+    fun exportLocalBackup(context: android.content.Context, uri: android.net.Uri) {
+        viewModelScope.launch {
+            _localBackupActionState.value = LocalBackupActionState.Working("正在导出本地备份...")
+            LocalBackupManager.exportBackupToUri(context, uri, repository)
+                .onSuccess { msg ->
+                    _localBackupActionState.value = LocalBackupActionState.Success(msg)
+                    val s = repository.getSettingsOnce()
+                    BackupReminderScheduler.schedule(
+                        context = context,
+                        enabled = s.backupReminderEnabled,
+                        intervalHours = s.backupReminderIntervalHours,
+                        lastLocalBackupMillis = s.lastLocalBackupMillis,
+                        lastBackupReminderMillis = s.lastBackupReminderMillis
+                    )
+                }
+                .onFailure { err ->
+                    _localBackupActionState.value = LocalBackupActionState.Error(err.message ?: "导出失败")
+                }
+        }
+    }
+
+    fun restoreLocalBackup(context: android.content.Context, uri: android.net.Uri) {
+        viewModelScope.launch {
+            _localBackupActionState.value = LocalBackupActionState.Working("正在读取并恢复本地备份...")
+            LocalBackupManager.restoreBackupFromUri(context, uri, repository)
+                .onSuccess { msg ->
+                    _localBackupActionState.value = LocalBackupActionState.Success(msg)
+                }
+                .onFailure { err ->
+                    _localBackupActionState.value = LocalBackupActionState.Error(err.message ?: "恢复失败")
+                }
+        }
+    }
+
+    fun updateBackupReminder(
+        context: android.content.Context,
+        enabled: Boolean,
+        intervalHours: Int
+    ) {
+        viewModelScope.launch {
+            val safeHours = intervalHours.coerceIn(1, 8760)
+            val current = repository.getSettingsOnce()
+            val updated = current.copy(
+                backupReminderEnabled = enabled,
+                backupReminderIntervalHours = safeHours,
+                lastLocalBackupMillis = if (enabled && current.lastLocalBackupMillis == 0L && current.lastBackupReminderMillis == 0L) {
+                    System.currentTimeMillis()
+                } else {
+                    current.lastLocalBackupMillis
+                }
+            )
+            repository.saveSettings(updated)
+            BackupReminderScheduler.schedule(
+                context = context,
+                enabled = enabled,
+                intervalHours = safeHours,
+                lastLocalBackupMillis = updated.lastLocalBackupMillis,
+                lastBackupReminderMillis = updated.lastBackupReminderMillis
+            )
+        }
+    }
+
+    fun sendTestUrgentBackupNotification(context: android.content.Context) {
+        val intervalText = BackupReminderScheduler.formatIntervalLabel(settingsState.value.backupReminderIntervalHours)
+        val ok = NotificationBridge.postUrgentBackupReminder(
+            context = context,
+            title = "【紧急提醒】请及时备份小本本账单",
+            body = "定期备份提醒已生效（每 $intervalText），点击可直接前往导出本地 JSON 备份。"
+        )
+        if (ok) {
+            _localBackupActionState.value = LocalBackupActionState.Success("已发送高优先级紧急备份通知")
+        } else {
+            _localBackupActionState.value = LocalBackupActionState.Error("未获得通知发送权限，请先授权后再试")
+        }
+    }
+
+    fun checkBackupReminderDue(context: android.content.Context) {
+        viewModelScope.launch {
+            BackupReminderScheduler.checkDueAndNotifyIfNeeded(context)
         }
     }
 

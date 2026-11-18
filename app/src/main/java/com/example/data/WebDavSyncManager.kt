@@ -12,9 +12,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class WebDavSyncManager {
@@ -83,66 +80,11 @@ class WebDavSyncManager {
             val transactions = repository.getAllTransactionsOnce()
             val rules = repository.getRulesOnce()
             val settings = repository.getSettingsOnce()
-
-            val rootJson = JSONObject().apply {
-                put("version", 2)
-                put("exportedAtMillis", System.currentTimeMillis())
-                put("settings", JSONObject().apply {
-                    put("monthlyBudgetCents", settings.monthlyBudgetCents)
-                    put("autoRecordEnabled", settings.autoRecordEnabled)
-                    put("requireManualConfirm", settings.requireManualConfirm)
-                    put("smartSemanticEnabled", settings.smartSemanticEnabled)
-                    put("notifyOnRecorded", settings.notifyOnRecorded)
-                    put("baseCurrencyCode", settings.baseCurrencyCode)
-                })
-                put("transactions", JSONArray().apply {
-                    transactions.forEach { tx ->
-                        put(JSONObject().apply {
-                            put("id", tx.id)
-                            put("amountCents", tx.amountCents)
-                            put("currencyCode", tx.currencyCode)
-                            put("type", tx.type)
-                            put("category", tx.category)
-                            put("merchant", tx.merchant)
-                            put("channel", tx.channel)
-                            put("cardLastFour", tx.cardLastFour ?: JSONObject.NULL)
-                            put("sourceApp", tx.sourceApp)
-                            put("parseMethod", tx.parseMethod)
-                            put("rawNotification", tx.rawNotification ?: JSONObject.NULL)
-                            put("note", tx.note ?: JSONObject.NULL)
-                            put("occurredAtMillis", tx.occurredAtMillis)
-                            put("confirmed", tx.confirmed)
-                            put("recordedBaseCurrencyCode", tx.recordedBaseCurrencyCode)
-                            put("recordedRateToBase", tx.recordedRateToBase)
-                            put("createdAtMillis", tx.createdAtMillis)
-                            put("updatedAtMillis", tx.updatedAtMillis)
-                        })
-                    }
-                })
-                put("parsingRules", JSONArray().apply {
-                    rules.forEach { rule ->
-                        put(JSONObject().apply {
-                            put("id", rule.id)
-                            put("name", rule.name)
-                            put("packageFilter", rule.packageFilter)
-                            put("keywordPattern", rule.keywordPattern)
-                            put("channelName", rule.channelName)
-                            put("defaultCategory", rule.defaultCategory)
-                            put("defaultType", rule.defaultType)
-                            put("merchantOverride", rule.merchantOverride)
-                            put("numberFormatPattern", rule.numberFormatPattern)
-                            put("priority", rule.priority)
-                            put("enabled", rule.enabled)
-                            put("createdAtMillis", rule.createdAtMillis)
-                            put("updatedAtMillis", rule.updatedAtMillis)
-                        })
-                    }
-                })
-            }
+            val backupJson = LedgerBackupCodec.encodeBackupJson(transactions, rules, settings)
 
             val putBuilder = Request.Builder()
                 .url(fileUrl)
-                .put(rootJson.toString(2).toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .put(backupJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
             if (authHeader != null) putBuilder.header("Authorization", authHeader)
 
             client.newCall(putBuilder.build()).execute().use { resp ->
@@ -199,79 +141,21 @@ class WebDavSyncManager {
             val body = jsonBody
                 ?: return@withContext Result.failure(IllegalStateException("远程目录 $folder 下尚未找到备份文件"))
 
-            val root = JSONObject(body)
-            val txArray = root.optJSONArray("transactions") ?: JSONArray()
-            val txList = buildList {
-                for (i in 0 until txArray.length()) {
-                    val o = txArray.getJSONObject(i)
-                    val amount = o.optLong("amountCents", 0L)
-                    if (amount <= 0L) continue
-                    add(
-                        LedgerTransaction(
-                            id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
-                            amountCents = amount,
-                            currencyCode = o.optString("currencyCode", "CNY").ifBlank { "CNY" },
-                            type = o.optString("type", "EXPENSE"),
-                            category = o.optString("category", "其他"),
-                            merchant = o.optString("merchant", "未知商户"),
-                            channel = o.optString("channel", "未知渠道"),
-                            cardLastFour = o.optString("cardLastFour").takeIf { it.isNotBlank() && it != "null" },
-                            sourceApp = o.optString("sourceApp", "MANUAL"),
-                            parseMethod = o.optString("parseMethod", "MANUAL"),
-                            rawNotification = o.optString("rawNotification").takeIf { it.isNotBlank() && it != "null" },
-                            note = o.optString("note").takeIf { it.isNotBlank() && it != "null" },
-                            occurredAtMillis = o.optLong("occurredAtMillis", System.currentTimeMillis()),
-                            confirmed = o.optBoolean("confirmed", true),
-                            recordedBaseCurrencyCode = o.optString("recordedBaseCurrencyCode", "CNY").ifBlank { "CNY" },
-                            recordedRateToBase = o.optDouble("recordedRateToBase", 0.0).takeIf { !it.isNaN() } ?: 0.0,
-                            createdAtMillis = o.optLong("createdAtMillis", System.currentTimeMillis()),
-                            updatedAtMillis = o.optLong("updatedAtMillis", System.currentTimeMillis())
-                        )
-                    )
-                }
-            }
+            val currentSettings = repository.getSettingsOnce()
+            val payload = LedgerBackupCodec.decodeBackupJson(body, currentSettings)
 
-            val ruleArray = root.optJSONArray("parsingRules") ?: JSONArray()
-            val ruleList = buildList {
-                for (i in 0 until ruleArray.length()) {
-                    val o = ruleArray.getJSONObject(i)
-                    add(
-                        CustomParsingRule(
-                            id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
-                            name = o.optString("name", "导入规则"),
-                            packageFilter = o.optString("packageFilter", "*"),
-                            keywordPattern = o.optString("keywordPattern", ""),
-                            channelName = o.optString("channelName", "其他"),
-                            defaultCategory = o.optString("defaultCategory", "其他"),
-                            defaultType = o.optString("defaultType", "EXPENSE"),
-                            merchantOverride = o.optString("merchantOverride", ""),
-                            numberFormatPattern = o.optString("numberFormatPattern", "AUTO").ifBlank { "AUTO" },
-                            priority = o.optInt("priority", 10),
-                            enabled = o.optBoolean("enabled", true),
-                            createdAtMillis = o.optLong("createdAtMillis", System.currentTimeMillis()),
-                            updatedAtMillis = o.optLong("updatedAtMillis", System.currentTimeMillis())
-                        )
-                    )
-                }
-            }
-
-            repository.mergeTransactionsFromBackup(txList)
-            repository.mergeRulesFromBackup(ruleList)
-
-            root.optJSONObject("settings")?.let { s ->
+            repository.mergeTransactionsFromBackup(payload.transactions)
+            repository.mergeRulesFromBackup(payload.parsingRules)
+            payload.settings?.let { restored ->
                 repository.saveSettings(
-                    BudgetSettings(
-                        monthlyBudgetCents = s.optLong("monthlyBudgetCents", 500_000L),
-                        autoRecordEnabled = s.optBoolean("autoRecordEnabled", true),
-                        requireManualConfirm = s.optBoolean("requireManualConfirm", false),
-                        smartSemanticEnabled = s.optBoolean("smartSemanticEnabled", true),
-                        notifyOnRecorded = s.optBoolean("notifyOnRecorded", true),
-                        baseCurrencyCode = s.optString("baseCurrencyCode", "CNY").ifBlank { "CNY" }
+                    restored.copy(
+                        lastLocalBackupMillis = currentSettings.lastLocalBackupMillis,
+                        lastBackupReminderMillis = currentSettings.lastBackupReminderMillis
                     )
                 )
             }
 
-            val msg = "同步恢复成功：合并 ${txList.size} 笔账单，${ruleList.size} 条规则"
+            val msg = "同步恢复成功：合并 ${payload.transactions.size} 笔账单，${payload.parsingRules.size} 条规则"
             repository.updateWebDavSyncStatus(System.currentTimeMillis(), msg)
             Result.success(msg)
         } catch (e: CancellationException) {

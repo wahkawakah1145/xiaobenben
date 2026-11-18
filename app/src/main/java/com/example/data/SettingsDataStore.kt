@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -33,6 +34,10 @@ class SettingsDataStore(private val context: Context) {
         val NOTIFY_ON_RECORDED = booleanPreferencesKey("notify_on_recorded")
         val BASE_CURRENCY_CODE = stringPreferencesKey("base_currency_code")
         val ROOT_KEEP_ALIVE_ENABLED = booleanPreferencesKey("root_keep_alive_enabled")
+        val BACKUP_REMINDER_ENABLED = booleanPreferencesKey("backup_reminder_enabled")
+        val BACKUP_REMINDER_INTERVAL_HOURS = intPreferencesKey("backup_reminder_interval_hours")
+        val LAST_LOCAL_BACKUP_MILLIS = longPreferencesKey("last_local_backup_millis")
+        val LAST_BACKUP_REMINDER_MILLIS = longPreferencesKey("last_backup_reminder_millis")
         val RULES_SEEDED = booleanPreferencesKey("default_rules_seeded_v1")
 
         val WEBDAV_URL = stringPreferencesKey("webdav_url")
@@ -68,7 +73,11 @@ class SettingsDataStore(private val context: Context) {
             smartSemanticEnabled = prefs[Keys.SMART_SEMANTIC_ENABLED] ?: true,
             notifyOnRecorded = prefs[Keys.NOTIFY_ON_RECORDED] ?: true,
             baseCurrencyCode = prefs[Keys.BASE_CURRENCY_CODE] ?: "CNY",
-            rootKeepAliveEnabled = prefs[Keys.ROOT_KEEP_ALIVE_ENABLED] ?: false
+            rootKeepAliveEnabled = prefs[Keys.ROOT_KEEP_ALIVE_ENABLED] ?: false,
+            backupReminderEnabled = prefs[Keys.BACKUP_REMINDER_ENABLED] ?: false,
+            backupReminderIntervalHours = (prefs[Keys.BACKUP_REMINDER_INTERVAL_HOURS] ?: 168).coerceIn(1, 8760),
+            lastLocalBackupMillis = prefs[Keys.LAST_LOCAL_BACKUP_MILLIS] ?: 0L,
+            lastBackupReminderMillis = prefs[Keys.LAST_BACKUP_REMINDER_MILLIS] ?: 0L
         )
     }
 
@@ -133,6 +142,22 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.NOTIFY_ON_RECORDED] = settings.notifyOnRecorded
             prefs[Keys.BASE_CURRENCY_CODE] = CurrencyCatalog.resolve(settings.baseCurrencyCode).code
             prefs[Keys.ROOT_KEEP_ALIVE_ENABLED] = settings.rootKeepAliveEnabled
+            prefs[Keys.BACKUP_REMINDER_ENABLED] = settings.backupReminderEnabled
+            prefs[Keys.BACKUP_REMINDER_INTERVAL_HOURS] = settings.backupReminderIntervalHours.coerceIn(1, 8760)
+            prefs[Keys.LAST_LOCAL_BACKUP_MILLIS] = settings.lastLocalBackupMillis.coerceAtLeast(0L)
+            prefs[Keys.LAST_BACKUP_REMINDER_MILLIS] = settings.lastBackupReminderMillis.coerceAtLeast(0L)
+        }
+    }
+
+    suspend fun markLocalBackupCompleted(millis: Long) {
+        context.smartLedgerDataStore.edit { prefs ->
+            prefs[Keys.LAST_LOCAL_BACKUP_MILLIS] = millis
+        }
+    }
+
+    suspend fun markBackupReminderSent(millis: Long) {
+        context.smartLedgerDataStore.edit { prefs ->
+            prefs[Keys.LAST_BACKUP_REMINDER_MILLIS] = millis
         }
     }
 

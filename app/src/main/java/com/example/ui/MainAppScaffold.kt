@@ -69,6 +69,7 @@ const val ROUTE_SETTINGS = "settings"
 const val ROUTE_SETTINGS_PARSER = "settings/parser"
 const val ROUTE_SETTINGS_CURRENCY = "settings/currency"
 const val ROUTE_SETTINGS_IMPORT = "settings/import"
+const val ROUTE_SETTINGS_LOCAL_BACKUP = "settings/local_backup"
 const val ROUTE_SETTINGS_WEBDAV = "settings/webdav"
 const val ROUTE_SETTINGS_APPEARANCE = "settings/appearance"
 
@@ -106,7 +107,10 @@ private val topDestinations = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppNavigation() {
+fun AppNavigation(
+    openLocalBackupRequest: Boolean = false,
+    onConsumedLocalBackupRequest: () -> Unit = {}
+) {
     val viewModel: LedgerViewModel = viewModel(
         factory = viewModelFactory {
             initializer {
@@ -141,6 +145,7 @@ fun AppNavigation() {
                         isAccessibilityEnabled = NotificationBridge.isAccessibilityServiceEnabled(context)
                         isIgnoringBattery = NotificationBridge.isIgnoringBatteryOptimizations(context)
                         NotificationBridge.requestListenerRebind(context)
+                        viewModel.checkBackupReminderDue(context)
                     }
                 }
                 lifecycleOwner.lifecycle.addObserver(observer)
@@ -192,9 +197,19 @@ fun AppNavigation() {
                 ROUTE_SETTINGS_PARSER -> "通知识别与规则"
                 ROUTE_SETTINGS_CURRENCY -> "币种与汇率"
                 ROUTE_SETTINGS_IMPORT -> "手动导入"
+                ROUTE_SETTINGS_LOCAL_BACKUP -> "本地备份与定时提醒"
                 ROUTE_SETTINGS_WEBDAV -> "WebDAV 备份同步"
                 ROUTE_SETTINGS_APPEARANCE -> "外观与布局"
                 else -> stringResource(R.string.app_name)
+            }
+
+            LaunchedEffect(openLocalBackupRequest) {
+                if (openLocalBackupRequest) {
+                    navController.navigate(ROUTE_SETTINGS_LOCAL_BACKUP) {
+                        launchSingleTop = true
+                    }
+                    onConsumedLocalBackupRequest()
+                }
             }
 
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -311,6 +326,7 @@ fun AppNavigation() {
                                     onOpenParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
                                     onOpenCurrency = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
                                     onOpenImport = { navController.navigate(ROUTE_SETTINGS_IMPORT) },
+                                    onOpenLocalBackup = { navController.navigate(ROUTE_SETTINGS_LOCAL_BACKUP) },
                                     onOpenWebDav = { navController.navigate(ROUTE_SETTINGS_WEBDAV) },
                                     onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) }
                                 )
@@ -333,6 +349,15 @@ fun AppNavigation() {
                             }
                             composable(ROUTE_SETTINGS_IMPORT) {
                                 ManualImportScreen(
+                                    viewModel = viewModel,
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    }
+                                )
+                            }
+                            composable(ROUTE_SETTINGS_LOCAL_BACKUP) {
+                                LocalBackupScreen(
+                                    settings = settings,
                                     viewModel = viewModel,
                                     onShowMessage = { msg ->
                                         scope.launch { snackbarHostState.showSnackbar(msg) }

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -78,6 +79,7 @@ fun SettingsScreen(
     onOpenParser: () -> Unit,
     onOpenCurrency: () -> Unit,
     onOpenImport: () -> Unit,
+    onOpenLocalBackup: () -> Unit,
     onOpenWebDav: () -> Unit,
     onOpenAppearance: () -> Unit,
     modifier: Modifier = Modifier
@@ -141,6 +143,14 @@ fun SettingsScreen(
                             subtitle = "导入 JSON / 微信支付宝 CSV 或批量文本账单",
                             testTag = "menu_manual_import",
                             onClick = onOpenImport
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        SettingsNavRow(
+                            icon = Icons.Rounded.SaveAlt,
+                            title = "本地备份与定时提醒",
+                            subtitle = "本地导出恢复 JSON 备份 · 定期紧急通知提醒",
+                            testTag = "menu_local_backup",
+                            onClick = onOpenLocalBackup
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsNavRow(

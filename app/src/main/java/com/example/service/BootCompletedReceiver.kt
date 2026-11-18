@@ -31,6 +31,13 @@ class BootCompletedReceiver : BroadcastReceiver() {
                     if (settings.rootKeepAliveEnabled) {
                         RootKeepAliveManager.applyRootKeepAlive(context)
                     }
+                    BackupReminderScheduler.schedule(
+                        context = context,
+                        enabled = settings.backupReminderEnabled,
+                        intervalHours = settings.backupReminderIntervalHours,
+                        lastLocalBackupMillis = settings.lastLocalBackupMillis,
+                        lastBackupReminderMillis = settings.lastBackupReminderMillis
+                    )
                 } finally {
                     pendingResult.finish()
                 }

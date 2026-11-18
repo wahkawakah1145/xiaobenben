@@ -219,6 +219,11 @@ data class NotificationInquiry(
     val createdAtMillis: Long = System.currentTimeMillis()
 )
 
+enum class AnalyticsChartStyle(val label: String) {
+    PIE("饼图"),
+    BAR("柱状图")
+}
+
 data class BudgetSettings(
     val monthlyBudgetCents: Long = 500_000L,
     val autoRecordEnabled: Boolean = true,
@@ -226,7 +231,11 @@ data class BudgetSettings(
     val smartSemanticEnabled: Boolean = true,
     val notifyOnRecorded: Boolean = true,
     val baseCurrencyCode: String = "CNY",
-    val rootKeepAliveEnabled: Boolean = false
+    val rootKeepAliveEnabled: Boolean = false,
+    val backupReminderEnabled: Boolean = false,
+    val backupReminderIntervalHours: Int = 168,
+    val lastLocalBackupMillis: Long = 0L,
+    val lastBackupReminderMillis: Long = 0L
 )
 
 data class WebDavConfig(

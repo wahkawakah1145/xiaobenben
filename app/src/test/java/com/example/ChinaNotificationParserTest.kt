@@ -390,5 +390,33 @@ class ChinaNotificationParserTest {
         assertEquals(7.35, liveRate, 0.0001)
         assertEquals(7350L, liveCents)
     }
+
+    @Test
+    fun backupReminderSchedulerDetectsDueIntervalsAndFormatsLabels() {
+        val now = 1_700_100_000_000L
+        val twoDaysAgo = now - 49 * 3_600_000L
+        org.junit.Assert.assertTrue(
+            com.example.service.BackupReminderScheduler.isBackupDue(
+                enabled = true,
+                intervalHours = 48,
+                lastLocalBackupMillis = twoDaysAgo,
+                lastBackupReminderMillis = 0L,
+                nowMillis = now
+            )
+        )
+        org.junit.Assert.assertFalse(
+            com.example.service.BackupReminderScheduler.isBackupDue(
+                enabled = true,
+                intervalHours = 72,
+                lastLocalBackupMillis = twoDaysAgo,
+                lastBackupReminderMillis = 0L,
+                nowMillis = now
+            )
+        )
+        assertEquals("7 天", com.example.service.BackupReminderScheduler.formatIntervalLabel(168))
+        assertEquals("12 小时", com.example.service.BackupReminderScheduler.formatIntervalLabel(12))
+        org.junit.Assert.assertTrue(com.example.parser.FinanceHumorTips.tips.size >= 35)
+    }
 }
+
 

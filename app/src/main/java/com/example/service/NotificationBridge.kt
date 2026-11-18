@@ -25,7 +25,9 @@ object NotificationBridge {
 
     const val CHANNEL_RECORDED_ID = "smart_ledger_recorded"
     const val CHANNEL_SIMULATED_PAYMENT_ID = "smart_ledger_payment_test"
+    const val CHANNEL_BACKUP_URGENT_ID = "smart_ledger_backup_urgent"
     const val EXTRA_IS_TEST_PAYMENT_NOTIFICATION = "extra_is_test_payment_notification"
+    const val EXTRA_OPEN_LOCAL_BACKUP = "extra_open_local_backup"
 
     private val _capturedLogs = MutableStateFlow<List<CapturedNotificationLog>>(emptyList())
     val capturedLogs: StateFlow<List<CapturedNotificationLog>> = _capturedLogs.asStateFlow()
@@ -151,8 +153,20 @@ object NotificationBridge {
             ).apply {
                 description = "用于在无真机银行/支付App时触发真实系统通知监听测试"
             }
+            val urgentBackupChannel = NotificationChannel(
+                CHANNEL_BACKUP_URGENT_ID,
+                "紧急数据备份提醒",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "定期提醒立即导出本地备份的高优先级紧急通知"
+                enableVibration(true)
+                enableLights(true)
+                vibrationPattern = longArrayOf(0L, 350L, 180L, 350L)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            }
             manager.createNotificationChannel(recordedChannel)
             manager.createNotificationChannel(testChannel)
+            manager.createNotificationChannel(urgentBackupChannel)
         }
     }
 
@@ -193,6 +207,40 @@ object NotificationBridge {
             .build()
 
         NotificationManagerCompat.from(context).notify((System.currentTimeMillis() % 10000).toInt() + 2000, notification)
+        return true
+    }
+
+    fun postUrgentBackupReminder(
+        context: Context,
+        title: String,
+        body: String
+    ): Boolean {
+        if (!hasPostNotificationPermission(context)) return false
+        ensureNotificationChannels(context)
+        val openIntent = PendingIntent.getActivity(
+            context,
+            3101,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_OPEN_LOCAL_BACKUP, true)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_BACKUP_URGENT_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(false)
+            .setAutoCancel(true)
+            .setContentIntent(openIntent)
+            .build()
+
+        NotificationManagerCompat.from(context).notify(3101, notification)
         return true
     }
 }
