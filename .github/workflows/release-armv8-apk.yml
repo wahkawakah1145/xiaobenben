@@ -84,15 +84,23 @@ jobs:
             echo "STORE_PASSWORD=${SECRET_STORE_PASSWORD}" >> "$GITHUB_ENV"
             echo "KEY_PASSWORD=${SECRET_KEY_PASSWORD}" >> "$GITHUB_ENV"
             KEYSTORE_PASS="${SECRET_STORE_PASSWORD}"
+          elif [ -f .github/ci-release-cert.txt ]; then
+            echo "::notice::Using repository fixed .github/ci-release-cert.txt signing certificate for consistent release upgrades."
+            PASS="android"
+            tr -d '[:space:]' < .github/ci-release-cert.txt | base64 --decode > "${KEYSTORE_FILE}"
+            echo "KEYSTORE_PATH=${KEYSTORE_FILE}" >> "$GITHUB_ENV"
+            echo "STORE_PASSWORD=${PASS}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${PASS}" >> "$GITHUB_ENV"
+            KEYSTORE_PASS="${PASS}"
           else
             if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
               tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > debug.keystore
             fi
             if [ ! -s debug.keystore ]; then
-              echo "::error::Missing debug.keystore / debug.keystore.base64 in repository, and KEYSTORE_BASE64 secrets are not configured. Commit debug.keystore.base64 or set KEYSTORE_BASE64, STORE_PASSWORD, and KEY_PASSWORD secrets."
+              echo "::error::Missing .github/ci-release-cert.txt and debug.keystore, and KEYSTORE_BASE64 secrets are not configured."
               exit 1
             fi
-            echo "::notice::Using repository fixed debug.keystore.base64 signing certificate for consistent release upgrades."
+            echo "::notice::Using repository fixed debug.keystore signing certificate for consistent release upgrades."
             PASS="android"
             keytool -importkeystore \
               -srckeystore debug.keystore \
