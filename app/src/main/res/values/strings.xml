@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">智记账</string>
+    <string name="notification_listener_label">智记账通知自动记账服务</string>
+    <string name="nav_ledger">账单</string>
+    <string name="nav_parser">识别</string>
+    <string name="nav_analytics">洞察</string>
+    <string name="nav_settings">设置</string>
+    <string name="listener_enabled">本地通知监听运行中</string>
+    <string name="listener_disabled">未开启通知读取权限</string>
+    <string name="enable_listener_action">去开启权限</string>
+    <string name="add_transaction_cd">手动记一笔</string>
+    <string name="empty_ledger_cd">暂无账单记录插画</string>
+</resources>

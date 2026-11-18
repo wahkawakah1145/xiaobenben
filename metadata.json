@@ -1,0 +1,6 @@
+{
+  "name": "智记账",
+  "description": "纯本地通知自动记账应用，整合支付宝、微信支付、云闪付及中国大陆主流银行通知本地语义解析，支持 WebDAV 备份同步",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
