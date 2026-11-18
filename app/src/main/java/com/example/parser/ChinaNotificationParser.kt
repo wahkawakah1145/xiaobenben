@@ -17,7 +17,8 @@ object ChinaNotificationParser {
     private val financialTriggerKeywords = listOf(
         "付款", "消费", "支出", "扣款", "支付", "刷卡", "支取", "转出", "缴费", "代扣",
         "收款", "入账", "到账", "转入", "工资", "退款", "返现", "收益", "红包",
-        "转账", "还款", "提现", "动账", "交易", "人民币", "RMB", "¥", "￥", "元"
+        "转账", "还款", "提现", "动账", "交易", "人民币", "RMB", "USD", "HKD", "EUR",
+        "JPY", "GBP", "美元", "港币", "日元", "欧元", "英镑", "¥", "￥", "$", "€", "£", "元"
     )
 
     private val incomeKeywords = listOf(
@@ -33,9 +34,9 @@ object ChinaNotificationParser {
     )
 
     private val amountPatterns = listOf(
-        Regex("""(?:人民币|RMB|CNY|[¥￥])\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)"""),
-        Regex("""(?:金额|付款|消费|支出|扣款|支付|入账|到账|收款|转入|转出|支取|转账|还款)[为:：]?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*元?"""),
-        Regex("""([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*元""")
+        Regex("""(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|美元|港币|港元|欧元|日元|英镑|新币|韩元|澳元|加元|澳门元|新台币|HK\$|US\$|S\$|A\$|C\$|NT\$|MOP\$|[¥￥$€£₩])\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)""", RegexOption.IGNORE_CASE),
+        Regex("""(?:金额|付款|消费|支出|扣款|支付|入账|到账|收款|转入|转出|支取|转账|还款)[为:：]?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:元|美元|港币|港元|日元|欧元|英镑|円)?"""),
+        Regex("""([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:元|美元|港币|港元|日元|欧元|英镑|円|USD|HKD|EUR|JPY|GBP)""", RegexOption.IGNORE_CASE)
     )
 
     private val cardTailPatterns = listOf(
@@ -61,7 +62,8 @@ object ChinaNotificationParser {
         val hasAmount = extractAmountCents(combined) != null
 
         return if (ChinaPaymentCatalog.isWatchedPackage(packageName)) {
-            hasAmount && (hasFinancialCue || combined.contains("元") || combined.contains("¥") || combined.contains("￥"))
+            hasAmount && (hasFinancialCue || combined.contains("元") || combined.contains("¥") ||
+                combined.contains("￥") || combined.contains("$") || combined.contains("€") || combined.contains("£"))
         } else {
             hasAmount && hasFinancialCue
         }
@@ -79,6 +81,7 @@ object ChinaNotificationParser {
         if (noiseKeywords.any { combined.contains(it) }) return null
 
         val amountCents = extractAmountCents(combined) ?: return null
+        val currencyCode = detectCurrencyCode(combined)
 
         val matchedCustomRule = customRules.firstOrNull { rule ->
             rule.enabled &&
@@ -101,12 +104,10 @@ object ChinaNotificationParser {
             matchedCustomRule == null &&
             (merchant != "${channel}消费" && channel != "未知渠道")
 
-        val parseMethod = if (matchedCustomRule != null) {
-            ParseMethod.RULE_ENGINE
-        } else if (usedSemanticHeuristics) {
-            ParseMethod.LOCAL_NLP
-        } else {
-            ParseMethod.RULE_ENGINE
+        val parseMethod = when {
+            matchedCustomRule != null -> ParseMethod.RULE_ENGINE
+            usedSemanticHeuristics -> ParseMethod.LOCAL_NLP
+            else -> ParseMethod.RULE_ENGINE
         }
 
         val confidence = when {
@@ -119,6 +120,7 @@ object ChinaNotificationParser {
         return ParsedNotificationResult(
             isFinancialTransaction = true,
             amountCents = amountCents,
+            currencyCode = currencyCode,
             type = type,
             category = category,
             merchant = merchant,
@@ -128,16 +130,48 @@ object ChinaNotificationParser {
             parseMethod = parseMethod,
             confidence = confidence,
             reasoning = if (matchedCustomRule != null) {
-                "本地规则命中「${matchedCustomRule.name}」"
+                "命中规则「${matchedCustomRule.name}」"
             } else {
-                "纯本地语义解析：识别渠道「$channel」、分类「$category」"
+                "识别渠道「$channel」· 分类「$category」· 币种 $currencyCode"
             }
         )
     }
 
+    fun detectCurrencyCode(text: String): String {
+        val sanitized = text
+            .replace(Regex("""(?:可用余额|当前余额|账户余额|交易后余额|余额|可用额度)[为:：]?\s*(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*[0-9,.]+(?:元|美元|港币|日元|欧元|英镑)?"""), "")
+        val target = sanitized.ifBlank { text }
+
+        return when {
+            target.contains("HKD", ignoreCase = true) || target.contains("HK$") ||
+                target.contains("港币") || target.contains("港元") -> "HKD"
+            target.contains("MOP", ignoreCase = true) || target.contains("澳门元") -> "MOP"
+            target.contains("TWD", ignoreCase = true) || target.contains("NT$") ||
+                target.contains("新台币") || target.contains("台币") -> "TWD"
+            target.contains("SGD", ignoreCase = true) || target.contains("S$") ||
+                target.contains("新加坡元") || target.contains("新币") -> "SGD"
+            target.contains("AUD", ignoreCase = true) || target.contains("A$") ||
+                target.contains("澳元") -> "AUD"
+            target.contains("CAD", ignoreCase = true) || target.contains("C$") ||
+                target.contains("加元") -> "CAD"
+            target.contains("USD", ignoreCase = true) || target.contains("US$") ||
+                target.contains("美元") || target.contains("美金") ||
+                Regex("""\$\s*[0-9]""").containsMatchIn(target) -> "USD"
+            target.contains("EUR", ignoreCase = true) || target.contains("欧元") ||
+                target.contains("€") -> "EUR"
+            target.contains("GBP", ignoreCase = true) || target.contains("英镑") ||
+                target.contains("£") -> "GBP"
+            target.contains("JPY", ignoreCase = true) || target.contains("日元") ||
+                target.contains("円") -> "JPY"
+            target.contains("KRW", ignoreCase = true) || target.contains("韩元") ||
+                target.contains("₩") -> "KRW"
+            else -> "CNY"
+        }
+    }
+
     fun extractAmountCents(text: String): Long? {
         val sanitized = text
-            .replace(Regex("""(?:可用余额|当前余额|账户余额|交易后余额|余额|可用额度)[为:：]?\s*(?:人民币|RMB|[¥￥])?\s*[0-9,.]+元?"""), "")
+            .replace(Regex("""(?:可用余额|当前余额|账户余额|交易后余额|余额|可用额度)[为:：]?\s*(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*[0-9,.]+(?:元|美元|港币|日元|欧元|英镑)?"""), "")
         val target = sanitized.ifBlank { text }
 
         for (pattern in amountPatterns) {
@@ -220,7 +254,6 @@ object ChinaNotificationParser {
             }
         }
         if (enableSemanticPass) {
-            // Secondary heuristic: extract bracketed/quoted merchant segment if not the bank name
             val bracketMatch = Regex("""[「"“【]([^」"”】]{2,20})[」"”】]""").findAll(text)
                 .map { it.groupValues[1].trim() }
                 .firstOrNull { !it.contains("银行") && it != channel && !it.contains("通知") }
@@ -255,13 +288,13 @@ object ChinaNotificationParser {
             listOf("滴滴", "高德", "打车", "地铁", "公交", "铁路", "12306", "航旅", "机票", "加油", "中石化", "中石油", "停车", "ETC", "高速", "单车", "哈啰")
                 .any { combined.contains(it, ignoreCase = true) } -> "交通出行"
 
-            listOf("京东", "淘宝", "天猫", "拼多多", "超市", "永辉", "盒马", "山姆", "华润万家", "叮咚", "便利店", "7-11", "全家", "罗森", "商城", "百货", "优衣库", "苹果", "抖音商城")
+            listOf("京东", "淘宝", "天猫", "拼多多", "超市", "永辉", "盒马", "山姆", "华润万家", "叮咚", "便利店", "7-11", "全家", "罗森", "商城", "百货", "优衣库", "苹果", "Apple", "Amazon", "抖音商城")
                 .any { combined.contains(it, ignoreCase = true) } -> "购物消费"
 
             listOf("电网", "水费", "燃气", "物业", "话费", "宽带", "移动", "联通", "电信", "房租", "供暖", "电费")
                 .any { combined.contains(it, ignoreCase = true) } -> "居家生活"
 
-            listOf("电影", "影城", "万达", "网易云", "腾讯视频", "爱奇艺", "B站", "游戏", "Steam", "KTV", "健身", "旅游", "酒店", "携程", "去哪儿")
+            listOf("电影", "影城", "万达", "网易云", "腾讯视频", "爱奇艺", "B站", "游戏", "Steam", "Netflix", "Spotify", "ChatGPT", "KTV", "健身", "旅游", "酒店", "携程", "去哪儿")
                 .any { combined.contains(it, ignoreCase = true) } -> "休闲娱乐"
 
             listOf("医院", "药房", "药店", "门诊", "体检", "挂号", "牙科", "医疗", "大药房")

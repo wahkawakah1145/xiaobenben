@@ -24,10 +24,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.NotificationsOff
+import androidx.compose.material.icons.rounded.PendingActions
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -35,6 +41,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -46,6 +53,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,32 +69,43 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.CurrencyExchangeManager
+import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
+import com.example.model.CardDensity
+import com.example.model.ExchangeRateState
+import com.example.model.FabPlacement
+import com.example.model.HomeHeaderOrder
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionType
+import com.example.parser.FinanceHumorTips
 import com.example.service.NotificationBridge
 import com.example.ui.components.ChannelBadge
 import com.example.ui.components.ParseMethodBadge
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
 import com.example.ui.components.categoryIcon
+import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatDateHeader
 import com.example.ui.components.formatTimeShort
-import com.example.ui.components.formatYuan
 import com.example.ui.components.transactionTypeColor
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
-import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
 import java.util.Calendar
+import kotlin.random.Random
 
 @Composable
 fun LedgerHomeScreen(
     transactionsState: UiState<List<LedgerTransaction>>,
     settings: BudgetSettings,
+    appearance: AppearanceSettings,
+    exchangeRates: ExchangeRateState,
     isListenerEnabled: Boolean,
     viewModel: LedgerViewModel,
     onNavigateToParser: () -> Unit,
@@ -98,31 +117,46 @@ fun LedgerHomeScreen(
     var selectedTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
     var editingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var tipIndex by remember { mutableIntStateOf(Random.nextInt(FinanceHumorTips.tips.size)) }
 
-    val filterOptions = listOf("全部", "支出", "收入", "支付宝", "微信支付", "银行卡", "云闪付")
-
+    val filterOptions = listOf("全部", "支出", "收入", "外币", "支付宝", "微信支付", "银行卡", "云闪付")
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
+
+    val pendingTransactions by remember(allTransactions) {
+        derivedStateOf { allTransactions.filter { !it.confirmed } }
+    }
+    val confirmedTransactions by remember(allTransactions) {
+        derivedStateOf { allTransactions.filter { it.confirmed } }
+    }
 
     val nowCal = remember { Calendar.getInstance() }
     val currentYear = nowCal.get(Calendar.YEAR)
     val currentMonth = nowCal.get(Calendar.MONTH)
+    val baseCurrency = settings.baseCurrencyCode
 
-    val monthlyStats by remember(allTransactions) {
+    val monthlyStats by remember(confirmedTransactions, exchangeRates.ratesToCny, baseCurrency) {
         derivedStateOf {
-            val monthItems = LedgerViewModel.filterByMonth(allTransactions, currentYear, currentMonth)
-            val expense = monthItems.filter { it.txType == TransactionType.EXPENSE }.sumOf { it.amountCents }
-            val income = monthItems.filter { it.txType == TransactionType.INCOME }.sumOf { it.amountCents }
+            val monthItems = LedgerViewModel.filterByMonth(confirmedTransactions, currentYear, currentMonth)
+            fun toBase(tx: LedgerTransaction) = CurrencyExchangeManager.convertCents(
+                tx.amountCents,
+                tx.currencyCode,
+                baseCurrency,
+                exchangeRates.ratesToCny
+            )
+            val expense = monthItems.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBase(it) }
+            val income = monthItems.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
             Triple(expense, income, monthItems.size)
         }
     }
 
-    val filteredTransactions by remember(allTransactions, searchQuery, selectedFilter) {
+    val filteredTransactions by remember(confirmedTransactions, searchQuery, selectedFilter) {
         derivedStateOf {
-            allTransactions.filter { tx ->
+            confirmedTransactions.filter { tx ->
                 val matchesFilter = when (selectedFilter) {
                     "全部" -> true
                     "支出" -> tx.txType == TransactionType.EXPENSE
                     "收入" -> tx.txType == TransactionType.INCOME
+                    "外币" -> !tx.currencyCode.equals(baseCurrency, ignoreCase = true)
                     "支付宝" -> tx.channel.contains("支付宝")
                     "微信支付" -> tx.channel.contains("微信")
                     "云闪付" -> tx.channel.contains("云闪付") || tx.channel.contains("银联")
@@ -134,6 +168,7 @@ fun LedgerHomeScreen(
                     tx.merchant.contains(q, ignoreCase = true) ||
                     tx.category.contains(q, ignoreCase = true) ||
                     tx.channel.contains(q, ignoreCase = true) ||
+                    tx.currencyCode.contains(q, ignoreCase = true) ||
                     (tx.note?.contains(q, ignoreCase = true) == true)
                 matchesFilter && matchesSearch
             }
@@ -146,6 +181,26 @@ fun LedgerHomeScreen(
         }
     }
 
+    val cardSpacing = when (appearance.cardDensity) {
+        CardDensity.COMPACT -> 8.dp
+        CardDensity.STANDARD -> 12.dp
+        CardDensity.COMFORTABLE -> 16.dp
+    }
+    val rowCornerRadius = when (appearance.cardDensity) {
+        CardDensity.COMPACT -> 14.dp
+        CardDensity.STANDARD -> 18.dp
+        CardDensity.COMFORTABLE -> 22.dp
+    }
+    val rowVerticalPadding = when (appearance.cardDensity) {
+        CardDensity.COMPACT -> 8.dp
+        CardDensity.STANDARD -> 12.dp
+        CardDensity.COMFORTABLE -> 16.dp
+    }
+    val fabAlignment = when (appearance.fabPlacement) {
+        FabPlacement.BOTTOM_END -> Alignment.BottomEnd
+        FabPlacement.BOTTOM_START -> Alignment.BottomStart
+    }
+
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
@@ -155,35 +210,76 @@ fun LedgerHomeScreen(
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(cardSpacing)
         ) {
-            // 1. Listener permission banner
-            item(key = "listener_banner") {
-                ListenerStatusBanner(
-                    isEnabled = isListenerEnabled,
-                    onOpenSettings = { NotificationBridge.openNotificationListenerSettings(context) },
-                    onOpenTestBench = onNavigateToParser
-                )
+            if (appearance.homeHeaderOrder == HomeHeaderOrder.TIPS_TOP) {
+                item(key = "humor_tip_top") {
+                    HumorFinanceTipCard(
+                        tipText = FinanceHumorTips.tipAt(tipIndex),
+                        onNextTip = { tipIndex += 1 }
+                    )
+                }
             }
 
-            // 2. Monthly Summary Hero Card
+            if (pendingTransactions.isNotEmpty()) {
+                item(key = "pending_confirm_section") {
+                    PendingConfirmationCard(
+                        pendingList = pendingTransactions,
+                        onConfirmOne = { viewModel.confirmTransaction(it.id) },
+                        onEditOne = { editingTransaction = it },
+                        onDiscardOne = { viewModel.deleteTransaction(it.id) },
+                        onConfirmAll = { viewModel.confirmAllPendingTransactions() }
+                    )
+                }
+            }
+
+            if (!isListenerEnabled) {
+                item(key = "listener_banner") {
+                    ListenerStatusBanner(
+                        isEnabled = false,
+                        onOpenSettings = { NotificationBridge.openNotificationListenerSettings(context) },
+                        onOpenTestBench = onNavigateToParser
+                    )
+                }
+            }
+
             item(key = "summary_card") {
                 MonthlySummaryCard(
                     monthTitle = "${currentYear}年${currentMonth + 1}月",
+                    baseCurrencyCode = baseCurrency,
                     expenseCents = monthlyStats.first,
                     incomeCents = monthlyStats.second,
                     txCount = monthlyStats.third,
-                    budgetCents = settings.monthlyBudgetCents
+                    budgetCents = settings.monthlyBudgetCents,
+                    density = appearance.cardDensity
                 )
             }
 
-            // 3. Search & Filter Chips
+            if (appearance.homeHeaderOrder == HomeHeaderOrder.SUMMARY_TOP) {
+                item(key = "humor_tip_below_summary") {
+                    HumorFinanceTipCard(
+                        tipText = FinanceHumorTips.tipAt(tipIndex),
+                        onNextTip = { tipIndex += 1 }
+                    )
+                }
+            }
+
+            if (isListenerEnabled) {
+                item(key = "listener_banner_compact") {
+                    ListenerStatusBanner(
+                        isEnabled = true,
+                        onOpenSettings = { NotificationBridge.openNotificationListenerSettings(context) },
+                        onOpenTestBench = onNavigateToParser
+                    )
+                }
+            }
+
             item(key = "search_and_filters") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("搜索商户、银行、分类或备注") },
+                        placeholder = { Text("搜索商户、银行、币种或备注") },
                         leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                         singleLine = true,
                         shape = RoundedCornerShape(16.dp),
@@ -210,7 +306,6 @@ fun LedgerHomeScreen(
                 }
             }
 
-            // 4. Content states
             when (transactionsState) {
                 is UiState.Loading -> {
                     item(key = "loading") {
@@ -228,9 +323,7 @@ fun LedgerHomeScreen(
                 is UiState.Error -> {
                     item(key = "error") {
                         Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = ExpenseCoral.copy(alpha = 0.10f)
-                            ),
+                            colors = CardDefaults.cardColors(containerColor = ExpenseCoral.copy(alpha = 0.10f)),
                             shape = RoundedCornerShape(16.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -257,16 +350,16 @@ fun LedgerHomeScreen(
                         groupedByDate.forEach { (dateHeader, itemsForDay) ->
                             val dayExpense = itemsForDay
                                 .filter { it.txType == TransactionType.EXPENSE }
-                                .sumOf { it.amountCents }
+                                .sumOf { viewModel.convertToBaseCents(it) }
                             val dayIncome = itemsForDay
                                 .filter { it.txType == TransactionType.INCOME }
-                                .sumOf { it.amountCents }
+                                .sumOf { viewModel.convertToBaseCents(it) }
 
                             item(key = "header_$dateHeader") {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(top = 8.dp, bottom = 2.dp),
+                                        .padding(top = 6.dp, bottom = 2.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -278,14 +371,14 @@ fun LedgerHomeScreen(
                                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                         if (dayExpense > 0L) {
                                             Text(
-                                                text = "支 ${formatYuan(dayExpense)}",
+                                                text = "支 ${formatCurrency(dayExpense, baseCurrency)}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = ExpenseCoral
                                             )
                                         }
                                         if (dayIncome > 0L) {
                                             Text(
-                                                text = "收 ${formatYuan(dayIncome)}",
+                                                text = "收 ${formatCurrency(dayIncome, baseCurrency)}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = IncomeJade
                                             )
@@ -298,8 +391,15 @@ fun LedgerHomeScreen(
                                 items = itemsForDay,
                                 key = { it.id.ifBlank { "${it.occurredAtMillis}_${it.merchant}" } }
                             ) { tx ->
+                                val converted = viewModel.convertToBaseCents(tx)
                                 TransactionRowCard(
                                     transaction = tx,
+                                    baseCurrencyCode = baseCurrency,
+                                    convertedBaseCents = converted,
+                                    cornerRadius = rowCornerRadius,
+                                    verticalPadding = rowVerticalPadding,
+                                    showChannelBadge = appearance.showChannelBadge,
+                                    showParseBadge = appearance.showParseBadge,
                                     onClick = { selectedTransaction = tx }
                                 )
                             }
@@ -314,7 +414,7 @@ fun LedgerHomeScreen(
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
             modifier = Modifier
-                .align(Alignment.BottomEnd)
+                .align(fabAlignment)
                 .padding(20.dp)
                 .testTag("add_transaction_fab")
         ) {
@@ -328,7 +428,15 @@ fun LedgerHomeScreen(
     selectedTransaction?.let { tx ->
         TransactionDetailSheet(
             transaction = tx,
+            baseCurrencyCode = baseCurrency,
+            convertedBaseCents = viewModel.convertToBaseCents(tx),
             onDismiss = { selectedTransaction = null },
+            onConfirmPending = if (!tx.confirmed) {
+                {
+                    viewModel.confirmTransaction(tx.id)
+                    selectedTransaction = null
+                }
+            } else null,
             onEdit = {
                 editingTransaction = tx
                 selectedTransaction = null
@@ -343,10 +451,12 @@ fun LedgerHomeScreen(
     if (showCreateDialog) {
         TransactionEditorDialog(
             initialTransaction = null,
+            defaultCurrencyCode = baseCurrency,
             onDismiss = { showCreateDialog = false },
-            onSave = { amountCents, type, category, merchant, channel, tail, note ->
+            onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note ->
                 viewModel.addManualTransaction(
                     amountCents = amountCents,
+                    currencyCode = currencyCode,
                     type = type,
                     category = category,
                     merchant = merchant,
@@ -362,22 +472,185 @@ fun LedgerHomeScreen(
     editingTransaction?.let { tx ->
         TransactionEditorDialog(
             initialTransaction = tx,
+            defaultCurrencyCode = baseCurrency,
             onDismiss = { editingTransaction = null },
-            onSave = { amountCents, type, category, merchant, channel, tail, note ->
+            onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note ->
                 viewModel.updateTransaction(
                     txId = tx.id,
                     amountCents = amountCents,
+                    currencyCode = currencyCode,
                     type = type,
                     category = category,
                     merchant = merchant,
                     channel = channel,
                     cardLastFour = tail,
                     note = note,
-                    occurredAtMillis = tx.occurredAtMillis
+                    occurredAtMillis = tx.occurredAtMillis,
+                    confirmed = true
                 )
                 editingTransaction = null
             }
         )
+    }
+}
+
+@Composable
+private fun HumorFinanceTipCard(
+    tipText: String,
+    onNextTip: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onNextTip)
+            .testTag("humor_finance_tip_card")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.14f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = "金钱真相",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                )
+            }
+            Text(
+                text = tipText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = Icons.Rounded.Refresh,
+                contentDescription = "换一条提示",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun PendingConfirmationCard(
+    pendingList: List<LedgerTransaction>,
+    onConfirmOne: (LedgerTransaction) -> Unit,
+    onEditOne: (LedgerTransaction) -> Unit,
+    onDiscardOne: (LedgerTransaction) -> Unit,
+    onConfirmAll: () -> Unit
+) {
+    val numberFont = LocalNumberFontFamily.current
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("pending_confirmation_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PendingActions,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
+                    Text(
+                        text = "待确认账单 (${pendingList.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                TextButton(
+                    onClick = onConfirmAll,
+                    modifier = Modifier.testTag("confirm_all_pending_button")
+                ) {
+                    Icon(Icons.Rounded.DoneAll, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("全部确认")
+                }
+            }
+
+            pendingList.take(5).forEach { tx ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = tx.merchant,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "${tx.channel} · ${tx.category}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
+                            style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                            color = transactionTypeColor(tx.txType),
+                            fontWeight = FontWeight.Bold
+                        )
+                        IconButton(
+                            onClick = { onEditOne(tx) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(Icons.Rounded.Tune, contentDescription = "编辑", modifier = Modifier.size(18.dp))
+                        }
+                        IconButton(
+                            onClick = { onDiscardOne(tx) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(Icons.Rounded.Close, contentDescription = "删除", tint = ExpenseCoral, modifier = Modifier.size(18.dp))
+                        }
+                        IconButton(
+                            onClick = { onConfirmOne(tx) },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("confirm_pending_item_${tx.id}")
+                        ) {
+                            Icon(Icons.Rounded.Check, contentDescription = "确认", tint = IncomeJade, modifier = Modifier.size(20.dp))
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -389,9 +662,9 @@ private fun ListenerStatusBanner(
 ) {
     Surface(
         color = if (isEnabled) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
         } else {
-            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f)
+            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f)
         },
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.fillMaxWidth()
@@ -399,7 +672,7 @@ private fun ListenerStatusBanner(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -414,7 +687,7 @@ private fun ListenerStatusBanner(
                     style = MaterialTheme.typography.labelLarge
                 )
                 Text(
-                    text = if (isEnabled) "自动监测支付宝、微信、云闪付及银行通知" else "开启权限即可自动捕捉支付与银行短信通知",
+                    text = if (isEnabled) "自动监测支付与银行通知" else "开启权限即可自动捕捉动账通知",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -433,7 +706,7 @@ private fun ListenerStatusBanner(
                     onClick = onOpenTestBench,
                     modifier = Modifier.minimumInteractiveComponentSize()
                 ) {
-                    Text("测试识别")
+                    Text("识别规则")
                 }
             }
         }
@@ -443,13 +716,21 @@ private fun ListenerStatusBanner(
 @Composable
 private fun MonthlySummaryCard(
     monthTitle: String,
+    baseCurrencyCode: String,
     expenseCents: Long,
     incomeCents: Long,
     txCount: Int,
-    budgetCents: Long
+    budgetCents: Long,
+    density: CardDensity
 ) {
+    val numberFont = LocalNumberFontFamily.current
     val progress = if (budgetCents > 0L) (expenseCents.toFloat() / budgetCents.toFloat()).coerceIn(0f, 1f) else 0f
     val isOverBudget = budgetCents > 0L && expenseCents > budgetCents
+    val cardPadding = when (density) {
+        CardDensity.COMPACT -> 14.dp
+        CardDensity.STANDARD -> 20.dp
+        CardDensity.COMFORTABLE -> 24.dp
+    }
 
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -467,16 +748,16 @@ private fun MonthlySummaryCard(
                         )
                     )
                 )
-                .padding(20.dp)
+                .padding(cardPadding)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(if (density == CardDensity.COMPACT) 8.dp else 12.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "$monthTitle · 本月支出",
+                        text = "$monthTitle · 本月支出 ($baseCurrencyCode)",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                     )
@@ -485,7 +766,7 @@ private fun MonthlySummaryCard(
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text(
-                            text = "${txCount} 笔账单",
+                            text = "${txCount} 笔",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -494,8 +775,8 @@ private fun MonthlySummaryCard(
                 }
 
                 Text(
-                    text = formatYuan(expenseCents),
-                    style = MaterialTheme.typography.displaySmall.copy(fontFamily = JetBrainsMonoFamily),
+                    text = formatCurrency(expenseCents, baseCurrencyCode),
+                    style = MaterialTheme.typography.displaySmall.copy(fontFamily = numberFont),
                     color = MaterialTheme.colorScheme.onPrimary,
                     fontWeight = FontWeight.Bold
                 )
@@ -511,8 +792,8 @@ private fun MonthlySummaryCard(
                             color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f)
                         )
                         Text(
-                            text = formatYuan(incomeCents),
-                            style = MaterialTheme.typography.titleMedium.copy(fontFamily = JetBrainsMonoFamily),
+                            text = formatCurrency(incomeCents, baseCurrencyCode),
+                            style = MaterialTheme.typography.titleMedium.copy(fontFamily = numberFont),
                             color = MaterialTheme.colorScheme.onPrimary
                         )
                     }
@@ -524,8 +805,8 @@ private fun MonthlySummaryCard(
                         )
                         val net = incomeCents - expenseCents
                         Text(
-                            text = (if (net < 0) "-" else "") + formatYuan(kotlin.math.abs(net)),
-                            style = MaterialTheme.typography.titleMedium.copy(fontFamily = JetBrainsMonoFamily),
+                            text = (if (net < 0) "-" else "") + formatCurrency(kotlin.math.abs(net), baseCurrencyCode),
+                            style = MaterialTheme.typography.titleMedium.copy(fontFamily = numberFont),
                             color = MaterialTheme.colorScheme.onPrimary
                         )
                     }
@@ -538,12 +819,12 @@ private fun MonthlySummaryCard(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = if (isOverBudget) "已超出月度预算" else "月度预算进度",
+                                text = if (isOverBudget) "已超出预算" else "预算进度",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                             )
                             Text(
-                                text = "${(progress * 100).toInt()}% / ${formatYuan(budgetCents)}",
+                                text = "${(progress * 100).toInt()}% / ${formatCurrency(budgetCents, baseCurrencyCode)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onPrimary
                             )
@@ -567,11 +848,20 @@ private fun MonthlySummaryCard(
 @Composable
 private fun TransactionRowCard(
     transaction: LedgerTransaction,
+    baseCurrencyCode: String,
+    convertedBaseCents: Long,
+    cornerRadius: Dp,
+    verticalPadding: Dp,
+    showChannelBadge: Boolean,
+    showParseBadge: Boolean,
     onClick: () -> Unit
 ) {
     val typeColor = transactionTypeColor(transaction.txType)
+    val numberFont = LocalNumberFontFamily.current
+    val isForeign = !transaction.currencyCode.equals(baseCurrencyCode, ignoreCase = true)
+
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(cornerRadius),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow
         ),
@@ -583,13 +873,13 @@ private fun TransactionRowCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 14.dp, vertical = verticalPadding),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(42.dp)
                     .clip(CircleShape)
                     .background(typeColor.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
@@ -598,13 +888,13 @@ private fun TransactionRowCard(
                     imageVector = categoryIcon(transaction.category),
                     contentDescription = transaction.category,
                     tint = typeColor,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(21.dp)
                 )
             }
 
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 Text(
                     text = transaction.merchant,
@@ -616,7 +906,9 @@ private fun TransactionRowCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    ChannelBadge(channel = transaction.channel)
+                    if (showChannelBadge) {
+                        ChannelBadge(channel = transaction.channel)
+                    }
                     if (!transaction.cardLastFour.isNullOrBlank()) {
                         Text(
                             text = "•${transaction.cardLastFour}",
@@ -636,15 +928,28 @@ private fun TransactionRowCard(
 
             Column(
                 horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 Text(
-                    text = formatYuan(transaction.amountCents, showSign = true, type = transaction.txType),
-                    style = MaterialTheme.typography.titleMedium.copy(fontFamily = JetBrainsMonoFamily),
+                    text = formatCurrency(
+                        cents = transaction.amountCents,
+                        currencyCode = transaction.currencyCode,
+                        showSign = true,
+                        type = transaction.txType
+                    ),
+                    style = MaterialTheme.typography.titleMedium.copy(fontFamily = numberFont),
                     color = typeColor,
                     fontWeight = FontWeight.Bold
                 )
-                ParseMethodBadge(method = transaction.txParseMethod)
+                if (isForeign) {
+                    Text(
+                        text = "≈ ${formatCurrency(convertedBaseCents, baseCurrencyCode)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else if (showParseBadge) {
+                    ParseMethodBadge(method = transaction.txParseMethod)
+                }
             }
         }
     }
@@ -674,19 +979,19 @@ private fun EmptyLedgerCard(
                 painter = painterResource(id = R.drawable.img_empty_ledger),
                 contentDescription = stringResource(R.string.empty_ledger_cd),
                 modifier = Modifier
-                    .height(140.dp)
+                    .height(132.dp)
                     .clip(RoundedCornerShape(16.dp)),
                 contentScale = ContentScale.Fit
             )
             Text(
-                text = if (hasSearch) "没有匹配的账单记录" else "静候您的第一笔通知入账",
+                text = if (hasSearch) "没有匹配的账单记录" else "还没有账单记录",
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
                 text = if (hasSearch) {
-                    "请尝试切换渠道筛选或清空搜索关键词。"
+                    "可以切换筛选条件或清空搜索关键词。"
                 } else {
-                    "开启系统通知监听后，支付宝、微信、云闪付及银行动账将自动入账；您也可以在「识别」页粘贴通知文本或触发真实系统通知测试。"
+                    "开启通知权限后会自动捕捉消费通知，也可以手动记一笔或测试识别规则。"
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -697,7 +1002,7 @@ private fun EmptyLedgerCard(
                         onClick = onAddManual,
                         modifier = Modifier.minimumInteractiveComponentSize()
                     ) {
-                        Text("手动记一笔")
+                        Text("记一笔")
                     }
                     Button(
                         onClick = onOpenParser,
@@ -707,7 +1012,7 @@ private fun EmptyLedgerCard(
                     ) {
                         Icon(Icons.Rounded.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("去通知识别台")
+                        Text("识别规则")
                     }
                 }
             }

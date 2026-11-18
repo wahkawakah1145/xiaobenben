@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CardGiftcard
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.Edit
@@ -33,7 +35,6 @@ import androidx.compose.material.icons.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Restaurant
 import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.ShoppingBag
-import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -67,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.model.CategoryCatalog
+import com.example.model.CurrencyCatalog
 import com.example.model.LedgerTransaction
 import com.example.model.ParseMethod
 import com.example.model.TransactionType
@@ -75,7 +77,7 @@ import com.example.ui.theme.BankAmber
 import com.example.ui.theme.BankCrimson
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
-import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.LocalNumberFontFamily
 import com.example.ui.theme.TransferCobalt
 import com.example.ui.theme.UnionPayBlue
 import com.example.ui.theme.WechatGreen
@@ -84,23 +86,37 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToLong
 
-fun formatYuan(cents: Long, showSign: Boolean = false, type: TransactionType? = null): String {
-    val absYuan = "%.2f".format(kotlin.math.abs(cents) / 100.0)
-    if (!showSign || type == null) return "¥$absYuan"
+fun formatCurrency(
+    cents: Long,
+    currencyCode: String = "CNY",
+    showSign: Boolean = false,
+    type: TransactionType? = null
+): String {
+    val info = CurrencyCatalog.resolve(currencyCode)
+    val absValue = kotlin.math.abs(cents) / 100.0
+    val formatted = if (info.zeroDecimalDisplay && kotlin.math.abs(cents) % 100L == 0L) {
+        "%.0f".format(absValue)
+    } else {
+        "%.2f".format(absValue)
+    }
+    val base = "${info.symbol}$formatted"
+    if (!showSign || type == null) return base
     return when (type) {
-        TransactionType.EXPENSE -> "-¥$absYuan"
-        TransactionType.INCOME -> "+¥$absYuan"
-        TransactionType.TRANSFER -> "¥$absYuan"
+        TransactionType.EXPENSE -> "-$base"
+        TransactionType.INCOME -> "+$base"
+        TransactionType.TRANSFER -> base
     }
 }
+
+fun formatYuan(cents: Long, showSign: Boolean = false, type: TransactionType? = null): String =
+    formatCurrency(cents, "CNY", showSign, type)
 
 fun formatTimeShort(millis: Long): String {
     return SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(millis))
 }
 
 fun formatDateHeader(millis: Long): String {
-    val dateFmt = SimpleDateFormat("MM月dd日 EEEE", Locale.CHINA)
-    return dateFmt.format(Date(millis))
+    return SimpleDateFormat("MM月dd日 EEEE", Locale.CHINA).format(Date(millis))
 }
 
 fun formatDateTimeFull(millis: Long): String {
@@ -167,6 +183,7 @@ fun ParseMethodBadge(method: ParseMethod, modifier: Modifier = Modifier) {
     val (bg, fg) = when (method) {
         ParseMethod.LOCAL_NLP -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
         ParseMethod.RULE_ENGINE -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+        ParseMethod.IMPORT -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
         ParseMethod.MANUAL -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Surface(
@@ -200,11 +217,16 @@ fun ParseMethodBadge(method: ParseMethod, modifier: Modifier = Modifier) {
 @Composable
 fun TransactionDetailSheet(
     transaction: LedgerTransaction,
+    baseCurrencyCode: String,
+    convertedBaseCents: Long,
     onDismiss: () -> Unit,
+    onConfirmPending: (() -> Unit)? = null,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val numberFont = LocalNumberFontFamily.current
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
@@ -244,12 +266,26 @@ fun TransactionDetailSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Text(
-                    text = formatYuan(transaction.amountCents, showSign = true, type = transaction.txType),
-                    style = MaterialTheme.typography.headlineSmall.copy(fontFamily = JetBrainsMonoFamily),
-                    color = transactionTypeColor(transaction.txType),
-                    fontWeight = FontWeight.Bold
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = formatCurrency(
+                            cents = transaction.amountCents,
+                            currencyCode = transaction.currencyCode,
+                            showSign = true,
+                            type = transaction.txType
+                        ),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontFamily = numberFont),
+                        color = transactionTypeColor(transaction.txType),
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (!transaction.currencyCode.equals(baseCurrencyCode, ignoreCase = true)) {
+                        Text(
+                            text = "折合 ${formatCurrency(convertedBaseCents, baseCurrencyCode)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             HorizontalDivider()
@@ -260,6 +296,16 @@ fun TransactionDetailSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ChannelBadge(channel = transaction.channel)
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "${transaction.currencyCode} ${transaction.currencyInfo.chineseName}",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
                 if (!transaction.cardLastFour.isNullOrBlank()) {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -283,7 +329,7 @@ fun TransactionDetailSheet(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            text = "识别备注",
+                            text = "备注",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -304,7 +350,7 @@ fun TransactionDetailSheet(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            text = "原始通知文本",
+                            text = "原始记录",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -315,6 +361,19 @@ fun TransactionDetailSheet(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
+                }
+            }
+
+            if (!transaction.confirmed && onConfirmPending != null) {
+                Button(
+                    onClick = onConfirmPending,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("sheet_confirm_pending_button")
+                ) {
+                    Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("确认入账")
                 }
             }
 
@@ -352,9 +411,11 @@ fun TransactionDetailSheet(
 @Composable
 fun TransactionEditorDialog(
     initialTransaction: LedgerTransaction?,
+    defaultCurrencyCode: String = "CNY",
     onDismiss: () -> Unit,
     onSave: (
         amountCents: Long,
+        currencyCode: String,
         type: TransactionType,
         category: String,
         merchant: String,
@@ -365,6 +426,9 @@ fun TransactionEditorDialog(
 ) {
     var selectedType by remember {
         mutableStateOf(initialTransaction?.txType ?: TransactionType.EXPENSE)
+    }
+    var selectedCurrency by remember {
+        mutableStateOf(initialTransaction?.currencyCode ?: defaultCurrencyCode)
     }
     var amountText by remember {
         mutableStateOf(
@@ -388,11 +452,12 @@ fun TransactionEditorDialog(
     }
 
     val quickChannels = listOf("支付宝", "微信支付", "云闪付", "招商银行", "工商银行", "建设银行", "手动记账")
+    val currencyInfo = CurrencyCatalog.resolve(selectedCurrency)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(if (initialTransaction == null) "手动记一笔" else "编辑账单")
+            Text(if (initialTransaction == null) "记一笔" else "编辑账单")
         },
         text = {
             Column(
@@ -425,11 +490,27 @@ fun TransactionEditorDialog(
                     }
                 }
 
+                Text("币种", style = MaterialTheme.typography.labelMedium)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    CurrencyCatalog.currencies.forEach { c ->
+                        FilterChip(
+                            selected = selectedCurrency.equals(c.code, ignoreCase = true),
+                            onClick = { selectedCurrency = c.code },
+                            label = { Text("${c.code} ${c.chineseName}") }
+                        )
+                    }
+                }
+
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { amountText = it; validationError = null },
-                    label = { Text("金额 (人民币元)") },
-                    prefix = { Text("¥") },
+                    label = { Text("金额 (${currencyInfo.chineseName})") },
+                    prefix = { Text(currencyInfo.symbol) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     modifier = Modifier
@@ -522,6 +603,7 @@ fun TransactionEditorDialog(
                     val cents = (yuan * 100.0).roundToLong().coerceAtLeast(1L)
                     onSave(
                         cents,
+                        selectedCurrency,
                         selectedType,
                         category,
                         merchant.trim().ifBlank { category },

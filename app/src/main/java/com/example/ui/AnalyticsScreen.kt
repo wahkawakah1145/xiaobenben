@@ -44,14 +44,17 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.CurrencyExchangeManager
+import com.example.model.BudgetSettings
+import com.example.model.ExchangeRateState
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionType
 import com.example.ui.components.channelBrandColor
-import com.example.ui.components.formatYuan
+import com.example.ui.components.formatCurrency
 import com.example.ui.theme.ChartPalette
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
-import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
 import java.util.Calendar
@@ -59,6 +62,8 @@ import java.util.Calendar
 @Composable
 fun AnalyticsScreen(
     transactionsState: UiState<List<LedgerTransaction>>,
+    settings: BudgetSettings,
+    exchangeRates: ExchangeRateState,
     viewModel: LedgerViewModel,
     modifier: Modifier = Modifier
 ) {
@@ -66,26 +71,36 @@ fun AnalyticsScreen(
     var selectedYear by remember { mutableIntStateOf(nowCal.get(Calendar.YEAR)) }
     var selectedMonth by remember { mutableIntStateOf(nowCal.get(Calendar.MONTH)) }
 
+    val numberFont = LocalNumberFontFamily.current
+    val baseCurrency = settings.baseCurrencyCode
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
 
     val monthTransactions by remember(allTransactions, selectedYear, selectedMonth) {
         derivedStateOf {
             LedgerViewModel.filterByMonth(allTransactions, selectedYear, selectedMonth)
+                .filter { it.confirmed }
         }
     }
 
-    val totalExpense = remember(monthTransactions) {
-        monthTransactions.filter { it.txType == TransactionType.EXPENSE }.sumOf { it.amountCents }
+    fun toBase(tx: LedgerTransaction): Long = CurrencyExchangeManager.convertCents(
+        tx.amountCents,
+        tx.currencyCode,
+        baseCurrency,
+        exchangeRates.ratesToCny
+    )
+
+    val totalExpense = remember(monthTransactions, exchangeRates.ratesToCny, baseCurrency) {
+        monthTransactions.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBase(it) }
     }
-    val totalIncome = remember(monthTransactions) {
-        monthTransactions.filter { it.txType == TransactionType.INCOME }.sumOf { it.amountCents }
+    val totalIncome = remember(monthTransactions, exchangeRates.ratesToCny, baseCurrency) {
+        monthTransactions.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
     }
 
-    val categorySlices = remember(monthTransactions) {
+    val categorySlices = remember(monthTransactions, exchangeRates.ratesToCny, baseCurrency) {
         monthTransactions
             .filter { it.txType == TransactionType.EXPENSE }
             .groupBy { it.category }
-            .mapValues { (_, list) -> list.sumOf { it.amountCents } }
+            .mapValues { (_, list) -> list.sumOf { toBase(it) } }
             .entries
             .sortedByDescending { it.value }
             .mapIndexed { index, entry ->
@@ -93,17 +108,17 @@ fun AnalyticsScreen(
             }
     }
 
-    val channelTotals = remember(monthTransactions) {
+    val channelTotals = remember(monthTransactions, exchangeRates.ratesToCny, baseCurrency) {
         monthTransactions
             .filter { it.txType == TransactionType.EXPENSE }
             .groupBy { it.channel }
-            .mapValues { (_, list) -> list.sumOf { it.amountCents } }
+            .mapValues { (_, list) -> list.sumOf { toBase(it) } }
             .entries
             .sortedByDescending { it.value }
     }
 
-    val localInsightSummary = remember(monthTransactions, selectedYear, selectedMonth) {
-        viewModel.buildLocalMonthlyInsight(selectedYear, selectedMonth)
+    val summaryText = remember(monthTransactions, selectedYear, selectedMonth, exchangeRates.ratesToCny, baseCurrency) {
+        viewModel.buildMonthlyInsight(selectedYear, selectedMonth)
     }
 
     Box(
@@ -143,7 +158,7 @@ fun AnalyticsScreen(
                             Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, contentDescription = "上个月")
                         }
                         Text(
-                            text = "${selectedYear}年${selectedMonth + 1}月 本地收支分析",
+                            text = "${selectedYear}年${selectedMonth + 1}月 收支分析 ($baseCurrency)",
                             style = MaterialTheme.typography.titleMedium
                         )
                         IconButton(
@@ -175,8 +190,8 @@ fun AnalyticsScreen(
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("总支出", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(
-                                text = formatYuan(totalExpense),
-                                style = MaterialTheme.typography.titleLarge.copy(fontFamily = JetBrainsMonoFamily),
+                                text = formatCurrency(totalExpense, baseCurrency),
+                                style = MaterialTheme.typography.titleLarge.copy(fontFamily = numberFont),
                                 color = ExpenseCoral,
                                 fontWeight = FontWeight.Bold
                             )
@@ -190,8 +205,8 @@ fun AnalyticsScreen(
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("总收入", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(
-                                text = formatYuan(totalIncome),
-                                style = MaterialTheme.typography.titleLarge.copy(fontFamily = JetBrainsMonoFamily),
+                                text = formatCurrency(totalIncome, baseCurrency),
+                                style = MaterialTheme.typography.titleLarge.copy(fontFamily = numberFont),
                                 color = IncomeJade,
                                 fontWeight = FontWeight.Bold
                             )
@@ -214,7 +229,7 @@ fun AnalyticsScreen(
 
                         if (categorySlices.isEmpty() || totalExpense <= 0L) {
                             Text(
-                                text = "本月暂无支出记录，完成记账后将自动绘制分类环形图。",
+                                text = "本月暂无支出记录。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -236,8 +251,8 @@ fun AnalyticsScreen(
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Text("共支出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         Text(
-                                            text = formatYuan(totalExpense),
-                                            style = MaterialTheme.typography.labelLarge.copy(fontFamily = JetBrainsMonoFamily),
+                                            text = formatCurrency(totalExpense, baseCurrency),
+                                            style = MaterialTheme.typography.labelLarge.copy(fontFamily = numberFont),
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
@@ -267,7 +282,7 @@ fun AnalyticsScreen(
                                                 Text(cat, style = MaterialTheme.typography.bodySmall)
                                             }
                                             Text(
-                                                text = "$pct% · ${formatYuan(cents)}",
+                                                text = "$pct% · ${formatCurrency(cents, baseCurrency)}",
                                                 style = MaterialTheme.typography.labelSmall
                                             )
                                         }
@@ -289,10 +304,10 @@ fun AnalyticsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("中国大陆支付渠道消费分布", style = MaterialTheme.typography.titleMedium)
+                        Text("渠道分布", style = MaterialTheme.typography.titleMedium)
                         if (channelTotals.isEmpty() || totalExpense <= 0L) {
                             Text(
-                                text = "暂无渠道分布数据",
+                                text = "暂无渠道数据",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -307,7 +322,7 @@ fun AnalyticsScreen(
                                     ) {
                                         Text(channel, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                         Text(
-                                            text = "${formatYuan(cents)} (${(ratio * 100).toInt()}%)",
+                                            text = "${formatCurrency(cents, baseCurrency)} (${(ratio * 100).toInt()}%)",
                                             style = MaterialTheme.typography.labelSmall
                                         )
                                     }
@@ -327,7 +342,7 @@ fun AnalyticsScreen(
                 }
             }
 
-            item(key = "local_insights") {
+            item(key = "monthly_summary") {
                 Card(
                     shape = RoundedCornerShape(22.dp),
                     colors = CardDefaults.cardColors(
@@ -348,7 +363,7 @@ fun AnalyticsScreen(
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.tertiary
                             )
-                            Text("本地月度消费洞察（纯离线计算）", style = MaterialTheme.typography.titleMedium)
+                            Text("月度收支分析", style = MaterialTheme.typography.titleMedium)
                         }
 
                         Surface(
@@ -357,7 +372,7 @@ fun AnalyticsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = localInsightSummary,
+                                text = summaryText,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.padding(14.dp)
                             )

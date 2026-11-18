@@ -2,10 +2,16 @@ package com.example.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.CurrencyExchangeManager
+import com.example.data.ImportPreviewResult
 import com.example.data.LedgerRepository
+import com.example.data.ManualImportManager
 import com.example.data.WebDavSyncManager
+import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
+import com.example.model.CurrencyCatalog
 import com.example.model.CustomParsingRule
+import com.example.model.ExchangeRateState
 import com.example.model.LedgerTransaction
 import com.example.model.ParseMethod
 import com.example.model.ParsedNotificationResult
@@ -48,9 +54,23 @@ sealed interface WebDavActionState {
     data class Error(val message: String) : WebDavActionState
 }
 
+sealed interface RateUpdateState {
+    data object Idle : RateUpdateState
+    data object Loading : RateUpdateState
+    data class Success(val message: String) : RateUpdateState
+    data class Error(val message: String) : RateUpdateState
+}
+
+sealed interface ImportUiState {
+    data object Idle : ImportUiState
+    data class Ready(val preview: ImportPreviewResult) : ImportUiState
+    data class Error(val message: String) : ImportUiState
+}
+
 class LedgerViewModel(
     private val repository: LedgerRepository,
-    private val webDavSyncManager: WebDavSyncManager = WebDavSyncManager()
+    private val webDavSyncManager: WebDavSyncManager = WebDavSyncManager(),
+    private val exchangeManager: CurrencyExchangeManager = CurrencyExchangeManager()
 ) : ViewModel() {
 
     val transactionsState: StateFlow<UiState<List<LedgerTransaction>>> =
@@ -58,7 +78,7 @@ class LedgerViewModel(
             .map<List<LedgerTransaction>, UiState<List<LedgerTransaction>>> { UiState.Success(it) }
             .catch { error ->
                 if (error is CancellationException) throw error
-                emit(UiState.Error(error.localizedMessage ?: "无法读取本地账单数据库"))
+                emit(UiState.Error(error.localizedMessage ?: "无法读取账单数据"))
             }
             .stateIn(
                 scope = viewModelScope,
@@ -71,7 +91,7 @@ class LedgerViewModel(
             .map<List<CustomParsingRule>, UiState<List<CustomParsingRule>>> { UiState.Success(it) }
             .catch { error ->
                 if (error is CancellationException) throw error
-                emit(UiState.Error(error.localizedMessage ?: "无法读取本地解析规则"))
+                emit(UiState.Error(error.localizedMessage ?: "无法读取识别规则"))
             }
             .stateIn(
                 scope = viewModelScope,
@@ -89,6 +109,30 @@ class LedgerViewModel(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
                 initialValue = BudgetSettings()
+            )
+
+    val appearanceState: StateFlow<AppearanceSettings> =
+        repository.observeAppearanceSettings()
+            .catch { error ->
+                if (error is CancellationException) throw error
+                emit(AppearanceSettings())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                initialValue = AppearanceSettings()
+            )
+
+    val exchangeRateState: StateFlow<ExchangeRateState> =
+        repository.observeExchangeRates()
+            .catch { error ->
+                if (error is CancellationException) throw error
+                emit(ExchangeRateState())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                initialValue = ExchangeRateState()
             )
 
     val webDavConfigState: StateFlow<WebDavConfig> =
@@ -109,6 +153,12 @@ class LedgerViewModel(
     private val _webDavActionState = MutableStateFlow<WebDavActionState>(WebDavActionState.Idle)
     val webDavActionState: StateFlow<WebDavActionState> = _webDavActionState.asStateFlow()
 
+    private val _rateUpdateState = MutableStateFlow<RateUpdateState>(RateUpdateState.Idle)
+    val rateUpdateState: StateFlow<RateUpdateState> = _rateUpdateState.asStateFlow()
+
+    private val _importUiState = MutableStateFlow<ImportUiState>(ImportUiState.Idle)
+    val importUiState: StateFlow<ImportUiState> = _importUiState.asStateFlow()
+
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
 
@@ -120,8 +170,13 @@ class LedgerViewModel(
         _parseBenchState.value = ParseBenchState.Idle
     }
 
+    fun clearImportPreview() {
+        _importUiState.value = ImportUiState.Idle
+    }
+
     fun addManualTransaction(
         amountCents: Long,
+        currencyCode: String,
         type: TransactionType,
         category: String,
         merchant: String,
@@ -131,8 +186,10 @@ class LedgerViewModel(
         occurredAtMillis: Long = System.currentTimeMillis()
     ) {
         viewModelScope.launch {
+            val resolvedCurrency = CurrencyCatalog.resolve(currencyCode)
             val tx = LedgerTransaction(
                 amountCents = amountCents,
+                currencyCode = resolvedCurrency.code,
                 type = type.name,
                 category = category,
                 merchant = merchant,
@@ -147,7 +204,7 @@ class LedgerViewModel(
             )
             repository.addTransaction(tx)
                 .onSuccess {
-                    _actionMessage.value = "已记录：${merchant.ifBlank { category }} ¥%.2f".format(amountCents / 100.0)
+                    _actionMessage.value = "已记录：${merchant.ifBlank { category }} ${resolvedCurrency.symbol}%.2f".format(amountCents / 100.0)
                 }
                 .onFailure {
                     _actionMessage.value = "记录失败：${it.localizedMessage ?: "请检查输入"}"
@@ -158,18 +215,21 @@ class LedgerViewModel(
     fun updateTransaction(
         txId: String,
         amountCents: Long,
+        currencyCode: String,
         type: TransactionType,
         category: String,
         merchant: String,
         channel: String,
         cardLastFour: String?,
         note: String?,
-        occurredAtMillis: Long
+        occurredAtMillis: Long,
+        confirmed: Boolean = true
     ) {
         viewModelScope.launch {
             repository.updateTransaction(
                 txId = txId,
                 amountCents = amountCents,
+                currencyCode = currencyCode,
                 type = type,
                 category = category,
                 merchant = merchant,
@@ -177,10 +237,26 @@ class LedgerViewModel(
                 cardLastFour = cardLastFour,
                 note = note,
                 occurredAtMillis = occurredAtMillis,
-                confirmed = true
+                confirmed = confirmed
             )
-                .onSuccess { _actionMessage.value = "已更新本地账单" }
+                .onSuccess { _actionMessage.value = "已更新账单" }
                 .onFailure { _actionMessage.value = "更新失败：${it.localizedMessage ?: "请重试"}" }
+        }
+    }
+
+    fun confirmTransaction(txId: String) {
+        viewModelScope.launch {
+            repository.confirmTransaction(txId)
+                .onSuccess { _actionMessage.value = "已确认入账" }
+                .onFailure { _actionMessage.value = "确认失败" }
+        }
+    }
+
+    fun confirmAllPendingTransactions() {
+        viewModelScope.launch {
+            repository.confirmAllPendingTransactions()
+                .onSuccess { _actionMessage.value = "已全部确认入账" }
+                .onFailure { _actionMessage.value = "确认失败" }
         }
     }
 
@@ -213,7 +289,7 @@ class LedgerViewModel(
         if (parsed != null && parsed.isFinancialTransaction) {
             _parseBenchState.value = ParseBenchState.Parsed(parsed, title, content)
         } else {
-            _parseBenchState.value = ParseBenchState.Error("未能从该文本识别出有效动账金额（或命中验证码/非交易过滤规则）")
+            _parseBenchState.value = ParseBenchState.Error("未能识别出有效金额（或命中验证码过滤规则）")
         }
     }
 
@@ -223,8 +299,10 @@ class LedgerViewModel(
         rawContent: String
     ) {
         viewModelScope.launch {
+            val symbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
             val tx = LedgerTransaction(
                 amountCents = parsed.amountCents,
+                currencyCode = parsed.currencyCode,
                 type = parsed.type.name,
                 category = parsed.category,
                 merchant = parsed.merchant,
@@ -239,7 +317,7 @@ class LedgerViewModel(
             )
             repository.addTransaction(tx)
                 .onSuccess {
-                    _actionMessage.value = "已入账至本地数据库：${parsed.merchant} ¥%.2f".format(parsed.amountCents / 100.0)
+                    _actionMessage.value = "已入账：${parsed.merchant} $symbol%.2f".format(parsed.amountCents / 100.0)
                     _parseBenchState.value = ParseBenchState.Idle
                 }
                 .onFailure { error ->
@@ -267,7 +345,7 @@ class LedgerViewModel(
                 enabled = true
             )
             repository.addParsingRule(rule)
-                .onSuccess { _actionMessage.value = "已保存本地规则「$name」" }
+                .onSuccess { _actionMessage.value = "已保存规则「$name」" }
                 .onFailure { _actionMessage.value = "添加规则失败：${it.localizedMessage ?: "请检查输入"}" }
         }
     }
@@ -290,15 +368,62 @@ class LedgerViewModel(
     fun saveSettings(settings: BudgetSettings) {
         viewModelScope.launch {
             repository.saveSettings(settings)
-                .onSuccess { _actionMessage.value = "本地偏好设置已保存" }
+                .onSuccess { _actionMessage.value = "设置已保存" }
                 .onFailure { _actionMessage.value = "保存设置失败" }
+        }
+    }
+
+    fun saveAppearanceSettings(settings: AppearanceSettings) {
+        viewModelScope.launch {
+            repository.saveAppearanceSettings(settings)
+                .onFailure { _actionMessage.value = "保存外观设置失败" }
+        }
+    }
+
+    fun updateExchangeRateDatabase() {
+        viewModelScope.launch {
+            _rateUpdateState.value = RateUpdateState.Loading
+            exchangeManager.refreshRatesDatabase(repository)
+                .onSuccess { updated ->
+                    _rateUpdateState.value = RateUpdateState.Success(updated.lastStatus)
+                    _actionMessage.value = updated.lastStatus
+                }
+                .onFailure { err ->
+                    val msg = err.message ?: "汇率更新失败"
+                    _rateUpdateState.value = RateUpdateState.Error(msg)
+                    _actionMessage.value = msg
+                }
+        }
+    }
+
+    fun previewManualImport(rawContent: String, fileNameHint: String? = null) {
+        val rules = (rulesState.value as? UiState.Success)?.data ?: emptyList()
+        ManualImportManager.parseImportedContent(rawContent, fileNameHint, rules)
+            .onSuccess { preview ->
+                _importUiState.value = ImportUiState.Ready(preview)
+            }
+            .onFailure { err ->
+                _importUiState.value = ImportUiState.Error(err.message ?: "无法解析导入内容")
+            }
+    }
+
+    fun commitManualImport(items: List<LedgerTransaction>) {
+        viewModelScope.launch {
+            repository.importTransactions(items)
+                .onSuccess { count ->
+                    _importUiState.value = ImportUiState.Idle
+                    _actionMessage.value = "成功导入 $count 笔账单"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = "导入失败：${err.localizedMessage ?: "请重试"}"
+                }
         }
     }
 
     fun saveWebDavConfig(config: WebDavConfig) {
         viewModelScope.launch {
             repository.saveWebDavConfig(config)
-                .onSuccess { _actionMessage.value = "WebDAV 配置已保存在本地" }
+                .onSuccess { _actionMessage.value = "WebDAV 配置已保存" }
                 .onFailure { _actionMessage.value = "保存 WebDAV 配置失败" }
         }
     }
@@ -306,7 +431,7 @@ class LedgerViewModel(
     fun testWebDavConnection(config: WebDavConfig) {
         viewModelScope.launch {
             repository.saveWebDavConfig(config)
-            _webDavActionState.value = WebDavActionState.Working("正在测试 WebDAV 连接...")
+            _webDavActionState.value = WebDavActionState.Working("正在测试连接...")
             webDavSyncManager.testConnection(config)
                 .onSuccess { msg -> _webDavActionState.value = WebDavActionState.Success(msg) }
                 .onFailure { err -> _webDavActionState.value = WebDavActionState.Error(err.message ?: "连接失败") }
@@ -316,7 +441,7 @@ class LedgerViewModel(
     fun backupToWebDav(config: WebDavConfig) {
         viewModelScope.launch {
             repository.saveWebDavConfig(config)
-            _webDavActionState.value = WebDavActionState.Working("正在打包并上传备份到 WebDAV...")
+            _webDavActionState.value = WebDavActionState.Working("正在上传备份...")
             webDavSyncManager.backupToWebDav(config, repository)
                 .onSuccess { msg -> _webDavActionState.value = WebDavActionState.Success(msg) }
                 .onFailure { err -> _webDavActionState.value = WebDavActionState.Error(err.message ?: "备份失败") }
@@ -326,21 +451,34 @@ class LedgerViewModel(
     fun restoreFromWebDav(config: WebDavConfig) {
         viewModelScope.launch {
             repository.saveWebDavConfig(config)
-            _webDavActionState.value = WebDavActionState.Working("正在从 WebDAV 下载并合并账本...")
+            _webDavActionState.value = WebDavActionState.Working("正在下载并合并账本...")
             webDavSyncManager.restoreFromWebDav(config, repository)
                 .onSuccess { msg -> _webDavActionState.value = WebDavActionState.Success(msg) }
                 .onFailure { err -> _webDavActionState.value = WebDavActionState.Error(err.message ?: "恢复失败") }
         }
     }
 
-    fun buildLocalMonthlyInsight(year: Int, monthZeroBased: Int): String {
+    fun buildMonthlyInsight(year: Int, monthZeroBased: Int): String {
         val allTx = (transactionsState.value as? UiState.Success)?.data ?: emptyList()
         val monthTx = filterByMonth(allTx, year, monthZeroBased)
         val monthLabel = "${year}年${monthZeroBased + 1}月"
+        val settings = settingsState.value
+        val rates = exchangeRateState.value.ratesToCny
         return LocalSpendingAnalyzer.generateMonthlySummary(
             monthLabel = monthLabel,
             transactions = monthTx,
-            monthlyBudgetCents = settingsState.value.monthlyBudgetCents
+            monthlyBudgetCents = settings.monthlyBudgetCents,
+            baseCurrencyCode = settings.baseCurrencyCode,
+            ratesToCny = rates
+        )
+    }
+
+    fun convertToBaseCents(tx: LedgerTransaction): Long {
+        return CurrencyExchangeManager.convertCents(
+            amountCents = tx.amountCents,
+            fromCurrency = tx.currencyCode,
+            toCurrency = settingsState.value.baseCurrencyCode,
+            ratesToCny = exchangeRateState.value.ratesToCny
         )
     }
 

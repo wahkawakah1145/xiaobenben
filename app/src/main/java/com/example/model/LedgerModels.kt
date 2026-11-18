@@ -20,7 +20,8 @@ enum class SourceApp(val label: String) {
     BANK_APP("银行App"),
     BANK_SMS("银行短信"),
     MANUAL("手动记账"),
-    LOCAL_BENCH("识别测试台");
+    IMPORT("手动导入"),
+    LOCAL_BENCH("识别测试");
 
     companion object {
         fun fromRaw(raw: String?): SourceApp =
@@ -30,8 +31,9 @@ enum class SourceApp(val label: String) {
 
 enum class ParseMethod(val label: String) {
     RULE_ENGINE("规则匹配"),
-    LOCAL_NLP("本地语义"),
-    MANUAL("手动录入");
+    LOCAL_NLP("语义识别"),
+    MANUAL("手动录入"),
+    IMPORT("导入");
 
     companion object {
         fun fromRaw(raw: String?): ParseMethod =
@@ -39,9 +41,112 @@ enum class ParseMethod(val label: String) {
     }
 }
 
+data class CurrencyInfo(
+    val code: String,
+    val symbol: String,
+    val chineseName: String,
+    val defaultRateToCny: Double,
+    val zeroDecimalDisplay: Boolean = false
+)
+
+object CurrencyCatalog {
+    val currencies = listOf(
+        CurrencyInfo("CNY", "¥", "人民币", 1.0),
+        CurrencyInfo("USD", "$", "美元", 7.24),
+        CurrencyInfo("HKD", "HK$", "港币", 0.93),
+        CurrencyInfo("EUR", "€", "欧元", 7.82),
+        CurrencyInfo("JPY", "JP¥", "日元", 0.047, zeroDecimalDisplay = true),
+        CurrencyInfo("GBP", "£", "英镑", 9.21),
+        CurrencyInfo("SGD", "S$", "新加坡元", 5.42),
+        CurrencyInfo("KRW", "₩", "韩元", 0.0052, zeroDecimalDisplay = true),
+        CurrencyInfo("AUD", "A$", "澳元", 4.72),
+        CurrencyInfo("CAD", "C$", "加元", 5.18),
+        CurrencyInfo("MOP", "MOP$", "澳门元", 0.90),
+        CurrencyInfo("TWD", "NT$", "新台币", 0.225)
+    )
+
+    val byCode: Map<String, CurrencyInfo> = currencies.associateBy { it.code }
+
+    val defaultRatesToCny: Map<String, Double> = currencies.associate { it.code to it.defaultRateToCny }
+
+    fun resolve(code: String?): CurrencyInfo =
+        byCode[code?.uppercase()] ?: currencies.first()
+}
+
+data class ExchangeRateState(
+    val ratesToCny: Map<String, Double> = CurrencyCatalog.defaultRatesToCny,
+    val updatedAtMillis: Long = 0L,
+    val lastStatus: String = ""
+)
+
+enum class ThemeMode(val label: String) {
+    SYSTEM("跟随系统"),
+    LIGHT("浅色"),
+    DARK("深色");
+
+    companion object {
+        fun fromRaw(raw: String?): ThemeMode =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: SYSTEM
+    }
+}
+
+enum class LatinNumberFont(val label: String) {
+    BUILTIN("内置字体"),
+    SYSTEM("系统默认");
+
+    companion object {
+        fun fromRaw(raw: String?): LatinNumberFont =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: BUILTIN
+    }
+}
+
+enum class CardDensity(val label: String) {
+    COMPACT("紧凑"),
+    STANDARD("标准"),
+    COMFORTABLE("舒展");
+
+    companion object {
+        fun fromRaw(raw: String?): CardDensity =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: STANDARD
+    }
+}
+
+enum class HomeHeaderOrder(val label: String) {
+    TIPS_TOP("Tips 置顶"),
+    SUMMARY_TOP("汇总置顶"),
+    HIDE_TIPS("隐藏 Tips");
+
+    companion object {
+        fun fromRaw(raw: String?): HomeHeaderOrder =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: TIPS_TOP
+    }
+}
+
+enum class FabPlacement(val label: String) {
+    BOTTOM_END("右下角"),
+    BOTTOM_START("左下角");
+
+    companion object {
+        fun fromRaw(raw: String?): FabPlacement =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: BOTTOM_END
+    }
+}
+
+data class AppearanceSettings(
+    val dynamicColor: Boolean = true,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val latinNumberFont: LatinNumberFont = LatinNumberFont.BUILTIN,
+    val cardDensity: CardDensity = CardDensity.STANDARD,
+    val homeHeaderOrder: HomeHeaderOrder = HomeHeaderOrder.TIPS_TOP,
+    val fabPlacement: FabPlacement = FabPlacement.BOTTOM_END,
+    val showChannelBadge: Boolean = true,
+    val showParseBadge: Boolean = true
+)
+
 data class LedgerTransaction(
     val id: String = UUID.randomUUID().toString(),
     val amountCents: Long = 0L,
+    val currencyCode: String = "CNY",
     val type: String = TransactionType.EXPENSE.name,
     val category: String = "其他",
     val merchant: String = "",
@@ -59,6 +164,7 @@ data class LedgerTransaction(
     val txType: TransactionType get() = TransactionType.fromRaw(type)
     val txSourceApp: SourceApp get() = SourceApp.fromRaw(sourceApp)
     val txParseMethod: ParseMethod get() = ParseMethod.fromRaw(parseMethod)
+    val currencyInfo: CurrencyInfo get() = CurrencyCatalog.resolve(currencyCode)
 }
 
 data class CustomParsingRule(
@@ -77,15 +183,17 @@ data class CustomParsingRule(
 data class BudgetSettings(
     val monthlyBudgetCents: Long = 500_000L,
     val autoRecordEnabled: Boolean = true,
+    val requireManualConfirm: Boolean = false,
     val smartSemanticEnabled: Boolean = true,
-    val notifyOnRecorded: Boolean = true
+    val notifyOnRecorded: Boolean = true,
+    val baseCurrencyCode: String = "CNY"
 )
 
 data class WebDavConfig(
     val serverUrl: String = "",
     val username: String = "",
     val password: String = "",
-    val remoteFolder: String = "ZhiJiZhang",
+    val remoteFolder: String = "XiaoBenBen",
     val lastSyncMillis: Long = 0L,
     val lastSyncStatus: String = ""
 )
@@ -93,6 +201,7 @@ data class WebDavConfig(
 data class ParsedNotificationResult(
     val isFinancialTransaction: Boolean,
     val amountCents: Long,
+    val currencyCode: String = "CNY",
     val type: TransactionType,
     val category: String,
     val merchant: String,

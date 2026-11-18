@@ -7,17 +7,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -26,6 +26,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -57,13 +58,19 @@ import androidx.navigation.compose.rememberNavController
 import com.example.R
 import com.example.data.LedgerRepository
 import com.example.service.NotificationBridge
+import com.example.ui.theme.SmartLedgerTheme
 import com.example.viewmodel.LedgerViewModel
 import kotlinx.coroutines.launch
 
 const val ROUTE_LEDGER = "ledger"
-const val ROUTE_PARSER = "parser"
 const val ROUTE_ANALYTICS = "analytics"
 const val ROUTE_SETTINGS = "settings"
+
+const val ROUTE_SETTINGS_PARSER = "settings/parser"
+const val ROUTE_SETTINGS_CURRENCY = "settings/currency"
+const val ROUTE_SETTINGS_IMPORT = "settings/import"
+const val ROUTE_SETTINGS_WEBDAV = "settings/webdav"
+const val ROUTE_SETTINGS_APPEARANCE = "settings/appearance"
 
 private data class TopDestination(
     val route: String,
@@ -80,13 +87,6 @@ private val topDestinations = listOf(
         selectedIcon = Icons.Rounded.ReceiptLong,
         unselectedIcon = Icons.Outlined.ReceiptLong,
         testTag = "nav_ledger_tab"
-    ),
-    TopDestination(
-        route = ROUTE_PARSER,
-        labelRes = R.string.nav_parser,
-        selectedIcon = Icons.Rounded.AutoAwesome,
-        unselectedIcon = Icons.Outlined.AutoAwesome,
-        testTag = "nav_parser_tab"
     ),
     TopDestination(
         route = ROUTE_ANALYTICS,
@@ -118,159 +118,222 @@ fun AppNavigation() {
         }
     )
 
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var isListenerEnabled by remember {
-        mutableStateOf(NotificationBridge.isNotificationListenerEnabled(context))
-    }
+    val appearance by viewModel.appearanceState.collectAsStateWithLifecycle()
 
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                isListenerEnabled = NotificationBridge.isNotificationListenerEnabled(context)
+    SmartLedgerTheme(appearanceSettings = appearance) {
+        Surface {
+            val context = LocalContext.current
+            val lifecycleOwner = LocalLifecycleOwner.current
+            var isListenerEnabled by remember {
+                mutableStateOf(NotificationBridge.isNotificationListenerEnabled(context))
             }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
 
-    val transactionsState by viewModel.transactionsState.collectAsStateWithLifecycle()
-    val settings by viewModel.settingsState.collectAsStateWithLifecycle()
-    val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
-
-    val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-
-    LaunchedEffect(actionMessage) {
-        val msg = actionMessage
-        if (msg != null) {
-            snackbarHostState.showSnackbar(msg)
-            viewModel.clearActionMessage()
-        }
-    }
-
-    val navController = rememberNavController()
-    val navBackStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = navBackStackEntry?.destination?.route ?: ROUTE_LEDGER
-
-    val navigateTab: (String) -> Unit = { route ->
-        navController.navigate(route) {
-            popUpTo(navController.graph.findStartDestination().id) {
-                saveState = true
-            }
-            launchSingleTop = true
-            restoreState = true
-        }
-    }
-
-    val currentTitle = when (currentRoute) {
-        ROUTE_PARSER -> "通知识别与规则"
-        ROUTE_ANALYTICS -> "收支洞察"
-        ROUTE_SETTINGS -> "设置与 WebDAV"
-        else -> stringResource(R.string.app_name)
-    }
-
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val useNavigationRail = maxWidth >= 600.dp
-
-        Scaffold(
-            contentWindowInsets = WindowInsets.safeDrawing,
-            snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-            topBar = {
-                CenterAlignedTopAppBar(
-                    title = {
-                        Text(
-                            text = currentTitle,
-                            style = MaterialTheme.typography.titleLarge
-                        )
-                    }
-                )
-            },
-            bottomBar = {
-                if (!useNavigationRail) {
-                    NavigationBar {
-                        topDestinations.forEach { dest ->
-                            val selected = currentRoute == dest.route
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = { navigateTab(dest.route) },
-                                icon = {
-                                    Icon(
-                                        imageVector = if (selected) dest.selectedIcon else dest.unselectedIcon,
-                                        contentDescription = stringResource(dest.labelRes)
-                                    )
-                                },
-                                label = { Text(stringResource(dest.labelRes)) },
-                                modifier = Modifier.testTag(dest.testTag)
-                            )
-                        }
+            DisposableEffect(lifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_RESUME) {
+                        isListenerEnabled = NotificationBridge.isNotificationListenerEnabled(context)
                     }
                 }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
             }
-        ) { innerPadding ->
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                if (useNavigationRail) {
-                    NavigationRail {
-                        topDestinations.forEach { dest ->
-                            val selected = currentRoute == dest.route
-                            NavigationRailItem(
-                                selected = selected,
-                                onClick = { navigateTab(dest.route) },
-                                icon = {
-                                    Icon(
-                                        imageVector = if (selected) dest.selectedIcon else dest.unselectedIcon,
-                                        contentDescription = stringResource(dest.labelRes)
+
+            val transactionsState by viewModel.transactionsState.collectAsStateWithLifecycle()
+            val settings by viewModel.settingsState.collectAsStateWithLifecycle()
+            val exchangeRates by viewModel.exchangeRateState.collectAsStateWithLifecycle()
+            val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
+
+            val snackbarHostState = remember { SnackbarHostState() }
+            val scope = rememberCoroutineScope()
+
+            LaunchedEffect(actionMessage) {
+                val msg = actionMessage
+                if (msg != null) {
+                    snackbarHostState.showSnackbar(msg)
+                    viewModel.clearActionMessage()
+                }
+            }
+
+            val navController = rememberNavController()
+            val navBackStackEntry by navController.currentBackStackEntryAsState()
+            val currentRoute = navBackStackEntry?.destination?.route ?: ROUTE_LEDGER
+            val isTopLevelRoute = topDestinations.any { it.route == currentRoute }
+
+            val navigateTab: (String) -> Unit = { route ->
+                navController.navigate(route) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
+
+            val currentTitle = when (currentRoute) {
+                ROUTE_ANALYTICS -> "收支分析"
+                ROUTE_SETTINGS -> "设置"
+                ROUTE_SETTINGS_PARSER -> "通知识别与规则"
+                ROUTE_SETTINGS_CURRENCY -> "币种与汇率"
+                ROUTE_SETTINGS_IMPORT -> "手动导入"
+                ROUTE_SETTINGS_WEBDAV -> "WebDAV 备份同步"
+                ROUTE_SETTINGS_APPEARANCE -> "外观与布局"
+                else -> stringResource(R.string.app_name)
+            }
+
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val useNavigationRail = maxWidth >= 600.dp
+
+                Scaffold(
+                    contentWindowInsets = WindowInsets.safeDrawing,
+                    snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+                    topBar = {
+                        CenterAlignedTopAppBar(
+                            title = {
+                                Text(
+                                    text = currentTitle,
+                                    style = MaterialTheme.typography.titleLarge
+                                )
+                            },
+                            navigationIcon = {
+                                if (!isTopLevelRoute) {
+                                    IconButton(
+                                        onClick = { navController.navigateUp() },
+                                        modifier = Modifier.testTag("top_bar_back_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                            contentDescription = "返回"
+                                        )
+                                    }
+                                }
+                            }
+                        )
+                    },
+                    bottomBar = {
+                        if (!useNavigationRail && isTopLevelRoute) {
+                            NavigationBar {
+                                topDestinations.forEach { dest ->
+                                    val selected = currentRoute == dest.route
+                                    NavigationBarItem(
+                                        selected = selected,
+                                        onClick = { navigateTab(dest.route) },
+                                        icon = {
+                                            Icon(
+                                                imageVector = if (selected) dest.selectedIcon else dest.unselectedIcon,
+                                                contentDescription = stringResource(dest.labelRes)
+                                            )
+                                        },
+                                        label = { Text(stringResource(dest.labelRes)) },
+                                        modifier = Modifier.testTag(dest.testTag)
                                     )
-                                },
-                                label = { Text(stringResource(dest.labelRes)) },
-                                modifier = Modifier.testTag(dest.testTag)
-                            )
+                                }
+                            }
                         }
                     }
-                }
+                ) { innerPadding ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                    ) {
+                        if (useNavigationRail && isTopLevelRoute) {
+                            NavigationRail {
+                                topDestinations.forEach { dest ->
+                                    val selected = currentRoute == dest.route
+                                    NavigationRailItem(
+                                        selected = selected,
+                                        onClick = { navigateTab(dest.route) },
+                                        icon = {
+                                            Icon(
+                                                imageVector = if (selected) dest.selectedIcon else dest.unselectedIcon,
+                                                contentDescription = stringResource(dest.labelRes)
+                                            )
+                                        },
+                                        label = { Text(stringResource(dest.labelRes)) },
+                                        modifier = Modifier.testTag(dest.testTag)
+                                    )
+                                }
+                            }
+                        }
 
-                NavHost(
-                    navController = navController,
-                    startDestination = ROUTE_LEDGER,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    composable(ROUTE_LEDGER) {
-                        LedgerHomeScreen(
-                            transactionsState = transactionsState,
-                            settings = settings,
-                            isListenerEnabled = isListenerEnabled,
-                            viewModel = viewModel,
-                            onNavigateToParser = { navigateTab(ROUTE_PARSER) }
-                        )
-                    }
-                    composable(ROUTE_PARSER) {
-                        ParserHubScreen(
-                            viewModel = viewModel,
-                            isListenerEnabled = isListenerEnabled,
-                            onShowMessage = { msg ->
-                                scope.launch { snackbarHostState.showSnackbar(msg) }
+                        NavHost(
+                            navController = navController,
+                            startDestination = ROUTE_LEDGER,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            composable(ROUTE_LEDGER) {
+                                LedgerHomeScreen(
+                                    transactionsState = transactionsState,
+                                    settings = settings,
+                                    appearance = appearance,
+                                    exchangeRates = exchangeRates,
+                                    isListenerEnabled = isListenerEnabled,
+                                    viewModel = viewModel,
+                                    onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) }
+                                )
                             }
-                        )
-                    }
-                    composable(ROUTE_ANALYTICS) {
-                        AnalyticsScreen(
-                            transactionsState = transactionsState,
-                            viewModel = viewModel
-                        )
-                    }
-                    composable(ROUTE_SETTINGS) {
-                        SettingsScreen(
-                            settings = settings,
-                            isListenerEnabled = isListenerEnabled,
-                            viewModel = viewModel,
-                            onShowMessage = { msg ->
-                                scope.launch { snackbarHostState.showSnackbar(msg) }
+                            composable(ROUTE_ANALYTICS) {
+                                AnalyticsScreen(
+                                    transactionsState = transactionsState,
+                                    settings = settings,
+                                    exchangeRates = exchangeRates,
+                                    viewModel = viewModel
+                                )
                             }
-                        )
+                            composable(ROUTE_SETTINGS) {
+                                SettingsScreen(
+                                    settings = settings,
+                                    isListenerEnabled = isListenerEnabled,
+                                    viewModel = viewModel,
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    },
+                                    onOpenParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                                    onOpenCurrency = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
+                                    onOpenImport = { navController.navigate(ROUTE_SETTINGS_IMPORT) },
+                                    onOpenWebDav = { navController.navigate(ROUTE_SETTINGS_WEBDAV) },
+                                    onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) }
+                                )
+                            }
+                            composable(ROUTE_SETTINGS_PARSER) {
+                                ParserHubScreen(
+                                    viewModel = viewModel,
+                                    isListenerEnabled = isListenerEnabled,
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    }
+                                )
+                            }
+                            composable(ROUTE_SETTINGS_CURRENCY) {
+                                CurrencySettingsScreen(
+                                    settings = settings,
+                                    exchangeRates = exchangeRates,
+                                    viewModel = viewModel
+                                )
+                            }
+                            composable(ROUTE_SETTINGS_IMPORT) {
+                                ManualImportScreen(
+                                    viewModel = viewModel,
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    }
+                                )
+                            }
+                            composable(ROUTE_SETTINGS_WEBDAV) {
+                                WebDavSettingsScreen(
+                                    viewModel = viewModel,
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    }
+                                )
+                            }
+                            composable(ROUTE_SETTINGS_APPEARANCE) {
+                                AppearanceSettingsScreen(
+                                    appearance = appearance,
+                                    viewModel = viewModel
+                                )
+                            }
+                        }
                     }
                 }
             }

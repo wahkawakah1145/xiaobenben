@@ -137,4 +137,90 @@ class ChinaNotificationParserTest {
         org.junit.Assert.assertTrue(summary.contains("餐饮美食"))
         org.junit.Assert.assertTrue(summary.contains("星巴克"))
     }
+
+    @Test
+    fun detectsMultiCurrencyNotificationsAndConvertsToBaseCurrency() {
+        val usdTx = ChinaNotificationParser.parse(
+            packageName = "com.android.mms",
+            title = "95555 招商银行",
+            content = "【招商银行】您尾号8812Visa卡境外消费USD 15.00，商户OpenAI。"
+        )
+        assertNotNull(usdTx)
+        assertEquals("USD", usdTx!!.currencyCode)
+        assertEquals(1500L, usdTx.amountCents)
+
+        val hkdTx = ChinaNotificationParser.parse(
+            packageName = "com.eg.android.AlipayGphone",
+            title = "支付宝",
+            content = "你已成功向港铁付款港币24.50元。"
+        )
+        assertNotNull(hkdTx)
+        assertEquals("HKD", hkdTx!!.currencyCode)
+        assertEquals(2450L, hkdTx.amountCents)
+
+        val jpyCurrency = ChinaNotificationParser.detectCurrencyCode("消费日元3200円")
+        assertEquals("JPY", jpyCurrency)
+
+        val rates = mapOf("CNY" to 1.0, "USD" to 7.2, "HKD" to 0.92)
+        val usdToCny = com.example.data.CurrencyExchangeManager.convertCents(1000L, "USD", "CNY", rates)
+        assertEquals(7200L, usdToCny)
+    }
+
+    @Test
+    fun parsesManualImportCsvAndShorthandText() {
+        val csv = """
+            交易时间,交易对方,收/支,金额,支付方式,币种
+            2026-11-18 12:30:00,麦当劳,支出,36.50,支付宝,CNY
+            2026-11-18 18:00:00,公司报销,收入,200.00,招商银行,CNY
+        """.trimIndent()
+        val csvResult = com.example.data.ManualImportManager.parseImportedContent(csv, "alipay.csv").getOrThrow()
+        assertEquals(2, csvResult.transactions.size)
+        assertEquals(3650L, csvResult.transactions[0].amountCents)
+        assertEquals(TransactionType.INCOME.name, csvResult.transactions[1].type)
+
+        val text = "星巴克 35.5\nUSD 12.8 ChatGPT"
+        val textResult = com.example.data.ManualImportManager.parseImportedContent(text).getOrThrow()
+        assertEquals(2, textResult.transactions.size)
+        assertEquals("CNY", textResult.transactions[0].currencyCode)
+        assertEquals("USD", textResult.transactions[1].currencyCode)
+    }
+
+    @Test
+    fun financeHumorTipsWrapSafelyAndAnalyzerSkipsUnconfirmed() {
+        val tipZero = com.example.parser.FinanceHumorTips.tipAt(0)
+        val tipWrapped = com.example.parser.FinanceHumorTips.tipAt(com.example.parser.FinanceHumorTips.tips.size)
+        val tipNegative = com.example.parser.FinanceHumorTips.tipAt(-1)
+        assertEquals(tipZero, tipWrapped)
+        org.junit.Assert.assertTrue(tipNegative.isNotBlank())
+
+        val txs = listOf(
+            com.example.model.LedgerTransaction(
+                amountCents = 1000L,
+                currencyCode = "USD",
+                type = TransactionType.EXPENSE.name,
+                category = "餐饮美食",
+                merchant = "ConfirmedCafe",
+                channel = "招商银行",
+                confirmed = true
+            ),
+            com.example.model.LedgerTransaction(
+                amountCents = 99900L,
+                currencyCode = "CNY",
+                type = TransactionType.EXPENSE.name,
+                category = "数码购物",
+                merchant = "PendingItem",
+                channel = "支付宝",
+                confirmed = false
+            )
+        )
+        val summary = com.example.parser.LocalSpendingAnalyzer.generateMonthlySummary(
+            monthLabel = "2026年11月",
+            transactions = txs,
+            monthlyBudgetCents = 100_000L,
+            baseCurrencyCode = "CNY",
+            ratesToCny = mapOf("CNY" to 1.0, "USD" to 7.2)
+        )
+        org.junit.Assert.assertTrue(summary.contains("¥72.00"))
+        org.junit.Assert.assertFalse(summary.contains("PendingItem"))
+    }
 }

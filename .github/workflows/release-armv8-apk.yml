@@ -100,17 +100,17 @@ jobs:
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk \
-            "dist/zhijizhang-${{ steps.meta.outputs.tag }}-arm64-v8a.apk"
+            "dist/xiaobenben-${{ steps.meta.outputs.tag }}-arm64-v8a.apk"
           ls -lh dist/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: "智记账 ${{ steps.meta.outputs.tag }} (ARMv8 / arm64-v8a)"
+          name: "小本本 ${{ steps.meta.outputs.tag }} (ARMv8 / arm64-v8a)"
           body: |
-            纯本地离线运行 + 可选 WebDAV 同步备份版本。
+            小本本自动记账 Release 安装包。
             - 架构：`arm64-v8a` (ARMv8)
             - 最低系统要求：Android 7.0 (API 24)+
             - 直接下载下方 `.apk` 文件安装到手机即可使用。
-          files: dist/zhijizhang-*-arm64-v8a.apk
+          files: dist/xiaobenben-*-arm64-v8a.apk

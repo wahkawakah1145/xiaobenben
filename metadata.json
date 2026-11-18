@@ -1,6 +1,6 @@
 {
-  "name": "智记账",
-  "description": "纯本地通知自动记账应用，整合支付宝、微信支付、云闪付及中国大陆主流银行通知本地语义解析，支持 WebDAV 备份同步",
+  "name": "小本本",
+  "description": "自动识别中国大陆支付与银行通知的记账应用，支持多币种换汇、手动导入、WebDAV 同步及 Material You 动态外观",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

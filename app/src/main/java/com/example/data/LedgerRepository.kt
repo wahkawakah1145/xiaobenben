@@ -1,8 +1,11 @@
 package com.example.data
 
 import android.content.Context
+import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
+import com.example.model.CurrencyCatalog
 import com.example.model.CustomParsingRule
+import com.example.model.ExchangeRateState
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionType
 import com.example.model.WebDavConfig
@@ -30,7 +33,13 @@ class LedgerRepository(
 
     fun observeWebDavConfig(): Flow<WebDavConfig> = settingsStore.webDavConfigFlow
 
+    fun observeAppearanceSettings(): Flow<AppearanceSettings> = settingsStore.appearanceSettingsFlow
+
+    fun observeExchangeRates(): Flow<ExchangeRateState> = settingsStore.exchangeRateStateFlow
+
     suspend fun getSettingsOnce(): BudgetSettings = settingsStore.getBudgetSettingsOnce()
+
+    suspend fun getExchangeRatesOnce(): ExchangeRateState = settingsStore.getExchangeRateStateOnce()
 
     suspend fun getRulesOnce(): List<CustomParsingRule> =
         dao.getAllRulesOnce().map { it.toDomain() }
@@ -40,11 +49,12 @@ class LedgerRepository(
 
     suspend fun addTransaction(tx: LedgerTransaction): Result<String> {
         return try {
-            require(tx.amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万元" }
+            require(tx.amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万" }
             val now = System.currentTimeMillis()
             val id = tx.id.ifBlank { UUID.randomUUID().toString() }
             val normalized = tx.copy(
                 id = id,
+                currencyCode = CurrencyCatalog.resolve(tx.currencyCode).code,
                 merchant = tx.merchant.trim().ifBlank { "未知商户" }.take(120),
                 channel = tx.channel.trim().ifBlank { "未知渠道" }.take(60),
                 category = tx.category.trim().ifBlank { "其他" }.take(40),
@@ -67,6 +77,7 @@ class LedgerRepository(
     suspend fun updateTransaction(
         txId: String,
         amountCents: Long,
+        currencyCode: String,
         type: TransactionType,
         category: String,
         merchant: String,
@@ -78,11 +89,12 @@ class LedgerRepository(
     ): Result<Unit> {
         return try {
             require(txId.isNotBlank()) { "账单 ID 不能为空" }
-            require(amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万元" }
+            require(amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万" }
             val existing = dao.getAllTransactionsOnce().firstOrNull { it.id == txId }
                 ?: throw IllegalArgumentException("未找到对应的账单记录")
             val updated = existing.copy(
                 amountCents = amountCents,
+                currencyCode = CurrencyCatalog.resolve(currencyCode).code,
                 type = type.name,
                 category = category.trim().ifBlank { "其他" }.take(40),
                 merchant = merchant.trim().ifBlank { "未知商户" }.take(120),
@@ -102,11 +114,48 @@ class LedgerRepository(
         }
     }
 
+    suspend fun confirmTransaction(txId: String): Result<Unit> {
+        return try {
+            require(txId.isNotBlank()) { "账单 ID 不能为空" }
+            dao.confirmTransaction(txId, System.currentTimeMillis())
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun confirmAllPendingTransactions(): Result<Unit> {
+        return try {
+            dao.confirmAllPendingTransactions(System.currentTimeMillis())
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun deleteTransaction(txId: String): Result<Unit> {
         return try {
             require(txId.isNotBlank()) { "账单 ID 不能为空" }
             dao.deleteTransactionById(txId)
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun importTransactions(items: List<LedgerTransaction>): Result<Int> {
+        return try {
+            val valid = items.filter { it.amountCents in 1L..1_000_000_000L }
+            if (valid.isNotEmpty()) {
+                dao.upsertTransactions(valid.map { TransactionEntity.fromDomain(it) })
+            }
+            Result.success(valid.size)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -184,6 +233,21 @@ class LedgerRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun saveAppearanceSettings(settings: AppearanceSettings): Result<Unit> {
+        return try {
+            settingsStore.saveAppearanceSettings(settings)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveExchangeRates(ratesToCny: Map<String, Double>, updatedAtMillis: Long, status: String) {
+        settingsStore.saveExchangeRates(ratesToCny, updatedAtMillis, status)
     }
 
     suspend fun saveWebDavConfig(config: WebDavConfig): Result<Unit> {

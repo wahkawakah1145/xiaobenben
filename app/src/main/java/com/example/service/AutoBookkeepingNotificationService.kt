@@ -5,6 +5,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.example.data.LedgerRepository
+import com.example.model.CurrencyCatalog
 import com.example.model.LedgerTransaction
 import com.example.model.ParseMethod
 import com.example.parser.ChinaNotificationParser
@@ -24,7 +25,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         NotificationBridge.setServiceConnected(true)
-        Log.d(TAG, "AutoBookkeepingNotificationService connected (offline mode).")
+        Log.d(TAG, "AutoBookkeepingNotificationService connected.")
     }
 
     override fun onListenerDisconnected() {
@@ -102,7 +103,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 title = title,
                 content = content,
                 status = "已暂停自动记账",
-                summary = "通知监听正常，但您在设置中关闭了自动入账开关"
+                summary = "自动记账开关已关闭"
             )
             return
         }
@@ -123,13 +124,15 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 title = title,
                 content = content,
                 status = "未能识别金额",
-                summary = "非动账通知或格式未命中本地规则"
+                summary = "非动账通知或格式未命中规则"
             )
             return
         }
 
+        val needsManualConfirm = settings.requireManualConfirm
         val tx = LedgerTransaction(
             amountCents = parsed.amountCents,
+            currencyCode = parsed.currencyCode,
             type = parsed.type.name,
             category = parsed.category,
             merchant = parsed.merchant,
@@ -140,26 +143,33 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             rawNotification = "$title: $content".take(600),
             note = parsed.reasoning.take(200),
             occurredAtMillis = occurredAt,
-            confirmed = true
+            confirmed = !needsManualConfirm
         )
 
         val saveResult = repository.addTransaction(tx)
         saveResult.onSuccess {
-            val formattedYuan = "¥%.2f".format(parsed.amountCents / 100.0)
-            val methodTag = if (parsed.parseMethod == ParseMethod.LOCAL_NLP) "本地语义" else "本地规则"
+            val currencySymbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
+            val formattedAmount = "$currencySymbol%.2f".format(parsed.amountCents / 100.0)
+            val methodTag = if (parsed.parseMethod == ParseMethod.LOCAL_NLP) "语义识别" else "规则匹配"
+            val stateLabel = if (needsManualConfirm) "待进软件确认" else "已自动入账"
             NotificationBridge.appendLog(
                 packageName = packageName,
                 appLabel = parsed.channel,
                 title = title,
                 content = content,
-                status = "已本地入账 ($methodTag)",
-                summary = "${parsed.type.label} $formattedYuan · ${parsed.merchant} · ${parsed.category}"
+                status = "$stateLabel ($methodTag)",
+                summary = "${parsed.type.label} $formattedAmount · ${parsed.merchant} · ${parsed.category}"
             )
             if (settings.notifyOnRecorded) {
+                val notifTitle = if (needsManualConfirm) {
+                    "小本本已记录，待进软件确认 (${parsed.channel})"
+                } else {
+                    "小本本已记账 (${parsed.channel})"
+                }
                 NotificationBridge.postRecordedConfirmation(
                     context = applicationContext,
-                    title = "智记账已自动入账 (${parsed.channel})",
-                    body = "${parsed.merchant} ${parsed.type.label} $formattedYuan · 分类：${parsed.category}"
+                    title = notifTitle,
+                    body = "${parsed.merchant} ${parsed.type.label} $formattedAmount · 分类：${parsed.category}"
                 )
             }
         }.onFailure { error ->
@@ -168,8 +178,8 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 appLabel = parsed.channel,
                 title = title,
                 content = content,
-                status = "本地入账失败",
-                summary = error.localizedMessage ?: "写入本地数据库失败"
+                status = "入账失败",
+                summary = error.localizedMessage ?: "保存失败"
             )
         }
     }

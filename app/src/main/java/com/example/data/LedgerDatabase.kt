@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.model.CustomParsingRule
 import com.example.model.LedgerTransaction
 import kotlinx.coroutines.flow.Flow
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.Flow
 data class TransactionEntity(
     @PrimaryKey val id: String,
     val amountCents: Long,
+    val currencyCode: String = "CNY",
     val type: String,
     val category: String,
     val merchant: String,
@@ -35,6 +38,7 @@ data class TransactionEntity(
     fun toDomain(): LedgerTransaction = LedgerTransaction(
         id = id,
         amountCents = amountCents,
+        currencyCode = currencyCode,
         type = type,
         category = category,
         merchant = merchant,
@@ -54,6 +58,7 @@ data class TransactionEntity(
         fun fromDomain(tx: LedgerTransaction): TransactionEntity = TransactionEntity(
             id = tx.id,
             amountCents = tx.amountCents,
+            currencyCode = tx.currencyCode.uppercase().ifBlank { "CNY" },
             type = tx.type,
             category = tx.category,
             merchant = tx.merchant,
@@ -127,6 +132,12 @@ interface LedgerDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTransactions(entities: List<TransactionEntity>)
 
+    @Query("UPDATE transactions SET confirmed = 1, updatedAtMillis = :updatedAt WHERE id = :id")
+    suspend fun confirmTransaction(id: String, updatedAt: Long)
+
+    @Query("UPDATE transactions SET confirmed = 1, updatedAtMillis = :updatedAt WHERE confirmed = 0")
+    suspend fun confirmAllPendingTransactions(updatedAt: Long)
+
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteTransactionById(id: String)
 
@@ -151,7 +162,7 @@ interface LedgerDao {
 
 @Database(
     entities = [TransactionEntity::class, ParsingRuleEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -161,13 +172,22 @@ abstract class LedgerDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: LedgerDatabase? = null
 
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN currencyCode TEXT NOT NULL DEFAULT 'CNY'")
+            }
+        }
+
         fun getInstance(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     LedgerDatabase::class.java,
                     "smart_ledger.db"
-                ).build().also { INSTANCE = it }
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
+                    .also { INSTANCE = it }
             }
         }
     }

@@ -8,7 +8,12 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import com.example.model.AppearanceSettings
+import com.example.model.LatinNumberFont
+import com.example.model.ThemeMode
 
 private val LightColorScheme = lightColorScheme(
     primary = JadePrimaryLight,
@@ -64,12 +69,18 @@ private val DarkColorScheme = darkColorScheme(
 
 @Composable
 fun SmartLedgerTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false,
+    appearanceSettings: AppearanceSettings = AppearanceSettings(),
     content: @Composable () -> Unit
 ) {
+    val systemDark = isSystemInDarkTheme()
+    val darkTheme = when (appearanceSettings.themeMode) {
+        ThemeMode.SYSTEM -> systemDark
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+
     val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        appearanceSettings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
@@ -77,9 +88,17 @@ fun SmartLedgerTheme(
         else -> LightColorScheme
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    val numberFontFamily = when (appearanceSettings.latinNumberFont) {
+        LatinNumberFont.BUILTIN -> JetBrainsMonoFamily
+        LatinNumberFont.SYSTEM -> FontFamily.Default
+    }
+    val typography = buildAppTypography(appearanceSettings.latinNumberFont)
+
+    CompositionLocalProvider(LocalNumberFontFamily provides numberFontFamily) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = typography,
+            content = content
+        )
+    }
 }

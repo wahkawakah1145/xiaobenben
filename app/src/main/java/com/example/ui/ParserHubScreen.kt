@@ -5,7 +5,6 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,7 +17,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,15 +24,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Rule
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.Rule
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -61,7 +58,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -74,12 +70,11 @@ import com.example.parser.ChinaPaymentCatalog
 import com.example.service.NotificationBridge
 import com.example.ui.components.ChannelBadge
 import com.example.ui.components.ParseMethodBadge
-import com.example.ui.components.channelBrandColor
+import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatTimeShort
-import com.example.ui.components.formatYuan
 import com.example.ui.components.transactionTypeColor
 import com.example.ui.theme.ExpenseCoral
-import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.ParseBenchState
 import com.example.viewmodel.UiState
@@ -96,6 +91,7 @@ fun ParserHubScreen(
     val parseState by viewModel.parseBenchState.collectAsStateWithLifecycle()
     val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
     val capturedLogs by NotificationBridge.capturedLogs.collectAsStateWithLifecycle()
+    val numberFont = LocalNumberFontFamily.current
 
     var titleInput by remember { mutableStateOf("95555 招商银行") }
     var bodyInput by remember {
@@ -109,9 +105,9 @@ fun ParserHubScreen(
     ) { granted ->
         if (granted) {
             NotificationBridge.dispatchTestPaymentNotification(context, titleInput, bodyInput)
-            onShowMessage("已发送真实系统通知，正在由 NotificationListenerService 监听解析")
+            onShowMessage("已发送测试通知")
         } else {
-            onShowMessage("需要通知权限才能在状态栏发送测试支付通知")
+            onShowMessage("需要通知权限才能发送测试通知")
         }
     }
 
@@ -126,48 +122,31 @@ fun ParserHubScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. AI & Rule Test Bench
+            // 1. Streamlined Notification Test Bench
             item(key = "test_bench") {
                 Card(
-                    shape = RoundedCornerShape(22.dp),
+                    shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.AutoAwesome,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "本地通知识别测试台",
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                        }
-
                         Text(
-                            text = "粘贴任意中国大陆支付通知或银行短信，立即测试「规则引擎 + 本地语义分析」识别效果，或发送真实系统通知验证后台监听服务。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "通知解析测试",
+                            style = MaterialTheme.typography.titleMedium
                         )
 
-                        // Quick samples
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            ChinaPaymentCatalog.channels.take(7).forEach { sample ->
+                            ChinaPaymentCatalog.channels.take(8).forEach { sample ->
                                 AssistChip(
                                     onClick = {
                                         titleInput = sample.sampleNotificationTitle
@@ -193,9 +172,9 @@ fun ParserHubScreen(
                         OutlinedTextField(
                             value = bodyInput,
                             onValueChange = { bodyInput = it },
-                            label = { Text("通知正文 / 银行动账短信内容") },
-                            minLines = 3,
-                            maxLines = 5,
+                            label = { Text("通知正文") },
+                            minLines = 2,
+                            maxLines = 4,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("bench_body_input")
@@ -221,7 +200,7 @@ fun ParserHubScreen(
                             ) {
                                 Icon(Icons.Rounded.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("规则极速解析")
+                                Text("规则匹配")
                             }
 
                             Button(
@@ -240,14 +219,14 @@ fun ParserHubScreen(
                             ) {
                                 Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("本地语义识别")
+                                Text("语义解析")
                             }
                         }
 
                         OutlinedButton(
                             onClick = {
                                 if (!isListenerEnabled) {
-                                    onShowMessage("请先开启系统通知读取权限，再发送系统测试通知")
+                                    onShowMessage("请先开启通知读取权限")
                                     NotificationBridge.openNotificationListenerSettings(context)
                                 } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                                     !NotificationBridge.hasPostNotificationPermission(context)
@@ -259,7 +238,7 @@ fun ParserHubScreen(
                                         title = titleInput,
                                         body = bodyInput
                                     )
-                                    onShowMessage("已发送真实系统通知，自动监听服务正在解析入账")
+                                    onShowMessage("已发送测试系统通知")
                                 }
                             },
                             modifier = Modifier
@@ -269,13 +248,12 @@ fun ParserHubScreen(
                         ) {
                             Icon(Icons.Rounded.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("发送真实系统通知 (触发后台监听测试)")
+                            Text("发送真实系统通知测试")
                         }
 
                         AnimatedVisibility(visible = parseState !is ParseBenchState.Idle) {
                             when (val state = parseState) {
                                 is ParseBenchState.Idle -> Unit
-
                                 is ParseBenchState.Error -> {
                                     Surface(
                                         color = ExpenseCoral.copy(alpha = 0.12f),
@@ -312,8 +290,13 @@ fun ParserHubScreen(
                                                     style = MaterialTheme.typography.titleMedium
                                                 )
                                                 Text(
-                                                    text = formatYuan(result.amountCents, showSign = true, type = result.type),
-                                                    style = MaterialTheme.typography.titleLarge.copy(fontFamily = JetBrainsMonoFamily),
+                                                    text = formatCurrency(
+                                                        cents = result.amountCents,
+                                                        currencyCode = result.currencyCode,
+                                                        showSign = true,
+                                                        type = result.type
+                                                    ),
+                                                    style = MaterialTheme.typography.titleLarge.copy(fontFamily = numberFont),
                                                     color = transactionTypeColor(result.type),
                                                     fontWeight = FontWeight.Bold
                                                 )
@@ -323,17 +306,15 @@ fun ParserHubScreen(
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 ChannelBadge(channel = result.channel)
-                                                if (!result.cardLastFour.isNullOrBlank()) {
-                                                    Surface(
-                                                        color = MaterialTheme.colorScheme.surface,
-                                                        shape = RoundedCornerShape(6.dp)
-                                                    ) {
-                                                        Text(
-                                                            text = "尾号 ${result.cardLastFour}",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                        )
-                                                    }
+                                                Surface(
+                                                    color = MaterialTheme.colorScheme.surface,
+                                                    shape = RoundedCornerShape(6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = result.currencyCode,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
                                                 }
                                                 Surface(
                                                     color = MaterialTheme.colorScheme.surface,
@@ -347,11 +328,6 @@ fun ParserHubScreen(
                                                 }
                                                 ParseMethodBadge(method = result.parseMethod)
                                             }
-                                            Text(
-                                                text = result.reasoning,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
                                             Button(
                                                 onClick = {
                                                     viewModel.saveParsedResult(
@@ -366,7 +342,7 @@ fun ParserHubScreen(
                                             ) {
                                                 Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                                                 Spacer(modifier = Modifier.width(6.dp))
-                                                Text("确认并入账至本地账本")
+                                                Text("确认入账")
                                             }
                                         }
                                     }
@@ -377,126 +353,7 @@ fun ParserHubScreen(
                 }
             }
 
-            // 2. Live Captured Notification Logs
-            item(key = "live_capture_section") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "实时通知捕捉日志 (本次会话)",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    if (capturedLogs.isEmpty()) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainerLow,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "暂未捕捉到外部支付或银行通知。开启系统通知监听后，支付宝/微信/银行通知到达时将在此实时展示识别状态。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(14.dp)
-                            )
-                        }
-                    } else {
-                        capturedLogs.take(5).forEach { log ->
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 3.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(
-                                            text = "${log.appLabel} · ${log.status}",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                        Text(
-                                            text = formatTimeShort(log.capturedAtMillis),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Text(
-                                        text = log.summary,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 3. Mainland China Supported Channels Matrix
-            item(key = "china_catalog_header") {
-                Text(
-                    text = "已整合中国大陆支付方式与银行 (${ChinaPaymentCatalog.channels.size} 家)",
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-
-            item(key = "china_catalog_grid") {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    ChinaPaymentCatalog.channels.forEach { ch ->
-                        val brandColor = channelBrandColor(ch.name)
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainerLow,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.clickable {
-                                titleInput = ch.sampleNotificationTitle
-                                bodyInput = ch.sampleNotificationBody
-                                selectedPackage = ch.packageNames.firstOrNull() ?: "com.android.mms"
-                                onShowMessage("已填入「${ch.name}」通知样例到上方测试台")
-                            }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .clip(CircleShape)
-                                        .background(brandColor.copy(alpha = 0.14f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = ch.shortCode,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = brandColor,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                                Column {
-                                    Text(ch.name, style = MaterialTheme.typography.labelLarge)
-                                    val codeHint = if (ch.smsCodes.isNotEmpty()) ch.smsCodes.joinToString("/") else ch.categoryLabel
-                                    Text(
-                                        text = codeHint,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 4. Custom Parsing Rules
+            // 2. Custom Parsing Rules
             item(key = "custom_rules_header") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -507,7 +364,7 @@ fun ParserHubScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Rounded.Rule, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.AutoMirrored.Rounded.Rule, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Text("自定义匹配规则", style = MaterialTheme.typography.titleMedium)
                     }
                     TextButton(
@@ -541,7 +398,7 @@ fun ParserHubScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    text = "尚未添加自定义规则。系统内置规则已覆盖支付宝、微信支付、云闪付及主流银行，如需针对特定公司报销或地方银行定制分类，可点击右上角新建规则。",
+                                    text = "尚未添加自定义规则。已内置支付宝、微信支付、云闪付及 ${ChinaPaymentCatalog.channels.size} 家主流渠道与银行识别。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(14.dp)
@@ -555,6 +412,79 @@ fun ParserHubScreen(
                                 onToggle = { enabled -> viewModel.toggleCustomRule(rule.id, enabled) },
                                 onDelete = { viewModel.deleteCustomRule(rule.id) }
                             )
+                        }
+                    }
+                }
+            }
+
+            // 3. Recent Captured Logs (compact)
+            if (capturedLogs.isNotEmpty()) {
+                item(key = "live_capture_section") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("最近捕捉日志", style = MaterialTheme.typography.titleMedium)
+                        capturedLogs.take(4).forEach { log ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "${log.appLabel} · ${log.status}",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = formatTimeShort(log.capturedAtMillis),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Text(log.summary, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. Compact Supported Channels Chips
+            item(key = "china_catalog_compact") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "已内置渠道 (${ChinaPaymentCatalog.channels.size} 家，点击填入样例)",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        ChinaPaymentCatalog.channels.forEach { ch ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.clickable {
+                                    titleInput = ch.sampleNotificationTitle
+                                    bodyInput = ch.sampleNotificationBody
+                                    selectedPackage = ch.packageNames.firstOrNull() ?: "com.android.mms"
+                                    onShowMessage("已填入「${ch.name}」样例")
+                                }
+                            ) {
+                                Text(
+                                    text = ch.name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -644,7 +574,7 @@ private fun AddCustomRuleDialog(
                     value = name,
                     onValueChange = { name = it; errorText = null },
                     label = { Text("规则名称") },
-                    placeholder = { Text("例如：公司食堂饭卡充值") },
+                    placeholder = { Text("例如：公司食堂") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )

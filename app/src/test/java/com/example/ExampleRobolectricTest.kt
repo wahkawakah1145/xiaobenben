@@ -16,6 +16,19 @@ class ExampleRobolectricTest {
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("智记账", appName)
+    assertEquals("小本本", appName)
+  }
+
+  @Test
+  fun `parses manual json import via ManualImportManager`() {
+    val json = """
+        [
+          {"merchant":"Apple Store","amount":19.9,"currencyCode":"USD","type":"EXPENSE","category":"数码软件"}
+        ]
+    """.trimIndent()
+    val jsonResult = com.example.data.ManualImportManager.parseImportedContent(json, "bills.json").getOrThrow()
+    assertEquals(1, jsonResult.transactions.size)
+    assertEquals("USD", jsonResult.transactions.first().currencyCode)
+    assertEquals(1990L, jsonResult.transactions.first().amountCents)
   }
 }

@@ -14,6 +14,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class WebDavSyncManager {
@@ -42,11 +43,11 @@ class WebDavSyncManager {
             client.newCall(reqBuilder.build()).execute().use { resp ->
                 when {
                     resp.code in 200..299 || resp.code == 207 ->
-                        Result.success("WebDAV 连接成功 (HTTP ${resp.code})")
+                        Result.success("连接成功 (HTTP ${resp.code})")
                     resp.code == 401 || resp.code == 403 ->
-                        Result.failure(IllegalStateException("WebDAV 认证失败 (HTTP ${resp.code})，请检查用户名与应用密码"))
+                        Result.failure(IllegalStateException("认证失败 (HTTP ${resp.code})，请检查账号与应用密码"))
                     else ->
-                        Result.failure(IllegalStateException("WebDAV 响应异常：HTTP ${resp.code} ${resp.message}"))
+                        Result.failure(IllegalStateException("服务器响应异常：HTTP ${resp.code} ${resp.message}"))
                 }
             }
         } catch (e: CancellationException) {
@@ -64,12 +65,11 @@ class WebDavSyncManager {
             val baseUrl = normalizeBaseUrl(config.serverUrl)
                 ?: return@withContext Result.failure(IllegalArgumentException("请先配置有效的 WebDAV 服务器地址"))
 
-            val folder = config.remoteFolder.trim().trim('/').ifBlank { "ZhiJiZhang" }
+            val folder = config.remoteFolder.trim().trim('/').ifBlank { "XiaoBenBen" }
             val folderUrl = "$baseUrl$folder/"
             val fileUrl = "$folderUrl$BACKUP_FILENAME"
             val authHeader = buildAuthHeader(config)
 
-            // 1. Ensure remote directory exists via MKCOL
             val mkcolBuilder = Request.Builder()
                 .url(folderUrl)
                 .method("MKCOL", ByteArray(0).toRequestBody(null))
@@ -78,28 +78,29 @@ class WebDavSyncManager {
                 if (resp.code == 401 || resp.code == 403) {
                     return@withContext Result.failure(IllegalStateException("WebDAV 认证失败 (HTTP ${resp.code})"))
                 }
-                // 201 Created, 405 Method Not Allowed (already exists), 301/302/200 are all acceptable
             }
 
-            // 2. Serialize all local data into JSON
             val transactions = repository.getAllTransactionsOnce()
             val rules = repository.getRulesOnce()
             val settings = repository.getSettingsOnce()
 
             val rootJson = JSONObject().apply {
-                put("version", 1)
+                put("version", 2)
                 put("exportedAtMillis", System.currentTimeMillis())
                 put("settings", JSONObject().apply {
                     put("monthlyBudgetCents", settings.monthlyBudgetCents)
                     put("autoRecordEnabled", settings.autoRecordEnabled)
+                    put("requireManualConfirm", settings.requireManualConfirm)
                     put("smartSemanticEnabled", settings.smartSemanticEnabled)
                     put("notifyOnRecorded", settings.notifyOnRecorded)
+                    put("baseCurrencyCode", settings.baseCurrencyCode)
                 })
                 put("transactions", JSONArray().apply {
                     transactions.forEach { tx ->
                         put(JSONObject().apply {
                             put("id", tx.id)
                             put("amountCents", tx.amountCents)
+                            put("currencyCode", tx.currencyCode)
                             put("type", tx.type)
                             put("category", tx.category)
                             put("merchant", tx.merchant)
@@ -167,24 +168,33 @@ class WebDavSyncManager {
             val baseUrl = normalizeBaseUrl(config.serverUrl)
                 ?: return@withContext Result.failure(IllegalArgumentException("请先配置有效的 WebDAV 服务器地址"))
 
-            val folder = config.remoteFolder.trim().trim('/').ifBlank { "ZhiJiZhang" }
-            val fileUrl = "$baseUrl$folder/$BACKUP_FILENAME"
+            val folder = config.remoteFolder.trim().trim('/').ifBlank { "XiaoBenBen" }
             val authHeader = buildAuthHeader(config)
 
-            val getBuilder = Request.Builder().url(fileUrl).get()
-            if (authHeader != null) getBuilder.header("Authorization", authHeader)
-
-            val jsonBody = client.newCall(getBuilder.build()).execute().use { resp ->
-                if (resp.code == 404) {
-                    return@withContext Result.failure(IllegalStateException("远程目录 $folder 下尚未找到备份文件 $BACKUP_FILENAME"))
+            val candidates = listOf(
+                "$baseUrl$folder/$BACKUP_FILENAME",
+                "$baseUrl$folder/$LEGACY_BACKUP_FILENAME"
+            )
+            var jsonBody: String? = null
+            for (fileUrl in candidates) {
+                val getBuilder = Request.Builder().url(fileUrl).get()
+                if (authHeader != null) getBuilder.header("Authorization", authHeader)
+                client.newCall(getBuilder.build()).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        jsonBody = resp.body?.string()
+                    } else if (resp.code != 404) {
+                        return@withContext Result.failure(
+                            IllegalStateException("下载备份失败：HTTP ${resp.code} ${resp.message}")
+                        )
+                    }
                 }
-                if (!resp.isSuccessful) {
-                    return@withContext Result.failure(IllegalStateException("下载备份失败：HTTP ${resp.code} ${resp.message}"))
-                }
-                resp.body?.string() ?: throw IllegalStateException("远程备份文件为空")
+                if (jsonBody != null) break
             }
 
-            val root = JSONObject(jsonBody)
+            val body = jsonBody
+                ?: return@withContext Result.failure(IllegalStateException("远程目录 $folder 下尚未找到备份文件"))
+
+            val root = JSONObject(body)
             val txArray = root.optJSONArray("transactions") ?: JSONArray()
             val txList = buildList {
                 for (i in 0 until txArray.length()) {
@@ -193,8 +203,9 @@ class WebDavSyncManager {
                     if (amount <= 0L) continue
                     add(
                         LedgerTransaction(
-                            id = o.optString("id").ifBlank { java.util.UUID.randomUUID().toString() },
+                            id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
                             amountCents = amount,
+                            currencyCode = o.optString("currencyCode", "CNY").ifBlank { "CNY" },
                             type = o.optString("type", "EXPENSE"),
                             category = o.optString("category", "其他"),
                             merchant = o.optString("merchant", "未知商户"),
@@ -219,7 +230,7 @@ class WebDavSyncManager {
                     val o = ruleArray.getJSONObject(i)
                     add(
                         CustomParsingRule(
-                            id = o.optString("id").ifBlank { java.util.UUID.randomUUID().toString() },
+                            id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
                             name = o.optString("name", "导入规则"),
                             packageFilter = o.optString("packageFilter", "*"),
                             keywordPattern = o.optString("keywordPattern", ""),
@@ -242,8 +253,10 @@ class WebDavSyncManager {
                     BudgetSettings(
                         monthlyBudgetCents = s.optLong("monthlyBudgetCents", 500_000L),
                         autoRecordEnabled = s.optBoolean("autoRecordEnabled", true),
+                        requireManualConfirm = s.optBoolean("requireManualConfirm", false),
                         smartSemanticEnabled = s.optBoolean("smartSemanticEnabled", true),
-                        notifyOnRecorded = s.optBoolean("notifyOnRecorded", true)
+                        notifyOnRecorded = s.optBoolean("notifyOnRecorded", true),
+                        baseCurrencyCode = s.optString("baseCurrencyCode", "CNY").ifBlank { "CNY" }
                     )
                 )
             }
@@ -272,6 +285,7 @@ class WebDavSyncManager {
     }
 
     companion object {
-        const val BACKUP_FILENAME = "zhijizhang_backup.json"
+        const val BACKUP_FILENAME = "xiaobenben_backup.json"
+        const val LEGACY_BACKUP_FILENAME = "zhijizhang_backup.json"
     }
 }
