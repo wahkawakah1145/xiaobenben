@@ -171,7 +171,6 @@ object NotificationBridge {
     }
 
     fun postRecordedConfirmation(context: Context, title: String, body: String) {
-        if (!hasPostNotificationPermission(context)) return
         ensureNotificationChannels(context)
         val openIntent = PendingIntent.getActivity(
             context,
@@ -188,7 +187,11 @@ object NotificationBridge {
             .setContentIntent(openIntent)
             .build()
 
-        NotificationManagerCompat.from(context).notify((System.currentTimeMillis() % 10000).toInt() + 100, notification)
+        postNotificationSafely(
+            context = context,
+            notificationId = (System.currentTimeMillis() % 10000).toInt() + 100,
+            notification = notification
+        )
     }
 
     fun dispatchTestPaymentNotification(context: Context, title: String, body: String): Boolean {
@@ -206,8 +209,11 @@ object NotificationBridge {
             .setAutoCancel(true)
             .build()
 
-        NotificationManagerCompat.from(context).notify((System.currentTimeMillis() % 10000).toInt() + 2000, notification)
-        return true
+        return postNotificationSafely(
+            context = context,
+            notificationId = (System.currentTimeMillis() % 10000).toInt() + 2000,
+            notification = notification
+        )
     }
 
     fun postUrgentBackupReminder(
@@ -240,7 +246,31 @@ object NotificationBridge {
             .setContentIntent(openIntent)
             .build()
 
-        NotificationManagerCompat.from(context).notify(3101, notification)
-        return true
+        return postNotificationSafely(
+            context = context,
+            notificationId = 3101,
+            notification = notification
+        )
+    }
+
+    private fun postNotificationSafely(
+        context: Context,
+        notificationId: Int,
+        notification: android.app.Notification
+    ): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
+        return try {
+            NotificationManagerCompat.from(context).notify(notificationId, notification)
+            true
+        } catch (_: SecurityException) {
+            false
+        }
     }
 }

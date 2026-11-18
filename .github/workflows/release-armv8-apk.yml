@@ -39,9 +39,9 @@ jobs:
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=${SDK_ROOT}" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=${SDK_ROOT}" >> "$GITHUB_ENV"
-          SDKMANAGER="$(find "${SDK_ROOT}/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)"
+          SDKMANAGER="$(find "${SDK_ROOT}/cmdline-tools" "${SDK_ROOT}/tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || command -v sdkmanager || true)"
           if [ -n "${SDKMANAGER}" ]; then
-            yes | "${SDKMANAGER}" --licenses > /dev/null || true
+            yes | "${SDKMANAGER}" --licenses > /dev/null 2>&1 || true
           fi
 
       - name: Set up Gradle
@@ -51,31 +51,47 @@ jobs:
 
       - name: Resolve Release version metadata
         id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag_name }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag_name }}"
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG="${INPUT_TAG:-v1.0.0}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
           VERSION_NAME="${TAG#v}"
-          VERSION_CODE="${{ github.run_number }}"
+          if [ -z "${VERSION_NAME}" ]; then
+            VERSION_NAME="1.0.0"
+          fi
+          VERSION_CODE="${RUN_NUMBER:-1}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
           echo "version_code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Release signing keystore
+        env:
+          SECRET_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          SECRET_STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          SECRET_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
-            base64 --decode debug.keystore.base64 > debug.keystore
-          fi
           KEYSTORE_FILE="${RUNNER_TEMP}/upload-release.jks"
-          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ] && [ -n "${{ secrets.STORE_PASSWORD }}" ] && [ -n "${{ secrets.KEY_PASSWORD }}" ]; then
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "${KEYSTORE_FILE}"
+          rm -f "${KEYSTORE_FILE}"
+          if [ -n "${SECRET_KEYSTORE_BASE64}" ] && [ -n "${SECRET_STORE_PASSWORD}" ] && [ -n "${SECRET_KEY_PASSWORD}" ]; then
+            printf '%s' "${SECRET_KEYSTORE_BASE64}" | tr -d '[:space:]' | base64 --decode > "${KEYSTORE_FILE}"
             echo "KEYSTORE_PATH=${KEYSTORE_FILE}" >> "$GITHUB_ENV"
-            echo "STORE_PASSWORD=${{ secrets.STORE_PASSWORD }}" >> "$GITHUB_ENV"
-            echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> "$GITHUB_ENV"
-            KEYSTORE_PASS="${{ secrets.STORE_PASSWORD }}"
+            echo "STORE_PASSWORD=${SECRET_STORE_PASSWORD}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${SECRET_KEY_PASSWORD}" >> "$GITHUB_ENV"
+            KEYSTORE_PASS="${SECRET_STORE_PASSWORD}"
           else
+            if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+              tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > debug.keystore
+            fi
+            if [ ! -s debug.keystore ]; then
+              echo "::error::Missing debug.keystore / debug.keystore.base64 in repository, and KEYSTORE_BASE64 secrets are not configured. Commit debug.keystore.base64 or set KEYSTORE_BASE64, STORE_PASSWORD, and KEY_PASSWORD secrets."
+              exit 1
+            fi
             echo "::notice::Using repository fixed debug.keystore.base64 signing certificate for consistent release upgrades."
             PASS="android"
             keytool -importkeystore \
@@ -93,32 +109,46 @@ jobs:
             echo "KEY_PASSWORD=${PASS}" >> "$GITHUB_ENV"
             KEYSTORE_PASS="${PASS}"
           fi
-          SIGNING_SHA256="$(keytool -list -v -keystore "${KEYSTORE_FILE}" -storepass "${KEYSTORE_PASS}" | awk -F': ' '/SHA256:/{print $2; exit}')"
-          echo "SIGNING_SHA256=${SIGNING_SHA256}" >> "$GITHUB_ENV"
+          SIGNING_SHA256="$(keytool -list -v -keystore "${KEYSTORE_FILE}" -storepass "${KEYSTORE_PASS}" 2>/dev/null | awk -F': ' '/SHA256:/{print $2; exit}' | tr -d '\r\n' || true)"
+          if [ -n "${SIGNING_SHA256}" ]; then
+            echo "SIGNING_SHA256=${SIGNING_SHA256}" >> "$GITHUB_ENV"
+          fi
 
       - name: Run unit tests
         run: gradle :app:testDebugUnitTest --stacktrace
 
       - name: Build ARMv8 (arm64-v8a) Release APK
+        env:
+          CI_VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          CI_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
         run: |
           gradle :app:assembleRelease \
             -Parmv8Only \
-            -PciVersionName="${{ steps.meta.outputs.version_name }}" \
-            -PciVersionCode="${{ steps.meta.outputs.version_code }}" \
+            -PciVersionName="${CI_VERSION_NAME}" \
+            -PciVersionCode="${CI_VERSION_CODE}" \
             --stacktrace
 
       - name: Package ARMv8 APK artifact
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk \
-            "dist/xiaobenben-${{ steps.meta.outputs.tag }}-arm64-v8a.apk"
+          APK_SRC="app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "${APK_SRC}" ]; then
+            echo "::error::Expected release APK not found at ${APK_SRC}"
+            find app/build/outputs/apk -maxdepth 3 -type f || true
+            exit 1
+          fi
+          cp "${APK_SRC}" "dist/xiaobenben-${TAG}-arm64-v8a.apk"
           ls -lh dist/
 
       - name: Generate release changelog
         id: changelog
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          CUSTOM_NOTES: ${{ github.event.inputs.release_notes }}
         run: |
           BODY_FILE="${RUNNER_TEMP}/release-body.md"
-          TAG="${{ steps.meta.outputs.tag }}"
           PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || git tag --sort=-v:refname | grep -Fxv "${TAG}" | head -n 1 || true)"
 
           {
@@ -133,11 +163,10 @@ jobs:
             echo ""
           } > "${BODY_FILE}"
 
-          CUSTOM_NOTES="${{ github.event.inputs.release_notes }}"
           if [ -n "${CUSTOM_NOTES}" ]; then
             {
               echo "### 发布说明"
-              echo "${CUSTOM_NOTES}"
+              printf '%s\n' "${CUSTOM_NOTES}"
               echo ""
             } >> "${BODY_FILE}"
           fi
@@ -158,12 +187,12 @@ jobs:
 
           {
             echo "### 提交记录"
-            if [ -n "${PREV_TAG}" ]; then
+            if [ -n "${PREV_TAG}" ] && git rev-parse --verify "${PREV_TAG}^{commit}" >/dev/null 2>&1; then
               echo "对比版本：\`${PREV_TAG}...${TAG}\`"
               echo ""
-              git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"- %s (%h)" | head -n 40
+              git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"- %s (%h)" | head -n 40 || true
             else
-              git log --no-merges -n 20 --pretty=format:"- %s (%h)"
+              git log --no-merges -n 20 --pretty=format:"- %s (%h)" || true
             fi
             echo ""
           } >> "${BODY_FILE}"
