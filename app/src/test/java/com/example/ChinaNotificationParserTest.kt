@@ -417,6 +417,98 @@ class ChinaNotificationParserTest {
         assertEquals("12 小时", com.example.service.BackupReminderScheduler.formatIntervalLabel(12))
         org.junit.Assert.assertTrue(com.example.parser.FinanceHumorTips.tips.size >= 35)
     }
+
+    @Test
+    fun extractsOccurredTimestampFromDelayedAndExplicitNotifications() {
+        val refCal = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.NOVEMBER, 19, 10, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val refMillis = refCal.timeInMillis
+
+        val yesterdayTx = ChinaNotificationParser.parse(
+            packageName = "com.eg.android.AlipayGphone",
+            title = "支付宝通知",
+            content = "你于昨天 22:15向夜宵大排档付款55.00元。",
+            referenceTimeMillis = refMillis
+        )
+        assertNotNull(yesterdayTx)
+        assertNotNull(yesterdayTx!!.occurredAtMillis)
+        val parsedYesterdayCal = java.util.Calendar.getInstance().apply {
+            timeInMillis = yesterdayTx.occurredAtMillis!!
+        }
+        assertEquals(2026, parsedYesterdayCal.get(java.util.Calendar.YEAR))
+        assertEquals(java.util.Calendar.NOVEMBER, parsedYesterdayCal.get(java.util.Calendar.MONTH))
+        assertEquals(18, parsedYesterdayCal.get(java.util.Calendar.DAY_OF_MONTH))
+        assertEquals(22, parsedYesterdayCal.get(java.util.Calendar.HOUR_OF_DAY))
+        assertEquals(15, parsedYesterdayCal.get(java.util.Calendar.MINUTE))
+
+        val explicitTx = ChinaNotificationParser.parse(
+            packageName = "com.android.mms",
+            title = "95555 招商银行",
+            content = "【招商银行】账户8812于2026-11-18 08:30:12在星巴克消费42.00元。",
+            referenceTimeMillis = refMillis
+        )
+        assertNotNull(explicitTx)
+        val explicitCal = java.util.Calendar.getInstance().apply {
+            timeInMillis = explicitTx!!.occurredAtMillis!!
+        }
+        assertEquals(18, explicitCal.get(java.util.Calendar.DAY_OF_MONTH))
+        assertEquals(8, explicitCal.get(java.util.Calendar.HOUR_OF_DAY))
+        assertEquals(30, explicitCal.get(java.util.Calendar.MINUTE))
+    }
+
+    @Test
+    fun filtersAndSummarizesYearMonthWeekDayGranularities() {
+        fun calMillis(year: Int, monthZero: Int, day: Int, hour: Int = 12): Long =
+            java.util.Calendar.getInstance().apply {
+                set(year, monthZero, day, hour, 0, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+        // 2026-11-18 is Wednesday
+        val anchor = calMillis(2026, java.util.Calendar.NOVEMBER, 18)
+        val txToday = com.example.model.LedgerTransaction(
+            id = "d1",
+            amountCents = 2500L,
+            merchant = "今日午餐",
+            occurredAtMillis = calMillis(2026, java.util.Calendar.NOVEMBER, 18, 13)
+        )
+        val txSameWeek = com.example.model.LedgerTransaction(
+            id = "w1",
+            amountCents = 4000L,
+            merchant = "周一咖啡",
+            occurredAtMillis = calMillis(2026, java.util.Calendar.NOVEMBER, 16, 9)
+        )
+        val txSameMonthEarlier = com.example.model.LedgerTransaction(
+            id = "m1",
+            amountCents = 8000L,
+            merchant = "月初聚餐",
+            occurredAtMillis = calMillis(2026, java.util.Calendar.NOVEMBER, 2, 19)
+        )
+        val txSameYearEarlierMonth = com.example.model.LedgerTransaction(
+            id = "y1",
+            amountCents = 15000L,
+            merchant = "十月超市",
+            occurredAtMillis = calMillis(2026, java.util.Calendar.OCTOBER, 5, 16)
+        )
+        val all = listOf(txToday, txSameWeek, txSameMonthEarlier, txSameYearEarlierMonth)
+
+        assertEquals(1, com.example.viewmodel.LedgerViewModel.filterByGranularity(all, com.example.model.AnalyticsGranularity.DAY, anchor).size)
+        assertEquals(2, com.example.viewmodel.LedgerViewModel.filterByGranularity(all, com.example.model.AnalyticsGranularity.WEEK, anchor).size)
+        assertEquals(3, com.example.viewmodel.LedgerViewModel.filterByGranularity(all, com.example.model.AnalyticsGranularity.MONTH, anchor).size)
+        assertEquals(4, com.example.viewmodel.LedgerViewModel.filterByGranularity(all, com.example.model.AnalyticsGranularity.YEAR, anchor).size)
+
+        val yearSummary = com.example.parser.LocalSpendingAnalyzer.generatePeriodSummary(
+            periodLabel = "2026年",
+            granularity = com.example.model.AnalyticsGranularity.YEAR,
+            transactions = all,
+            monthlyBudgetCents = 500_000L
+        )
+        org.junit.Assert.assertTrue(yearSummary.contains("2026年"))
+        org.junit.Assert.assertTrue(yearSummary.contains("年度参考预算"))
+    }
 }
+
 
 

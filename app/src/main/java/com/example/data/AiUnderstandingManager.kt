@@ -211,7 +211,7 @@ class AiUnderstandingManager {
         return when (config.providerMode) {
             AiProviderMode.DISABLED -> {
                 fallbackParsed?.let { Result.success(it) }
-                    ?: Result.failure(IllegalStateException("AI 理解接口当前已关闭"))
+                    ?: Result.failure(IllegalStateException("AI理解当前已关闭"))
             }
             AiProviderMode.ONLINE_API -> {
                 parseWithOnlineApi(
@@ -244,7 +244,7 @@ class AiUnderstandingManager {
         val status = getInstallStatus(context, preset.id)
         if (!status.installed) {
             return@withContext Result.failure(
-                IllegalStateException("本地模型「${preset.name}」尚未下载，请先在「AI 理解接口」中按需下载")
+                IllegalStateException("本地模型「${preset.name}」尚未下载，请先在「AI理解」中按需下载")
             )
         }
 
@@ -279,6 +279,7 @@ class AiUnderstandingManager {
 
         val confidence = if (matchedVocabHits.isNotEmpty() && channel != "未知渠道") 0.90f else 0.84f
         val modelTag = preset.name.substringBefore(" ")
+        val occurredAt = ChinaNotificationParser.extractOccurredAtMillis(combined)
         Result.success(
             ParsedNotificationResult(
                 isFinancialTransaction = true,
@@ -294,7 +295,8 @@ class AiUnderstandingManager {
                 confidence = confidence,
                 reasoning = "本地模型 [$modelTag · ${vocabTokens.size} 词表] 离线理解",
                 needsInquiry = false,
-                inquiryReason = ""
+                inquiryReason = "",
+                occurredAtMillis = occurredAt
             )
         )
     }
@@ -315,8 +317,8 @@ class AiUnderstandingManager {
         val chatUrl = normalizeChatCompletionsUrl(rawEndpoint)
         val systemPrompt = """
             你是一个精准的中国大陆账单与支付通知结构化解析引擎。请判断通知是否为真实动账交易，并仅输出一行严格合法的 JSON 对象（不要包含 Markdown 代码块或额外解释）：
-            {"isFinancial":boolean,"amount":number,"currency":"CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD","type":"EXPENSE|INCOME|TRANSFER","category":"餐饮美食|交通出行|购物消费|居家生活|休闲娱乐|医疗健康|工资奖金|理财收益|退款返现|转账收款|转账红包|其他","merchant":"交易对方或商户名","channel":"支付渠道或银行名称","cardLastFour":"四位尾号或null","confidence":0.0到1.0之间数字}
-            注意：验证码、快递、营销广告 notification 必须返回 isFinancial=false；退款或返现 type 应为 INCOME；不可编造未出现的金额。
+            {"isFinancial":boolean,"amount":number,"currency":"CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD","type":"EXPENSE|INCOME|TRANSFER","category":"餐饮美食|交通出行|购物消费|居家生活|休闲娱乐|医疗健康|工资奖金|理财收益|退款返现|转账收款|转账红包|其他","merchant":"交易对方或商户名","channel":"支付渠道或银行名称","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm或MM-dd HH:mm或HH:mm或null","confidence":0.0到1.0之间数字}
+            注意：验证码、快递、营销广告通知必须返回 isFinancial=false；退款或返现 type 应为 INCOME；若文本包含实际消费/入账时间请填入 occurredTime；不可编造未出现的金额。
         """.trimIndent()
 
         val userPrompt = buildString {
@@ -397,6 +399,11 @@ class AiUnderstandingManager {
             val cardLastFour = parsedJson.optString("cardLastFour")
                 .trim()
                 .takeIf { it.length == 4 && it.all(Char::isDigit) }
+            val aiTimeText = parsedJson.optString("occurredTime")
+                .trim()
+                .takeIf { it.isNotBlank() && it != "null" }
+            val occurredAtMillis = aiTimeText?.let { ChinaNotificationParser.extractOccurredAtMillis(it) }
+                ?: ChinaNotificationParser.extractOccurredAtMillis("$title\n$content")
             val confidence = parsedJson.optDouble("confidence", 0.92).toFloat().coerceIn(0.5f, 1.0f)
 
             Result.success(
@@ -412,9 +419,10 @@ class AiUnderstandingManager {
                     sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, "$title $content"),
                     parseMethod = ParseMethod.LOCAL_NLP,
                     confidence = confidence,
-                    reasoning = "在线 AI [$modelName] 语义理解",
+                    reasoning = "在线 AI [$modelName] 理解",
                     needsInquiry = false,
-                    inquiryReason = ""
+                    inquiryReason = "",
+                    occurredAtMillis = occurredAtMillis
                 )
             )
         } catch (e: CancellationException) {

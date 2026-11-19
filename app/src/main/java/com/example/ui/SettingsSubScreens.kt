@@ -25,14 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.CloudDownload
-import androidx.compose.material.icons.rounded.CloudUpload
-import androidx.compose.material.icons.rounded.CurrencyExchange
-import androidx.compose.material.icons.rounded.FileOpen
-import androidx.compose.material.icons.rounded.Save
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.material.icons.rounded.WifiFind
+import com.example.ui.theme.AppIcons
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -73,6 +66,8 @@ import com.example.model.ExchangeRateState
 import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
 import com.example.model.LatinNumberFont
+import com.example.model.PredictiveBackStyle
+import com.example.model.TabClickAnimationStyle
 import com.example.model.ThemeMode
 import com.example.model.WebDavConfig
 import com.example.ui.components.formatCurrency
@@ -178,7 +173,7 @@ fun WebDavSettingsScreen(
                             trailingIcon = {
                                 IconButton(onClick = { showPassword = !showPassword }) {
                                     Icon(
-                                        imageVector = if (showPassword) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                        imageVector = if (showPassword) AppIcons.VisibilityOff else AppIcons.Visibility,
                                         contentDescription = if (showPassword) "隐藏密码" else "显示密码"
                                     )
                                 }
@@ -211,7 +206,7 @@ fun WebDavSettingsScreen(
                                     .minimumInteractiveComponentSize()
                                     .testTag("webdav_test_button")
                             ) {
-                                Icon(Icons.Rounded.WifiFind, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.WifiFind, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("测试连接")
                             }
@@ -223,7 +218,7 @@ fun WebDavSettingsScreen(
                                     .minimumInteractiveComponentSize()
                                     .testTag("webdav_save_button")
                             ) {
-                                Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("保存配置")
                             }
@@ -241,7 +236,7 @@ fun WebDavSettingsScreen(
                                     .minimumInteractiveComponentSize()
                                     .testTag("webdav_backup_button")
                             ) {
-                                Icon(Icons.Rounded.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("立即备份")
                             }
@@ -253,7 +248,7 @@ fun WebDavSettingsScreen(
                                     .minimumInteractiveComponentSize()
                                     .testTag("webdav_restore_button")
                             ) {
-                                Icon(Icons.Rounded.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("恢复合并")
                             }
@@ -436,7 +431,7 @@ fun CurrencySettingsScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("正在联网更新汇率...")
                             } else {
-                                Icon(Icons.Rounded.CurrencyExchange, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.CurrencyExchange, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("联网更新实时汇率数据库")
                             }
@@ -587,7 +582,7 @@ fun ManualImportScreen(
                                 .minimumInteractiveComponentSize()
                                 .testTag("pick_import_file_button")
                         ) {
-                            Icon(Icons.Rounded.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(AppIcons.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(selectedFileName?.let { "已选：$it (重新选择)" } ?: "选择 XLSX / CSV / JSON 文件")
                         }
@@ -887,6 +882,81 @@ fun AppearanceSettingsScreen(
                                 onCheckedChange = {
                                     viewModel.saveAppearanceSettings(appearance.copy(showParseBadge = it))
                                 }
+                            )
+                        }
+                    }
+                }
+            }
+
+            item(key = "navigation_and_gestures") {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text("导航动画与返回手势", style = MaterialTheme.typography.titleMedium)
+
+                        Text("主页点击 Tab 切换动画（支持左右横滑切换页面）", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TabClickAnimationStyle.entries.forEach { style ->
+                                FilterChip(
+                                    selected = appearance.tabClickAnimation == style,
+                                    onClick = { viewModel.saveAppearanceSettings(appearance.copy(tabClickAnimation = style)) },
+                                    label = { Text(style.label) },
+                                    modifier = Modifier.testTag("tab_anim_chip_${style.name}")
+                                )
+                            }
+                        }
+
+                        HorizontalDivider()
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("预测性返回与横滑返回上一级", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = "支持系统边缘预测性返回过渡动画，并可在多级菜单中向右横滑返回上一级",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = appearance.predictiveBackEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.saveAppearanceSettings(appearance.copy(predictiveBackEnabled = enabled))
+                                },
+                                modifier = Modifier.testTag("toggle_predictive_back")
+                            )
+                        }
+
+                        if (appearance.predictiveBackEnabled) {
+                            Text("预测性返回与横滑过渡样式", style = MaterialTheme.typography.labelLarge)
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                PredictiveBackStyle.entries.forEach { style ->
+                                    FilterChip(
+                                        selected = appearance.predictiveBackStyle == style,
+                                        onClick = {
+                                            viewModel.saveAppearanceSettings(appearance.copy(predictiveBackStyle = style))
+                                        },
+                                        label = { Text(style.label) },
+                                        modifier = Modifier.testTag("predictive_back_style_chip_${style.name}")
+                                    )
+                                }
+                            }
+                            Text(
+                                text = appearance.predictiveBackStyle.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }

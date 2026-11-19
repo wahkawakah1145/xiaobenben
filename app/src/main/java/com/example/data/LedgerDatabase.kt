@@ -14,7 +14,9 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.model.CustomParsingRule
 import com.example.model.LedgerTransaction
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 
 @Entity(tableName = "transactions")
 data class TransactionEntity(
@@ -245,6 +247,21 @@ interface LedgerDao {
 
     @Query("DELETE FROM notification_inquiries WHERE id = :id")
     suspend fun deleteInquiryById(id: String)
+
+    @Query("SELECT COUNT(*) FROM transactions")
+    suspend fun countTransactions(): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE rawNotification IS NOT NULL AND rawNotification != ''")
+    suspend fun countRawNotifications(): Int
+
+    @Query("UPDATE transactions SET rawNotification = NULL WHERE confirmed = 1 AND rawNotification IS NOT NULL AND occurredAtMillis < :cutoffMillis")
+    suspend fun pruneOldRawNotifications(cutoffMillis: Long): Int
+
+    @Query("SELECT COUNT(*) FROM notification_inquiries")
+    suspend fun countInquiries(): Int
+
+    @Query("DELETE FROM notification_inquiries WHERE createdAtMillis < :cutoffMillis")
+    suspend fun pruneStaleInquiries(cutoffMillis: Long): Int
 }
 
 @Database(
@@ -254,6 +271,12 @@ interface LedgerDao {
 )
 abstract class LedgerDatabase : RoomDatabase() {
     abstract fun ledgerDao(): LedgerDao
+
+    suspend fun vacuumAndCheckpoint() = withContext(Dispatchers.IO) {
+        val db = openHelper.writableDatabase
+        db.query("PRAGMA wal_checkpoint(TRUNCATE)").close()
+        db.execSQL("VACUUM")
+    }
 
     companion object {
         @Volatile
@@ -310,6 +333,17 @@ abstract class LedgerDatabase : RoomDatabase() {
                     "smart_ledger.db"
                 )
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addCallback(object : Callback() {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            super.onCreate(db)
+                            runCatching { db.execSQL("PRAGMA auto_vacuum = INCREMENTAL") }
+                        }
+
+                        override fun onOpen(db: SupportSQLiteDatabase) {
+                            super.onOpen(db)
+                            runCatching { db.query("PRAGMA incremental_vacuum").close() }
+                        }
+                    })
                     .build()
                     .also { INSTANCE = it }
             }

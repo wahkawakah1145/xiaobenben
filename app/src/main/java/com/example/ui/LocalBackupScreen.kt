@@ -22,11 +22,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.Restore
-import androidx.compose.material.icons.rounded.WarningAmber
+import com.example.ui.theme.AppIcons
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -189,7 +185,7 @@ fun LocalBackupScreen(
                                     .minimumInteractiveComponentSize()
                                     .testTag("local_export_backup_button")
                             ) {
-                                Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("导出本地备份")
                             }
@@ -204,7 +200,7 @@ fun LocalBackupScreen(
                                     .minimumInteractiveComponentSize()
                                     .testTag("local_restore_backup_button")
                             ) {
-                                Icon(Icons.Rounded.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("从备份恢复")
                             }
@@ -276,7 +272,7 @@ fun LocalBackupScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.WarningAmber,
+                                        imageVector = AppIcons.WarningAmber,
                                         contentDescription = null,
                                         tint = MaterialTheme.colorScheme.error,
                                         modifier = Modifier.size(18.dp)
@@ -405,7 +401,7 @@ fun LocalBackupScreen(
                                 .minimumInteractiveComponentSize()
                                 .testTag("test_urgent_backup_notification_button")
                         ) {
-                            Icon(Icons.Rounded.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(AppIcons.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("立即发送测试通知")
                         }

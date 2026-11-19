@@ -33,18 +33,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.DoneAll
-import androidx.compose.material.icons.rounded.HelpOutline
-import androidx.compose.material.icons.rounded.NotificationsOff
-import androidx.compose.material.icons.rounded.PendingActions
-import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Tune
+import com.example.ui.components.formatDateTimeFull
+import com.example.ui.components.parseDateTimeInputMillis
+import com.example.ui.theme.AppIcons
+import java.text.SimpleDateFormat
+import java.util.Date
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -626,7 +624,7 @@ fun LedgerHomeScreen(
             initialTransaction = null,
             defaultCurrencyCode = baseCurrency,
             onDismiss = { showCreateDialog = false },
-            onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note ->
+            onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.addManualTransaction(
                     amountCents = amountCents,
                     currencyCode = currencyCode,
@@ -635,7 +633,8 @@ fun LedgerHomeScreen(
                     merchant = merchant,
                     channel = channel,
                     cardLastFour = tail,
-                    note = note
+                    note = note,
+                    occurredAtMillis = occurredAtMillis
                 )
                 showCreateDialog = false
             }
@@ -647,7 +646,7 @@ fun LedgerHomeScreen(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
             onDismiss = { editingTransaction = null },
-            onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note ->
+            onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
                     txId = tx.id,
                     amountCents = amountCents,
@@ -658,7 +657,7 @@ fun LedgerHomeScreen(
                     channel = channel,
                     cardLastFour = tail,
                     note = note,
-                    occurredAtMillis = tx.occurredAtMillis,
+                    occurredAtMillis = occurredAtMillis,
                     confirmed = true
                 )
                 editingTransaction = null
@@ -674,7 +673,7 @@ fun LedgerHomeScreen(
                 viewModel.dismissInquiry(inquiry.id)
                 resolvingInquiry = null
             },
-            onConfirm = { amountCents, currencyCode, type, category, merchant, channel, learnRule, ruleKeyword, ruleName, numberFormatPattern, ruleDefaultType ->
+            onConfirm = { amountCents, currencyCode, type, category, merchant, channel, learnRule, ruleKeyword, ruleName, numberFormatPattern, ruleDefaultType, occurredAtMillis ->
                 viewModel.resolveInquiry(
                     inquiry = inquiry,
                     amountCents = amountCents,
@@ -687,7 +686,8 @@ fun LedgerHomeScreen(
                     ruleKeyword = ruleKeyword,
                     ruleName = ruleName,
                     numberFormatPattern = numberFormatPattern,
-                    ruleDefaultType = ruleDefaultType
+                    ruleDefaultType = ruleDefaultType,
+                    occurredAtMillis = occurredAtMillis
                 )
                 resolvingInquiry = null
             }
@@ -840,7 +840,7 @@ private fun NotificationInquirySectionCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.HelpOutline,
+                    imageVector = AppIcons.HelpOutline,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.secondary
                 )
@@ -954,7 +954,8 @@ private fun ResolveInquiryDialog(
         ruleKeyword: String,
         ruleName: String,
         numberFormatPattern: String,
-        ruleDefaultType: String
+        ruleDefaultType: String,
+        occurredAtMillis: Long
     ) -> Unit
 ) {
     val initialAmount = if (inquiry.suggestedAmountCents > 0L) {
@@ -975,6 +976,12 @@ private fun ResolveInquiryDialog(
     }
     var category by remember(inquiry.id) {
         mutableStateOf(inquiry.suggestedCategory.ifBlank { "餐饮美食" })
+    }
+    var dateText by remember(inquiry.id) {
+        mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(inquiry.occurredAtMillis)))
+    }
+    var timeText by remember(inquiry.id) {
+        mutableStateOf(SimpleDateFormat("HH:mm", Locale.US).format(Date(inquiry.occurredAtMillis)))
     }
     var learnRule by remember(inquiry.id) { mutableStateOf(true) }
 
@@ -1026,7 +1033,7 @@ private fun ResolveInquiryDialog(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Rounded.AutoFixHigh, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Icon(AppIcons.AutoFixHigh, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Text("确认通知并学习规则")
             }
         },
@@ -1121,6 +1128,23 @@ private fun ResolveInquiryDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = dateText,
+                        onValueChange = { dateText = it.take(10); amountError = null },
+                        label = { Text("日期 (yyyy-MM-dd)") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1.25f)
+                    )
+                    OutlinedTextField(
+                        value = timeText,
+                        onValueChange = { timeText = it.take(5); amountError = null },
+                        label = { Text("时间 (HH:mm)") },
+                        singleLine = true,
+                        modifier = Modifier.weight(0.95f)
+                    )
+                }
 
                 Text(
                     text = "分类",
@@ -1277,6 +1301,7 @@ private fun ResolveInquiryDialog(
                         amountError = "请输入有效金额"
                         return@Button
                     }
+                    val parsedMillis = parseDateTimeInputMillis(dateText, timeText) ?: inquiry.occurredAtMillis
                     onConfirm(
                         (yuan * 100.0).roundToLong(),
                         currencyCode,
@@ -1288,7 +1313,8 @@ private fun ResolveInquiryDialog(
                         resolvedKeyword.ifBlank { channel },
                         ruleName.trim(),
                         numberFormatStyle.name,
-                        if (followAutoTypeInRule) "AUTO" else txType.name
+                        if (followAutoTypeInRule) "AUTO" else txType.name,
+                        parsedMillis
                     )
                 }
             ) {
@@ -1330,7 +1356,7 @@ private fun PendingConfirmationCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.PendingActions,
+                        imageVector = AppIcons.PendingActions,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.tertiary
                     )
@@ -1344,7 +1370,7 @@ private fun PendingConfirmationCard(
                     onClick = onConfirmAll,
                     modifier = Modifier.testTag("confirm_all_pending_button")
                 ) {
-                    Icon(Icons.Rounded.DoneAll, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(AppIcons.DoneAll, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("全部确认")
                 }
@@ -1387,7 +1413,7 @@ private fun PendingConfirmationCard(
                             onClick = { onEditOne(tx) },
                             modifier = Modifier.size(36.dp)
                         ) {
-                            Icon(Icons.Rounded.Tune, contentDescription = "编辑", modifier = Modifier.size(18.dp))
+                            Icon(AppIcons.Tune, contentDescription = "编辑", modifier = Modifier.size(18.dp))
                         }
                         IconButton(
                             onClick = { onDiscardOne(tx) },
@@ -1433,7 +1459,7 @@ private fun ListenerStatusBanner(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Icon(
-                imageVector = if (isEnabled) Icons.Rounded.CheckCircle else Icons.Rounded.NotificationsOff,
+                imageVector = if (isEnabled) Icons.Rounded.CheckCircle else AppIcons.NotificationsOff,
                 contentDescription = null,
                 tint = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
             )
@@ -1794,7 +1820,7 @@ private fun EmptyLedgerCard(
                             .minimumInteractiveComponentSize()
                             .testTag("empty_open_parser_button")
                     ) {
-                        Icon(Icons.Rounded.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(AppIcons.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("识别规则")
                     }

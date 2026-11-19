@@ -43,8 +43,9 @@ android {
 
   buildTypes {
     release {
-      isCrunchPngs = false
-      isMinifyEnabled = false
+      isCrunchPngs = true
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
@@ -63,6 +64,20 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+  }
+  androidResources {
+    localeFilters += listOf("zh", "en")
+  }
+  packaging {
+    resources {
+      excludes += listOf(
+        "META-INF/LICENSE*",
+        "META-INF/NOTICE*",
+        "META-INF/INDEX.LIST",
+        "META-INF/*.kotlin_module",
+        "DebugProbesKt.bin"
+      )
+    }
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
@@ -83,7 +98,8 @@ dependencies {
   // implementation(libs.androidx.camera.lifecycle)
   // implementation(libs.androidx.camera.view)
   implementation(libs.androidx.compose.material.icons.core)
-  implementation(libs.androidx.compose.material.icons.extended)
+  // Replaced ~18MB material-icons-extended with lightweight AppIcons vectors in ui/theme/AppIcons.kt
+  // implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)

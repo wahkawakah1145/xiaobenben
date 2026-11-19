@@ -40,22 +40,34 @@ object LedgerBackupCodec {
                     put(JSONObject().apply {
                         put("id", tx.id)
                         put("amountCents", tx.amountCents)
-                        put("currencyCode", tx.currencyCode)
+                        if (!tx.currencyCode.equals("CNY", ignoreCase = true)) {
+                            put("currencyCode", tx.currencyCode)
+                        }
                         put("type", tx.type)
                         put("category", tx.category)
                         put("merchant", tx.merchant)
                         put("channel", tx.channel)
-                        put("cardLastFour", tx.cardLastFour ?: JSONObject.NULL)
-                        put("sourceApp", tx.sourceApp)
-                        put("parseMethod", tx.parseMethod)
-                        put("rawNotification", tx.rawNotification ?: JSONObject.NULL)
-                        put("note", tx.note ?: JSONObject.NULL)
+                        tx.cardLastFour?.takeIf { it.isNotBlank() }?.let { put("cardLastFour", it) }
+                        if (tx.sourceApp != "MANUAL") put("sourceApp", tx.sourceApp)
+                        if (tx.parseMethod != "MANUAL") put("parseMethod", tx.parseMethod)
+                        tx.rawNotification?.takeIf { it.isNotBlank() }?.let {
+                            put("rawNotification", it.take(220))
+                        }
+                        tx.note?.takeIf { it.isNotBlank() }?.let { put("note", it.take(120)) }
                         put("occurredAtMillis", tx.occurredAtMillis)
-                        put("confirmed", tx.confirmed)
-                        put("recordedBaseCurrencyCode", tx.recordedBaseCurrencyCode)
-                        put("recordedRateToBase", tx.recordedRateToBase)
-                        put("createdAtMillis", tx.createdAtMillis)
-                        put("updatedAtMillis", tx.updatedAtMillis)
+                        if (!tx.confirmed) put("confirmed", false)
+                        if (!tx.recordedBaseCurrencyCode.equals("CNY", ignoreCase = true)) {
+                            put("recordedBaseCurrencyCode", tx.recordedBaseCurrencyCode)
+                        }
+                        if (tx.recordedRateToBase > 0.0) {
+                            put("recordedRateToBase", tx.recordedRateToBase)
+                        }
+                        if (tx.createdAtMillis != tx.occurredAtMillis) {
+                            put("createdAtMillis", tx.createdAtMillis)
+                        }
+                        if (tx.updatedAtMillis != tx.occurredAtMillis) {
+                            put("updatedAtMillis", tx.updatedAtMillis)
+                        }
                     })
                 }
             })
@@ -64,22 +76,22 @@ object LedgerBackupCodec {
                     put(JSONObject().apply {
                         put("id", rule.id)
                         put("name", rule.name)
-                        put("packageFilter", rule.packageFilter)
+                        if (rule.packageFilter != "*") put("packageFilter", rule.packageFilter)
                         put("keywordPattern", rule.keywordPattern)
                         put("channelName", rule.channelName)
                         put("defaultCategory", rule.defaultCategory)
                         put("defaultType", rule.defaultType)
-                        put("merchantOverride", rule.merchantOverride)
-                        put("numberFormatPattern", rule.numberFormatPattern)
-                        put("priority", rule.priority)
-                        put("enabled", rule.enabled)
+                        if (rule.merchantOverride.isNotBlank()) put("merchantOverride", rule.merchantOverride)
+                        if (rule.numberFormatPattern != "AUTO") put("numberFormatPattern", rule.numberFormatPattern)
+                        if (rule.priority != 10) put("priority", rule.priority)
+                        if (!rule.enabled) put("enabled", false)
                         put("createdAtMillis", rule.createdAtMillis)
                         put("updatedAtMillis", rule.updatedAtMillis)
                     })
                 }
             })
         }
-        return rootJson.toString(2)
+        return rootJson.toString()
     }
 
     fun decodeBackupJson(

@@ -30,10 +30,15 @@ object ManualImportManager {
     private val dateFormats = listOf(
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA),
         SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA),
+        SimpleDateFormat("yyyy-M-d H:mm:ss", Locale.CHINA),
+        SimpleDateFormat("yyyy-M-d H:mm", Locale.CHINA),
         SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.CHINA),
         SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.CHINA),
+        SimpleDateFormat("yyyy/M/d H:mm:ss", Locale.CHINA),
+        SimpleDateFormat("yyyy/M/d H:mm", Locale.CHINA),
         SimpleDateFormat("yyyy年MM月dd日 HH:mm:ss", Locale.CHINA),
         SimpleDateFormat("yyyy年MM月dd日 HH:mm", Locale.CHINA),
+        SimpleDateFormat("yyyy年M月d日 H:mm", Locale.CHINA),
         SimpleDateFormat("yyyy-MM-dd", Locale.CHINA),
         SimpleDateFormat("yyyy/MM/dd", Locale.CHINA),
         SimpleDateFormat("yyyyMMdd HH:mm:ss", Locale.CHINA),
@@ -530,12 +535,13 @@ object ManualImportManager {
         val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
 
         for (line in lines) {
+            val extractedLineTime = ChinaNotificationParser.extractOccurredAtMillis(line)
             val parsed = ChinaNotificationParser.parse(
                 packageName = "manual.import",
                 title = "",
                 content = line,
                 customRules = customRules,
-                enableLocalSemanticPass = true
+                enableLocalSemanticPass = false
             )
             if (parsed != null && parsed.amountCents > 0L) {
                 items.add(
@@ -549,8 +555,8 @@ object ManualImportManager {
                         cardLastFour = parsed.cardLastFour,
                         sourceApp = SourceApp.IMPORT.name,
                         parseMethod = ParseMethod.IMPORT.name,
-                        rawNotification = line.take(300),
-                        occurredAtMillis = System.currentTimeMillis(),
+                        rawNotification = line.take(220),
+                        occurredAtMillis = parsed.occurredAtMillis ?: extractedLineTime ?: System.currentTimeMillis(),
                         confirmed = true
                     )
                 )
@@ -580,8 +586,8 @@ object ManualImportManager {
                         channel = "手动导入",
                         sourceApp = SourceApp.IMPORT.name,
                         parseMethod = ParseMethod.IMPORT.name,
-                        rawNotification = line.take(300),
-                        occurredAtMillis = System.currentTimeMillis(),
+                        rawNotification = line.take(220),
+                        occurredAtMillis = extractedLineTime ?: System.currentTimeMillis(),
                         confirmed = true
                     )
                 )
@@ -671,6 +677,6 @@ object ManualImportManager {
                 if (parsed != null) return parsed.time
             }
         }
-        return System.currentTimeMillis()
+        return ChinaNotificationParser.extractOccurredAtMillis(normalized) ?: System.currentTimeMillis()
     }
 }

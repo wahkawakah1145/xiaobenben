@@ -5,9 +5,13 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,29 +23,33 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Insights
-import androidx.compose.material.icons.rounded.PieChart
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -55,12 +63,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextGeometricTransform
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
+import androidx.compose.ui.unit.sp
 import com.example.data.CurrencyExchangeManager
 import com.example.model.AnalyticsChartStyle
+import com.example.model.AnalyticsGranularity
 import com.example.model.BudgetSettings
 import com.example.model.ExchangeRateState
 import com.example.model.LedgerTransaction
@@ -72,13 +84,13 @@ import com.example.ui.components.channelBrandColor
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatDateHeader
 import com.example.ui.components.formatTimeShort
+import com.example.ui.theme.AppIcons
 import com.example.ui.theme.ChartPalette
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
 import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
-import java.util.Calendar
 
 private data class ChartDatum(
     val label: String,
@@ -86,6 +98,7 @@ private data class ChartDatum(
     val color: Color
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AnalyticsScreen(
     transactionsState: UiState<List<LedgerTransaction>>,
@@ -94,9 +107,8 @@ fun AnalyticsScreen(
     viewModel: LedgerViewModel,
     modifier: Modifier = Modifier
 ) {
-    val nowCal = remember { Calendar.getInstance() }
-    var selectedYear by remember { mutableIntStateOf(nowCal.get(Calendar.YEAR)) }
-    var selectedMonth by remember { mutableIntStateOf(nowCal.get(Calendar.MONTH)) }
+    var selectedGranularity by remember { mutableStateOf(AnalyticsGranularity.MONTH) }
+    var anchorMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     var categoryChartStyle by remember { mutableStateOf(AnalyticsChartStyle.PIE) }
     var channelChartStyle by remember { mutableStateOf(AnalyticsChartStyle.BAR) }
@@ -109,9 +121,13 @@ fun AnalyticsScreen(
     val baseCurrency = settings.baseCurrencyCode
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
 
-    val monthTransactions by remember(allTransactions, selectedYear, selectedMonth) {
+    val periodTitle = remember(selectedGranularity, anchorMillis) {
+        LedgerViewModel.formatPeriodTitle(selectedGranularity, anchorMillis)
+    }
+
+    val periodTransactions by remember(allTransactions, selectedGranularity, anchorMillis) {
         derivedStateOf {
-            LedgerViewModel.filterByMonth(allTransactions, selectedYear, selectedMonth)
+            LedgerViewModel.filterByGranularity(allTransactions, selectedGranularity, anchorMillis)
                 .filter { it.confirmed }
         }
     }
@@ -123,19 +139,19 @@ fun AnalyticsScreen(
         exchangeRates.ratesToCny
     )
 
-    val monthExpenseTxs = remember(monthTransactions) {
-        monthTransactions.filter { it.txType == TransactionType.EXPENSE }
+    val periodExpenseTxs = remember(periodTransactions) {
+        periodTransactions.filter { it.txType == TransactionType.EXPENSE }
     }
 
-    val totalExpense = remember(monthExpenseTxs, exchangeRates.ratesToCny, baseCurrency) {
-        monthExpenseTxs.sumOf { toBase(it) }
+    val totalExpense = remember(periodExpenseTxs, exchangeRates.ratesToCny, baseCurrency) {
+        periodExpenseTxs.sumOf { toBase(it) }
     }
-    val totalIncome = remember(monthTransactions, exchangeRates.ratesToCny, baseCurrency) {
-        monthTransactions.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
+    val totalIncome = remember(periodTransactions, exchangeRates.ratesToCny, baseCurrency) {
+        periodTransactions.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
     }
 
-    val categoryData = remember(monthExpenseTxs, exchangeRates.ratesToCny, baseCurrency) {
-        monthExpenseTxs
+    val categoryData = remember(periodExpenseTxs, exchangeRates.ratesToCny, baseCurrency) {
+        periodExpenseTxs
             .groupBy { it.category }
             .mapValues { (_, list) -> list.sumOf { toBase(it) } }
             .entries
@@ -145,8 +161,8 @@ fun AnalyticsScreen(
             }
     }
 
-    val channelData = remember(monthExpenseTxs, exchangeRates.ratesToCny, baseCurrency) {
-        monthExpenseTxs
+    val channelData = remember(periodExpenseTxs, exchangeRates.ratesToCny, baseCurrency) {
+        periodExpenseTxs
             .groupBy { it.channel }
             .mapValues { (_, list) -> list.sumOf { toBase(it) } }
             .entries
@@ -156,20 +172,34 @@ fun AnalyticsScreen(
             }
     }
 
-    val filteredCategoryTxs = remember(monthExpenseTxs, selectedCategoryFilter) {
+    val filteredCategoryTxs = remember(periodExpenseTxs, selectedCategoryFilter) {
         selectedCategoryFilter?.let { target ->
-            monthExpenseTxs.filter { it.category == target }.sortedByDescending { it.occurredAtMillis }
+            periodExpenseTxs.filter { it.category == target }.sortedByDescending { it.occurredAtMillis }
         } ?: emptyList()
     }
 
-    val filteredChannelTxs = remember(monthExpenseTxs, selectedChannelFilter) {
+    val filteredChannelTxs = remember(periodExpenseTxs, selectedChannelFilter) {
         selectedChannelFilter?.let { target ->
-            monthExpenseTxs.filter { it.channel == target }.sortedByDescending { it.occurredAtMillis }
+            periodExpenseTxs.filter { it.channel == target }.sortedByDescending { it.occurredAtMillis }
         } ?: emptyList()
     }
 
-    val summaryText = remember(monthTransactions, selectedYear, selectedMonth, exchangeRates.ratesToCny, baseCurrency) {
-        viewModel.buildMonthlyInsight(selectedYear, selectedMonth)
+    val summaryText = remember(periodTransactions, selectedGranularity, anchorMillis, exchangeRates.ratesToCny, baseCurrency) {
+        viewModel.buildPeriodInsight(selectedGranularity, anchorMillis)
+    }
+
+    val summaryCardTitle = when (selectedGranularity) {
+        AnalyticsGranularity.YEAR -> "年度收支分析"
+        AnalyticsGranularity.MONTH -> "月度收支分析"
+        AnalyticsGranularity.WEEK -> "周度收支分析"
+        AnalyticsGranularity.DAY -> "日度收支分析"
+    }
+
+    val emptyPeriodMessage = when (selectedGranularity) {
+        AnalyticsGranularity.YEAR -> "本年度暂无支出记录。"
+        AnalyticsGranularity.MONTH -> "本月暂无支出记录。"
+        AnalyticsGranularity.WEEK -> "本周暂无支出记录。"
+        AnalyticsGranularity.DAY -> "当日暂无支出记录。"
     }
 
     Box(
@@ -183,50 +213,90 @@ fun AnalyticsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            item(key = "month_switcher") {
+            item(key = "period_switcher") {
                 Card(
                     shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        IconButton(
-                            onClick = {
-                                selectedCategoryFilter = null
-                                selectedChannelFilter = null
-                                if (selectedMonth == 0) {
-                                    selectedMonth = 11
-                                    selectedYear -= 1
-                                } else {
-                                    selectedMonth -= 1
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            AnalyticsGranularity.entries.forEachIndexed { index, granularity ->
+                                SegmentedButton(
+                                    selected = selectedGranularity == granularity,
+                                    onClick = {
+                                        selectedGranularity = granularity
+                                        selectedCategoryFilter = null
+                                        selectedChannelFilter = null
+                                    },
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index = index,
+                                        count = AnalyticsGranularity.entries.size
+                                    ),
+                                    modifier = Modifier.testTag("analytics_granularity_${granularity.name}")
+                                ) {
+                                    Text(granularity.label, maxLines = 1)
                                 }
                             }
-                        ) {
-                            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, contentDescription = "上个月")
                         }
-                        Text(
-                            text = "${selectedYear}年${selectedMonth + 1}月 收支分析 ($baseCurrency)",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        IconButton(
-                            onClick = {
-                                selectedCategoryFilter = null
-                                selectedChannelFilter = null
-                                if (selectedMonth == 11) {
-                                    selectedMonth = 0
-                                    selectedYear += 1
-                                } else {
-                                    selectedMonth += 1
-                                }
-                            }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = "下个月")
+                            IconButton(
+                                onClick = {
+                                    selectedCategoryFilter = null
+                                    selectedChannelFilter = null
+                                    anchorMillis = LedgerViewModel.shiftPeriodAnchor(selectedGranularity, anchorMillis, -1)
+                                }
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                                    contentDescription = "上一${selectedGranularity.label}"
+                                )
+                            }
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                CompactFullText(
+                                    text = "$periodTitle 收支分析 ($baseCurrency)",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2
+                                )
+                                AssistChip(
+                                    onClick = {
+                                        selectedCategoryFilter = null
+                                        selectedChannelFilter = null
+                                        anchorMillis = System.currentTimeMillis()
+                                    },
+                                    label = { Text("回到今天") },
+                                    modifier = Modifier.testTag("analytics_today_chip")
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    selectedCategoryFilter = null
+                                    selectedChannelFilter = null
+                                    anchorMillis = LedgerViewModel.shiftPeriodAnchor(selectedGranularity, anchorMillis, +1)
+                                }
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                    contentDescription = "下一${selectedGranularity.label}"
+                                )
+                            }
                         }
                     }
                 }
@@ -244,11 +314,14 @@ fun AnalyticsScreen(
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("总支出", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(
+                            CompactFullText(
                                 text = formatCurrency(totalExpense, baseCurrency),
-                                style = MaterialTheme.typography.titleLarge.copy(fontFamily = numberFont),
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontFamily = numberFont,
+                                    fontWeight = FontWeight.Bold
+                                ),
                                 color = ExpenseCoral,
-                                fontWeight = FontWeight.Bold
+                                maxLines = 2
                             )
                         }
                     }
@@ -259,18 +332,21 @@ fun AnalyticsScreen(
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("总收入", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(
+                            CompactFullText(
                                 text = formatCurrency(totalIncome, baseCurrency),
-                                style = MaterialTheme.typography.titleLarge.copy(fontFamily = numberFont),
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontFamily = numberFont,
+                                    fontWeight = FontWeight.Bold
+                                ),
                                 color = IncomeJade,
-                                fontWeight = FontWeight.Bold
+                                maxLines = 2
                             )
                         }
                     }
                 }
             }
 
-            // 1. Category Chart Card with Top-Right Chart Switcher + Clickable Legend/List
+            // 1. Category Chart Card
             item(key = "category_chart") {
                 Card(
                     shape = RoundedCornerShape(22.dp),
@@ -289,7 +365,7 @@ fun AnalyticsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("支出分类占比", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    text = "点击图例或分类行可筛选条目",
+                                    text = "点击图例或分类行可筛选条目（完整展示全部数据）",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -303,7 +379,7 @@ fun AnalyticsScreen(
 
                         if (categoryData.isEmpty() || totalExpense <= 0L) {
                             Text(
-                                text = "本月暂无支出记录。",
+                                text = emptyPeriodMessage,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -312,10 +388,10 @@ fun AnalyticsScreen(
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                                 ) {
                                     Box(
-                                        modifier = Modifier.size(146.dp),
+                                        modifier = Modifier.size(154.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         DonutPieChart(
@@ -324,21 +400,28 @@ fun AnalyticsScreen(
                                             selectedLabel = selectedCategoryFilter,
                                             modifier = Modifier.fillMaxSize()
                                         )
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text(
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            modifier = Modifier.padding(horizontal = 24.dp)
+                                        ) {
+                                            CompactFullText(
                                                 text = selectedCategoryFilter ?: "共支出",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
+                                                textAlign = TextAlign.Center,
+                                                maxLines = 2
                                             )
                                             val centerCents = selectedCategoryFilter?.let { sel ->
                                                 categoryData.firstOrNull { it.label == sel }?.cents ?: totalExpense
                                             } ?: totalExpense
-                                            Text(
+                                            CompactFullText(
                                                 text = formatCurrency(centerCents, baseCurrency),
-                                                style = MaterialTheme.typography.labelLarge.copy(fontFamily = numberFont),
-                                                fontWeight = FontWeight.Bold
+                                                style = MaterialTheme.typography.labelLarge.copy(
+                                                    fontFamily = numberFont,
+                                                    fontWeight = FontWeight.Bold
+                                                ),
+                                                textAlign = TextAlign.Center,
+                                                maxLines = 2
                                             )
                                         }
                                     }
@@ -348,12 +431,13 @@ fun AnalyticsScreen(
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         categoryData.forEach { datum ->
-                                            val pct = (datum.cents * 100.0 / totalExpense).toInt()
+                                            val pct = (datum.cents * 100.0 / totalExpense)
+                                            val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
                                             val isSelected = selectedCategoryFilter == datum.label
                                             ClickableLegendRow(
                                                 label = datum.label,
                                                 color = datum.color,
-                                                valueText = "$pct% · ${formatCurrency(datum.cents, baseCurrency)}",
+                                                valueText = "$pctText · ${formatCurrency(datum.cents, baseCurrency)}",
                                                 selected = isSelected,
                                                 testTag = "category_legend_${datum.label}",
                                                 onClick = {
@@ -365,7 +449,8 @@ fun AnalyticsScreen(
                                 }
                             } else {
                                 VerticalBarChart(
-                                    items = categoryData.take(7),
+                                    items = categoryData,
+                                    baseCurrencyCode = baseCurrency,
                                     selectedLabel = selectedCategoryFilter,
                                     onSelect = { label ->
                                         selectedCategoryFilter = if (selectedCategoryFilter == label) null else label
@@ -374,11 +459,13 @@ fun AnalyticsScreen(
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     categoryData.forEach { datum ->
                                         val ratio = (datum.cents.toFloat() / totalExpense.toFloat()).coerceIn(0f, 1f)
+                                        val pct = datum.cents * 100.0 / totalExpense
+                                        val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
                                         val isSelected = selectedCategoryFilter == datum.label
                                         ClickableBreakdownRow(
                                             label = datum.label,
                                             color = datum.color,
-                                            amountText = "${formatCurrency(datum.cents, baseCurrency)} (${(ratio * 100).toInt()}%)",
+                                            amountText = "${formatCurrency(datum.cents, baseCurrency)} ($pctText)",
                                             ratio = ratio,
                                             selected = isSelected,
                                             testTag = "category_row_${datum.label}",
@@ -405,7 +492,7 @@ fun AnalyticsScreen(
                 }
             }
 
-            // 2. Channel Distribution Card with Top-Right Chart Switcher + Clickable Legend/List
+            // 2. Channel Distribution Card
             item(key = "channel_breakdown") {
                 Card(
                     shape = RoundedCornerShape(22.dp),
@@ -424,7 +511,7 @@ fun AnalyticsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("渠道分布", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    text = "点击图例或渠道行可筛选条目",
+                                    text = "点击图例或渠道行可筛选条目（完整展示全部渠道）",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -447,10 +534,10 @@ fun AnalyticsScreen(
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                                 ) {
                                     Box(
-                                        modifier = Modifier.size(146.dp),
+                                        modifier = Modifier.size(154.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         DonutPieChart(
@@ -459,21 +546,28 @@ fun AnalyticsScreen(
                                             selectedLabel = selectedChannelFilter,
                                             modifier = Modifier.fillMaxSize()
                                         )
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text(
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            modifier = Modifier.padding(horizontal = 24.dp)
+                                        ) {
+                                            CompactFullText(
                                                 text = selectedChannelFilter ?: "渠道汇总",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
+                                                textAlign = TextAlign.Center,
+                                                maxLines = 2
                                             )
                                             val centerCents = selectedChannelFilter?.let { sel ->
                                                 channelData.firstOrNull { it.label == sel }?.cents ?: totalExpense
                                             } ?: totalExpense
-                                            Text(
+                                            CompactFullText(
                                                 text = formatCurrency(centerCents, baseCurrency),
-                                                style = MaterialTheme.typography.labelLarge.copy(fontFamily = numberFont),
-                                                fontWeight = FontWeight.Bold
+                                                style = MaterialTheme.typography.labelLarge.copy(
+                                                    fontFamily = numberFont,
+                                                    fontWeight = FontWeight.Bold
+                                                ),
+                                                textAlign = TextAlign.Center,
+                                                maxLines = 2
                                             )
                                         }
                                     }
@@ -483,12 +577,13 @@ fun AnalyticsScreen(
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         channelData.forEach { datum ->
-                                            val pct = (datum.cents * 100.0 / totalExpense).toInt()
+                                            val pct = datum.cents * 100.0 / totalExpense
+                                            val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
                                             val isSelected = selectedChannelFilter == datum.label
                                             ClickableLegendRow(
                                                 label = datum.label,
                                                 color = datum.color,
-                                                valueText = "$pct% · ${formatCurrency(datum.cents, baseCurrency)}",
+                                                valueText = "$pctText · ${formatCurrency(datum.cents, baseCurrency)}",
                                                 selected = isSelected,
                                                 testTag = "channel_legend_${datum.label}",
                                                 onClick = {
@@ -500,7 +595,8 @@ fun AnalyticsScreen(
                                 }
                             } else {
                                 VerticalBarChart(
-                                    items = channelData.take(7),
+                                    items = channelData,
+                                    baseCurrencyCode = baseCurrency,
                                     selectedLabel = selectedChannelFilter,
                                     onSelect = { label ->
                                         selectedChannelFilter = if (selectedChannelFilter == label) null else label
@@ -509,11 +605,13 @@ fun AnalyticsScreen(
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     channelData.forEach { datum ->
                                         val ratio = (datum.cents.toFloat() / totalExpense.toFloat()).coerceIn(0f, 1f)
+                                        val pct = datum.cents * 100.0 / totalExpense
+                                        val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
                                         val isSelected = selectedChannelFilter == datum.label
                                         ClickableBreakdownRow(
                                             label = datum.label,
                                             color = datum.color,
-                                            amountText = "${formatCurrency(datum.cents, baseCurrency)} (${(ratio * 100).toInt()}%)",
+                                            amountText = "${formatCurrency(datum.cents, baseCurrency)} ($pctText)",
                                             ratio = ratio,
                                             selected = isSelected,
                                             testTag = "channel_row_${datum.label}",
@@ -540,7 +638,7 @@ fun AnalyticsScreen(
                 }
             }
 
-            item(key = "monthly_summary") {
+            item(key = "period_summary") {
                 Card(
                     shape = RoundedCornerShape(22.dp),
                     colors = CardDefaults.cardColors(
@@ -557,11 +655,11 @@ fun AnalyticsScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Insights,
+                                imageVector = AppIcons.Insights,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.tertiary
                             )
-                            Text("月度收支分析", style = MaterialTheme.typography.titleMedium)
+                            Text(summaryCardTitle, style = MaterialTheme.typography.titleMedium)
                         }
 
                         Surface(
@@ -608,7 +706,7 @@ fun AnalyticsScreen(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
             onDismiss = { editingTransaction = null },
-            onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note ->
+            onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
                     txId = tx.id,
                     amountCents = amountCents,
@@ -619,13 +717,61 @@ fun AnalyticsScreen(
                     channel = channel,
                     cardLastFour = tail,
                     note = note,
-                    occurredAtMillis = tx.occurredAtMillis,
+                    occurredAtMillis = occurredAtMillis,
                     confirmed = true
                 )
                 editingTransaction = null
             }
         )
     }
+}
+
+/**
+ * Displays complete labels/amounts without ellipsis truncation:
+ * allows wrapping up to [maxLines] and automatically scales font size / condenses width when overflowing.
+ */
+@Composable
+private fun CompactFullText(
+    text: String,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    color: Color = Color.Unspecified,
+    textAlign: TextAlign? = null,
+    maxLines: Int = 2
+) {
+    var fontScale by remember(text, maxLines) { mutableFloatStateOf(1.0f) }
+    var horizontalScale by remember(text, maxLines) { mutableFloatStateOf(1.0f) }
+
+    val baseFontSize = if (style.fontSize.isSpecified) style.fontSize else 14.sp
+    val baseLineHeight = if (style.lineHeight.isSpecified) style.lineHeight else (baseFontSize * 1.25f)
+
+    val adaptedStyle = style.copy(
+        fontSize = (baseFontSize.value * fontScale).sp,
+        lineHeight = (baseLineHeight.value * fontScale).sp,
+        textGeometricTransform = if (horizontalScale < 0.99f) {
+            TextGeometricTransform(scaleX = horizontalScale)
+        } else {
+            style.textGeometricTransform
+        }
+    )
+
+    Text(
+        text = text,
+        style = adaptedStyle,
+        color = color,
+        textAlign = textAlign,
+        maxLines = maxLines,
+        softWrap = true,
+        modifier = modifier,
+        onTextLayout = { result ->
+            if (result.hasVisualOverflow) {
+                when {
+                    fontScale > 0.72f -> fontScale = (fontScale - 0.08f).coerceAtLeast(0.72f)
+                    horizontalScale > 0.80f -> horizontalScale = (horizontalScale - 0.06f).coerceAtLeast(0.80f)
+                }
+            }
+        }
+    )
 }
 
 @Composable
@@ -645,7 +791,7 @@ private fun ChartStyleToggleButton(
         ) {
             AnalyticsChartStyle.entries.forEach { mode ->
                 val selected = mode == style
-                val icon = if (mode == AnalyticsChartStyle.PIE) Icons.Rounded.PieChart else Icons.Rounded.BarChart
+                val icon = if (mode == AnalyticsChartStyle.PIE) AppIcons.PieChart else AppIcons.BarChart
                 Surface(
                     shape = RoundedCornerShape(9.dp),
                     color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
@@ -716,6 +862,7 @@ private fun DonutPieChart(
 @Composable
 private fun VerticalBarChart(
     items: List<ChartDatum>,
+    baseCurrencyCode: String,
     selectedLabel: String?,
     onSelect: (String) -> Unit
 ) {
@@ -727,77 +874,94 @@ private fun VerticalBarChart(
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 12.dp, vertical = 14.dp)
         ) {
-            Box(
+            val useHorizontalScroll = items.size > 4
+            val contentWidth = if (useHorizontalScroll) {
+                (84.dp * items.size).coerceAtLeast(maxWidth)
+            } else {
+                maxWidth
+            }
+            val gridColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(140.dp)
+                    .then(
+                        if (useHorizontalScroll) Modifier.horizontalScroll(rememberScrollState()) else Modifier
+                    ),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                val gridColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val lineYs = listOf(0.2f, 0.5f, 0.8f, 1.0f)
-                    lineYs.forEach { frac ->
-                        val y = size.height * frac
-                        drawLine(
-                            color = gridColor,
-                            start = Offset(0f, y),
-                            end = Offset(size.width, y),
-                            strokeWidth = 1.dp.toPx()
-                        )
-                    }
-                    val count = items.size.coerceAtLeast(1)
-                    val slotW = size.width / count
-                    val barW = (slotW * 0.48f).coerceIn(14.dp.toPx(), 42.dp.toPx())
-                    items.forEachIndexed { index, datum ->
-                        val ratio = (datum.cents.toFloat() / maxCents.toFloat()).coerceIn(0.06f, 1f)
-                        val barH = (size.height - 12.dp.toPx()) * ratio
-                        val left = index * slotW + (slotW - barW) / 2f
-                        val top = size.height - barH
-                        val isMuted = selectedLabel != null && selectedLabel != datum.label
-                        drawRoundRect(
-                            color = if (isMuted) datum.color.copy(alpha = 0.28f) else datum.color,
-                            topLeft = Offset(left, top),
-                            size = Size(barW, barH),
-                            cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
-                        )
+                Box(
+                    modifier = Modifier
+                        .width(contentWidth)
+                        .height(140.dp)
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val lineYs = listOf(0.2f, 0.5f, 0.8f, 1.0f)
+                        lineYs.forEach { frac ->
+                            val y = size.height * frac
+                            drawLine(
+                                color = gridColor,
+                                start = Offset(0f, y),
+                                end = Offset(size.width, y),
+                                strokeWidth = 1.dp.toPx()
+                            )
+                        }
+                        val count = items.size.coerceAtLeast(1)
+                        val slotW = size.width / count
+                        val barW = (slotW * 0.46f).coerceIn(16.dp.toPx(), 42.dp.toPx())
+                        items.forEachIndexed { index, datum ->
+                            val ratio = (datum.cents.toFloat() / maxCents.toFloat()).coerceIn(0.06f, 1f)
+                            val barH = (size.height - 12.dp.toPx()) * ratio
+                            val left = index * slotW + (slotW - barW) / 2f
+                            val top = size.height - barH
+                            val isMuted = selectedLabel != null && selectedLabel != datum.label
+                            drawRoundRect(
+                                color = if (isMuted) datum.color.copy(alpha = 0.28f) else datum.color,
+                                topLeft = Offset(left, top),
+                                size = Size(barW, barH),
+                                cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
+                            )
+                        }
                     }
                 }
-            }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                items.forEach { datum ->
-                    val isSelected = selectedLabel == datum.label
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onSelect(datum.label) }
-                            .padding(vertical = 4.dp, horizontal = 2.dp)
-                    ) {
-                        Text(
-                            text = datum.label.take(4),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            text = "${(datum.cents / 100)}元",
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = numberFont),
-                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
-                        )
+                Row(
+                    modifier = Modifier.width(contentWidth),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    items.forEach { datum ->
+                        val isSelected = selectedLabel == datum.label
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSelect(datum.label) }
+                                .padding(vertical = 4.dp, horizontal = 3.dp)
+                        ) {
+                            CompactFullText(
+                                text = datum.label,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2
+                            )
+                            CompactFullText(
+                                text = formatCurrency(datum.cents, baseCurrencyCode),
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = numberFont),
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2
+                            )
+                        }
                     }
                 }
             }
@@ -823,17 +987,16 @@ private fun ClickableLegendRow(
             .clickable(onClick = onClick)
             .testTag(testTag)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Box(
                     modifier = Modifier
@@ -841,23 +1004,27 @@ private fun ClickableLegendRow(
                         .clip(CircleShape)
                         .background(color)
                 )
-                Text(
+                CompactFullText(
                     text = label,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                    ),
+                    maxLines = 2,
+                    modifier = Modifier.weight(1f)
                 )
             }
-            Text(
+            CompactFullText(
                 text = valueText,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                modifier = Modifier.padding(start = 16.dp)
             )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ClickableBreakdownRow(
     label: String,
@@ -887,17 +1054,23 @@ private fun ClickableBreakdownRow(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top
             ) {
-                Text(
+                CompactFullText(
                     text = label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                    ),
+                    maxLines = 2,
+                    modifier = Modifier.weight(1f)
                 )
-                Text(
+                CompactFullText(
                     text = amountText,
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.End,
+                    maxLines = 2
                 )
             }
             LinearProgressIndicator(
@@ -939,10 +1112,10 @@ private fun FilteredTransactionsPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
+                CompactFullText(
                     text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 2,
                     modifier = Modifier.weight(1f)
                 )
                 TextButton(
@@ -976,16 +1149,14 @@ private fun FilteredTransactionsPanel(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                CompactFullText(
                                     text = tx.merchant,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                    maxLines = 2
                                 )
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -1000,11 +1171,15 @@ private fun FilteredTransactionsPanel(
                                 }
                             }
                             Column(horizontalAlignment = Alignment.End) {
-                                Text(
+                                CompactFullText(
                                     text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
-                                    style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontFamily = numberFont,
+                                        fontWeight = FontWeight.Bold
+                                    ),
                                     color = ExpenseCoral,
-                                    fontWeight = FontWeight.Bold
+                                    textAlign = TextAlign.End,
+                                    maxLines = 2
                                 )
                                 if (!tx.currencyCode.equals(baseCurrencyCode, ignoreCase = true)) {
                                     val baseCents = CurrencyExchangeManager.convertCents(
@@ -1013,10 +1188,12 @@ private fun FilteredTransactionsPanel(
                                         baseCurrencyCode,
                                         ratesToCny
                                     )
-                                    Text(
+                                    CompactFullText(
                                         text = "≈ ${formatCurrency(baseCents, baseCurrencyCode)}",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.End,
+                                        maxLines = 2
                                     )
                                 }
                             }

@@ -22,13 +22,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.ForkRight
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Person
+import com.example.ui.theme.AppIcons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -177,7 +173,7 @@ fun AboutScreen(
                         }
 
                         AboutInfoRow(
-                            icon = Icons.Rounded.ForkRight,
+                            icon = AppIcons.ForkRight,
                             label = "上游项目",
                             value = "无（从零构建的独立原创项目）"
                         )
@@ -196,7 +192,7 @@ fun AboutScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Description,
+                                imageVector = AppIcons.Description,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary
                             )
@@ -244,7 +240,7 @@ fun AboutScreen(
                         }
 
                         ClickableLinkBox(
-                            icon = Icons.Rounded.Code,
+                            icon = AppIcons.Code,
                             title = "GitHub 仓库地址",
                             url = GITHUB_REPO_URL,
                             subtitle = "查看源码、提交 Issue 与 ARMv8 Release 构建发布",
@@ -253,7 +249,7 @@ fun AboutScreen(
                         )
 
                         ClickableLinkBox(
-                            icon = Icons.Rounded.AutoAwesome,
+                            icon = AppIcons.AutoAwesome,
                             title = "本工具（Google AI Studio）",
                             url = AI_STUDIO_TOOL_URL,
                             subtitle = "用于构建与迭代本 Android 应用的开发工作台",
@@ -377,7 +373,7 @@ private fun ClickableLinkBox(
 
             Spacer(modifier = Modifier.width(4.dp))
             Icon(
-                imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                imageVector = AppIcons.OpenInNew,
                 contentDescription = "在浏览器中打开",
                 tint = MaterialTheme.colorScheme.primary
             )

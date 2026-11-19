@@ -19,14 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.CloudDownload
-import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.Psychology
-import androidx.compose.material.icons.rounded.Save
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
+import com.example.ui.theme.AppIcons
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -131,8 +125,8 @@ fun AiSettingsScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Rounded.Psychology, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text("AI 理解引擎模式", style = MaterialTheme.typography.titleMedium)
+                            Icon(AppIcons.Psychology, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Text("AI理解模式", style = MaterialTheme.typography.titleMedium)
                         }
                         Text(
                             text = selectedMode.description,
@@ -319,7 +313,7 @@ fun AiSettingsScreen(
                                                         .minimumInteractiveComponentSize()
                                                         .testTag("download_model_${preset.id}")
                                                 ) {
-                                                    Icon(Icons.Rounded.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                    Icon(AppIcons.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
                                                     Spacer(modifier = Modifier.width(6.dp))
                                                     Text(if (isDownloadingThis) "下载中..." else "按需下载模型")
                                                 }
@@ -343,7 +337,7 @@ fun AiSettingsScreen(
                                                     enabled = downloadState !is AiModelDownloadState.Downloading,
                                                     onClick = { viewModel.deleteLocalAiModel(context, preset.id) }
                                                 ) {
-                                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "删除本地模型", modifier = Modifier.size(16.dp))
+                                                    Icon(AppIcons.DeleteOutline, contentDescription = "删除本地模型", modifier = Modifier.size(16.dp))
                                                     Spacer(modifier = Modifier.width(4.dp))
                                                     Text("清理")
                                                 }
@@ -429,7 +423,7 @@ fun AiSettingsScreen(
                                 trailingIcon = {
                                     IconButton(onClick = { showApiKey = !showApiKey }) {
                                         Icon(
-                                            imageVector = if (showApiKey) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                            imageVector = if (showApiKey) AppIcons.VisibilityOff else AppIcons.Visibility,
                                             contentDescription = if (showApiKey) "隐藏密钥" else "显示密钥"
                                         )
                                     }
@@ -461,7 +455,7 @@ fun AiSettingsScreen(
                                     .minimumInteractiveComponentSize()
                                     .testTag("ai_save_config_button")
                             ) {
-                                Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("保存 API 配置")
                             }
@@ -482,7 +476,7 @@ fun AiSettingsScreen(
                             modifier = Modifier.padding(18.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Text("AI 理解测试", style = MaterialTheme.typography.titleMedium)
+                            Text("AI理解测试", style = MaterialTheme.typography.titleMedium)
 
                             AssistChip(
                                 onClick = {
@@ -532,9 +526,9 @@ fun AiSettingsScreen(
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text("正在理解解析...")
                                 } else {
-                                    Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Icon(AppIcons.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("测试 AI 结构化理解")
+                                    Text("测试 AI理解")
                                 }
                             }
 

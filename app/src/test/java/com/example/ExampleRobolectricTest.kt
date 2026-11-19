@@ -2,6 +2,7 @@ package com.example
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -182,5 +183,69 @@ class ExampleRobolectricTest {
     assertEquals("https://api.deepseek.com/v1/chat/completions", loaded.apiBaseUrl)
     assertEquals("deepseek-chat", loaded.apiModelName)
     assertEquals(false, loaded.useAiAsFallbackOnly)
+  }
+
+  @Test
+  fun `appearance navigation and predictive back preferences persist cleanly`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+    val saved = com.example.model.AppearanceSettings(
+      tabClickAnimation = com.example.model.TabClickAnimationStyle.FADE,
+      predictiveBackEnabled = true,
+      predictiveBackStyle = com.example.model.PredictiveBackStyle.SLIDE_RIGHT
+    )
+    repository.saveAppearanceSettings(saved).getOrThrow()
+    val loaded = repository.observeAppearanceSettings().first()
+    assertEquals(com.example.model.TabClickAnimationStyle.FADE, loaded.tabClickAnimation)
+    assertEquals(true, loaded.predictiveBackEnabled)
+    assertEquals(com.example.model.PredictiveBackStyle.SLIDE_RIGHT, loaded.predictiveBackStyle)
+  }
+
+  @Test
+  fun `storage optimization inspects footprint vacuums db and prunes old raw notifications`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+    val now = System.currentTimeMillis()
+    val oldTx = com.example.model.LedgerTransaction(
+      id = "old-raw-tx",
+      amountCents = 5800L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "老店面",
+      channel = "支付宝",
+      rawNotification = "Very long raw notification payload from 60 days ago ".repeat(6),
+      occurredAtMillis = now - 60L * 86_400_000L,
+      confirmed = true
+    )
+    val recentTx = com.example.model.LedgerTransaction(
+      id = "recent-raw-tx",
+      amountCents = 2200L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "交通出行",
+      merchant = "地铁出行",
+      channel = "微信支付",
+      rawNotification = "Recent raw notification payload",
+      occurredAtMillis = now - 2L * 86_400_000L,
+      confirmed = true
+    )
+    repository.addTransaction(oldTx).getOrThrow()
+    repository.addTransaction(recentTx).getOrThrow()
+
+    val footprintBefore = repository.inspectStorageFootprint(context)
+    org.junit.Assert.assertTrue(footprintBefore.databaseBytes > 0L)
+    org.junit.Assert.assertTrue(footprintBefore.rawNotificationCount >= 2)
+
+    val result = repository.optimizeStorage(context, pruneRawLogsOlderThanDays = 30).getOrThrow()
+    org.junit.Assert.assertTrue(result.prunedRawLogs >= 1)
+
+    val allAfter = repository.getAllTransactionsOnce()
+    val oldAfter = allAfter.first { it.id == "old-raw-tx" }
+    val recentAfter = allAfter.first { it.id == "recent-raw-tx" }
+    assertEquals(null, oldAfter.rawNotification)
+    assertEquals(5800L, oldAfter.amountCents)
+    assertEquals("老店面", oldAfter.merchant)
+    org.junit.Assert.assertNotNull(recentAfter.rawNotification)
   }
 }

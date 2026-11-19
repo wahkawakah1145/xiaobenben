@@ -12,6 +12,7 @@ import com.example.data.ManualImportManager
 import com.example.data.WebDavSyncManager
 import com.example.model.AiConfig
 import com.example.model.AiProviderMode
+import com.example.model.AnalyticsGranularity
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CurrencyCatalog
@@ -23,6 +24,7 @@ import com.example.model.NotificationInquiry
 import com.example.model.ParseMethod
 import com.example.model.ParsedNotificationResult
 import com.example.model.SourceApp
+import com.example.model.StorageFootprintInfo
 import com.example.model.TransactionType
 import com.example.model.WebDavConfig
 import com.example.parser.ChinaNotificationParser
@@ -238,11 +240,50 @@ class LedgerViewModel(
     private val _rootStatusState = MutableStateFlow(RootKeepAliveStatus())
     val rootStatusState: StateFlow<RootKeepAliveStatus> = _rootStatusState.asStateFlow()
 
+    private val _storageFootprintState = MutableStateFlow(StorageFootprintInfo())
+    val storageFootprintState: StateFlow<StorageFootprintInfo> = _storageFootprintState.asStateFlow()
+
+    private val _storageOptimizing = MutableStateFlow(false)
+    val storageOptimizing: StateFlow<Boolean> = _storageOptimizing.asStateFlow()
+
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
 
     fun clearActionMessage() {
         _actionMessage.value = null
+    }
+
+    fun refreshStorageFootprint(context: android.content.Context) {
+        viewModelScope.launch {
+            runCatching { repository.inspectStorageFootprint(context) }
+                .onSuccess { _storageFootprintState.value = it }
+        }
+    }
+
+    fun optimizeStorage(
+        context: android.content.Context,
+        pruneRawLogsOlderThanDays: Int? = null
+    ) {
+        viewModelScope.launch {
+            _storageOptimizing.value = true
+            repository.optimizeStorage(context, pruneRawLogsOlderThanDays)
+                .onSuccess { result ->
+                    _storageFootprintState.value = repository.inspectStorageFootprint(context)
+                    val savedKb = ((result.beforeBytes - result.afterBytes).coerceAtLeast(0L)) / 1024.0
+                    val parts = buildList {
+                        add("数据库已压缩 (VACUUM)")
+                        if (result.prunedRawLogs > 0) add("精简 ${result.prunedRawLogs} 条历史原文")
+                        if (result.prunedInquiries > 0) add("清理 ${result.prunedInquiries} 条过期询问")
+                        if (result.clearedCacheBytes > 0) add("清除缓存 ${result.clearedCacheBytes / 1024} KB")
+                        add("共释放约 %.1f KB".format(savedKb))
+                    }
+                    _actionMessage.value = parts.joinToString("，")
+                }
+                .onFailure { err ->
+                    _actionMessage.value = "存储优化失败：${err.localizedMessage ?: "请重试"}"
+                }
+            _storageOptimizing.value = false
+        }
     }
 
     fun resetParseBench() {
@@ -388,7 +429,8 @@ class LedgerViewModel(
         ruleKeyword: String,
         ruleName: String,
         numberFormatPattern: String = com.example.model.NumberFormatStyle.AUTO.name,
-        ruleDefaultType: String = "AUTO"
+        ruleDefaultType: String = "AUTO",
+        occurredAtMillis: Long = inquiry.occurredAtMillis
     ) {
         viewModelScope.launch {
             repository.resolveInquiryAndLearnRule(
@@ -403,7 +445,8 @@ class LedgerViewModel(
                 ruleKeyword = ruleKeyword,
                 ruleName = ruleName,
                 numberFormatPattern = numberFormatPattern,
-                ruleDefaultType = ruleDefaultType
+                ruleDefaultType = ruleDefaultType,
+                occurredAtMillis = occurredAtMillis
             )
                 .onFailure { _actionMessage.value = "处理失败：${it.localizedMessage ?: "请检查输入"}" }
         }
@@ -434,7 +477,8 @@ class LedgerViewModel(
                 suggestedMerchant = parsed?.merchant ?: title.take(30),
                 suggestedChannel = parsed?.channel ?: "未知渠道",
                 cardLastFour = parsed?.cardLastFour,
-                reason = parsed?.inquiryReason?.ifBlank { "等待补充信息并学习规则" } ?: "未能自动识别，等待补充"
+                reason = parsed?.inquiryReason?.ifBlank { "等待补充信息并学习规则" } ?: "未能自动识别，等待补充",
+                occurredAtMillis = parsed?.occurredAtMillis ?: System.currentTimeMillis()
             )
             repository.addInquiry(inquiry)
             _parseBenchState.value = ParseBenchState.Idle
@@ -479,7 +523,7 @@ class LedgerViewModel(
         viewModelScope.launch {
             val config = repository.getAiConfigOnce()
             if (config.providerMode == AiProviderMode.DISABLED) {
-                _parseBenchState.value = ParseBenchState.Error("尚未启用 AI 理解接口，请先前往「设置 -> AI 理解接口」选择本地小模型或填写在线 API")
+                _parseBenchState.value = ParseBenchState.Error("尚未启用 AI理解，请先前往「设置 -> AI理解」选择本地小模型或填写在线 API")
                 return@launch
             }
             val result = aiManager.enhanceOrParseNotification(
@@ -495,7 +539,7 @@ class LedgerViewModel(
                     _parseBenchState.value = ParseBenchState.Parsed(parsed, title, content)
                 }
                 .onFailure { err ->
-                    _parseBenchState.value = ParseBenchState.Error(err.message ?: "AI 理解失败")
+                    _parseBenchState.value = ParseBenchState.Error(err.message ?: "AI理解失败")
                 }
         }
     }
@@ -516,9 +560,9 @@ class LedgerViewModel(
                 cardLastFour = parsed.cardLastFour,
                 sourceApp = parsed.sourceApp.name,
                 parseMethod = parsed.parseMethod.name,
-                rawNotification = "$rawTitle: $rawContent".trim().take(600),
-                note = parsed.reasoning.take(200),
-                occurredAtMillis = System.currentTimeMillis(),
+                rawNotification = "$rawTitle: $rawContent".trim().take(220),
+                note = parsed.reasoning.take(120),
+                occurredAtMillis = parsed.occurredAtMillis ?: System.currentTimeMillis(),
                 confirmed = true
             )
             repository.addTransaction(tx)
@@ -698,7 +742,7 @@ class LedgerViewModel(
                 fallbackParsed = null
             )
                 .onSuccess { parsed -> _aiTestState.value = AiTestState.Success(parsed) }
-                .onFailure { err -> _aiTestState.value = AiTestState.Error(err.message ?: "AI 理解测试失败") }
+                .onFailure { err -> _aiTestState.value = AiTestState.Error(err.message ?: "AI理解测试失败") }
         }
     }
 
@@ -862,14 +906,23 @@ class LedgerViewModel(
     }
 
     fun buildMonthlyInsight(year: Int, monthZeroBased: Int): String {
+        val cal = Calendar.getInstance().apply {
+            set(year, monthZeroBased, 1, 0, 0, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        return buildPeriodInsight(AnalyticsGranularity.MONTH, cal.timeInMillis)
+    }
+
+    fun buildPeriodInsight(granularity: AnalyticsGranularity, anchorMillis: Long): String {
         val allTx = (transactionsState.value as? UiState.Success)?.data ?: emptyList()
-        val monthTx = filterByMonth(allTx, year, monthZeroBased)
-        val monthLabel = "${year}年${monthZeroBased + 1}月"
+        val periodTx = filterByGranularity(allTx, granularity, anchorMillis)
+        val periodLabel = formatPeriodTitle(granularity, anchorMillis)
         val settings = settingsState.value
         val rates = exchangeRateState.value.ratesToCny
-        return LocalSpendingAnalyzer.generateMonthlySummary(
-            monthLabel = monthLabel,
-            transactions = monthTx,
+        return LocalSpendingAnalyzer.generatePeriodSummary(
+            periodLabel = periodLabel,
+            granularity = granularity,
+            transactions = periodTx,
             monthlyBudgetCents = settings.monthlyBudgetCents,
             baseCurrencyCode = settings.baseCurrencyCode,
             ratesToCny = rates
@@ -915,6 +968,14 @@ class LedgerViewModel(
     companion object {
         private const val STOP_TIMEOUT_MILLIS = 5000L
 
+        fun filterByYear(list: List<LedgerTransaction>, year: Int): List<LedgerTransaction> {
+            val cal = Calendar.getInstance()
+            return list.filter { tx ->
+                cal.timeInMillis = tx.occurredAtMillis
+                cal.get(Calendar.YEAR) == year
+            }
+        }
+
         fun filterByMonth(
             list: List<LedgerTransaction>,
             year: Int,
@@ -924,6 +985,90 @@ class LedgerViewModel(
             return list.filter { tx ->
                 cal.timeInMillis = tx.occurredAtMillis
                 cal.get(Calendar.YEAR) == year && cal.get(Calendar.MONTH) == monthZeroBased
+            }
+        }
+
+        fun filterByWeek(list: List<LedgerTransaction>, anchorMillis: Long): List<LedgerTransaction> {
+            val (start, end) = weekRangeMillis(anchorMillis)
+            return list.filter { it.occurredAtMillis in start..end }
+        }
+
+        fun filterByDay(list: List<LedgerTransaction>, anchorMillis: Long): List<LedgerTransaction> {
+            val cal = Calendar.getInstance()
+            cal.timeInMillis = anchorMillis
+            val y = cal.get(Calendar.YEAR)
+            val d = cal.get(Calendar.DAY_OF_YEAR)
+            return list.filter { tx ->
+                cal.timeInMillis = tx.occurredAtMillis
+                cal.get(Calendar.YEAR) == y && cal.get(Calendar.DAY_OF_YEAR) == d
+            }
+        }
+
+        fun filterByGranularity(
+            list: List<LedgerTransaction>,
+            granularity: AnalyticsGranularity,
+            anchorMillis: Long
+        ): List<LedgerTransaction> {
+            val cal = Calendar.getInstance().apply { timeInMillis = anchorMillis }
+            return when (granularity) {
+                AnalyticsGranularity.YEAR -> filterByYear(list, cal.get(Calendar.YEAR))
+                AnalyticsGranularity.MONTH -> filterByMonth(list, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH))
+                AnalyticsGranularity.WEEK -> filterByWeek(list, anchorMillis)
+                AnalyticsGranularity.DAY -> filterByDay(list, anchorMillis)
+            }
+        }
+
+        fun weekRangeMillis(anchorMillis: Long): Pair<Long, Long> {
+            val cal = Calendar.getInstance().apply {
+                firstDayOfWeek = Calendar.MONDAY
+                timeInMillis = anchorMillis
+                set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            val start = cal.timeInMillis
+            cal.add(Calendar.DAY_OF_YEAR, 6)
+            cal.set(Calendar.HOUR_OF_DAY, 23)
+            cal.set(Calendar.MINUTE, 59)
+            cal.set(Calendar.SECOND, 59)
+            cal.set(Calendar.MILLISECOND, 999)
+            return start to cal.timeInMillis
+        }
+
+        fun shiftPeriodAnchor(
+            granularity: AnalyticsGranularity,
+            anchorMillis: Long,
+            delta: Int
+        ): Long {
+            val cal = Calendar.getInstance().apply { timeInMillis = anchorMillis }
+            when (granularity) {
+                AnalyticsGranularity.YEAR -> cal.add(Calendar.YEAR, delta)
+                AnalyticsGranularity.MONTH -> cal.add(Calendar.MONTH, delta)
+                AnalyticsGranularity.WEEK -> cal.add(Calendar.WEEK_OF_YEAR, delta)
+                AnalyticsGranularity.DAY -> cal.add(Calendar.DAY_OF_YEAR, delta)
+            }
+            return cal.timeInMillis
+        }
+
+        fun formatPeriodTitle(
+            granularity: AnalyticsGranularity,
+            anchorMillis: Long
+        ): String {
+            val cal = Calendar.getInstance().apply { timeInMillis = anchorMillis }
+            return when (granularity) {
+                AnalyticsGranularity.YEAR -> "${cal.get(Calendar.YEAR)}年"
+                AnalyticsGranularity.MONTH -> "${cal.get(Calendar.YEAR)}年${cal.get(Calendar.MONTH) + 1}月"
+                AnalyticsGranularity.WEEK -> {
+                    val (start, end) = weekRangeMillis(anchorMillis)
+                    val sCal = Calendar.getInstance().apply { timeInMillis = start }
+                    val eCal = Calendar.getInstance().apply { timeInMillis = end }
+                    "${sCal.get(Calendar.MONTH) + 1}月${sCal.get(Calendar.DAY_OF_MONTH)}日 - ${eCal.get(Calendar.MONTH) + 1}月${eCal.get(Calendar.DAY_OF_MONTH)}日"
+                }
+                AnalyticsGranularity.DAY -> {
+                    "${cal.get(Calendar.YEAR)}年${cal.get(Calendar.MONTH) + 1}月${cal.get(Calendar.DAY_OF_MONTH)}日"
+                }
             }
         }
     }

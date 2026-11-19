@@ -15,6 +15,8 @@ import com.example.model.ExchangeRateState
 import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
 import com.example.model.LatinNumberFont
+import com.example.model.PredictiveBackStyle
+import com.example.model.TabClickAnimationStyle
 import com.example.model.ThemeMode
 import com.example.model.WebDavConfig
 import kotlinx.coroutines.flow.Flow
@@ -57,6 +59,9 @@ class SettingsDataStore(private val context: Context) {
         val SHOW_PARSE_BADGE = booleanPreferencesKey("appearance_show_parse_badge")
         val TIP_TAG_TEXT = stringPreferencesKey("appearance_tip_tag_text")
         val CUSTOM_TIPS_RAW = stringPreferencesKey("appearance_custom_tips_raw")
+        val TAB_CLICK_ANIMATION = stringPreferencesKey("appearance_tab_click_animation")
+        val PREDICTIVE_BACK_ENABLED = booleanPreferencesKey("appearance_predictive_back_enabled")
+        val PREDICTIVE_BACK_STYLE = stringPreferencesKey("appearance_predictive_back_style")
 
         val EXCHANGE_RATES_JSON = stringPreferencesKey("exchange_rates_json")
         val EXCHANGE_RATES_UPDATED_AT = longPreferencesKey("exchange_rates_updated_at")
@@ -115,7 +120,10 @@ class SettingsDataStore(private val context: Context) {
             showChannelBadge = prefs[Keys.SHOW_CHANNEL_BADGE] ?: true,
             showParseBadge = prefs[Keys.SHOW_PARSE_BADGE] ?: true,
             tipTagText = if (storedTag == "金钱真相") "" else storedTag,
-            customTipsRaw = prefs[Keys.CUSTOM_TIPS_RAW] ?: ""
+            customTipsRaw = prefs[Keys.CUSTOM_TIPS_RAW] ?: "",
+            tabClickAnimation = TabClickAnimationStyle.fromRaw(prefs[Keys.TAB_CLICK_ANIMATION]),
+            predictiveBackEnabled = prefs[Keys.PREDICTIVE_BACK_ENABLED] ?: true,
+            predictiveBackStyle = PredictiveBackStyle.fromRaw(prefs[Keys.PREDICTIVE_BACK_STYLE])
         )
     }
 
@@ -219,6 +227,9 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.SHOW_PARSE_BADGE] = settings.showParseBadge
             prefs[Keys.TIP_TAG_TEXT] = settings.tipTagText.trim().take(16)
             prefs[Keys.CUSTOM_TIPS_RAW] = settings.customTipsRaw
+            prefs[Keys.TAB_CLICK_ANIMATION] = settings.tabClickAnimation.name
+            prefs[Keys.PREDICTIVE_BACK_ENABLED] = settings.predictiveBackEnabled
+            prefs[Keys.PREDICTIVE_BACK_STYLE] = settings.predictiveBackStyle.name
         }
     }
 

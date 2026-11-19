@@ -31,7 +31,7 @@ enum class SourceApp(val label: String) {
 
 enum class ParseMethod(val label: String) {
     RULE_ENGINE("规则匹配"),
-    LOCAL_NLP("语义识别"),
+    LOCAL_NLP("AI理解"),
     MANUAL("手动录入"),
     IMPORT("导入");
 
@@ -187,6 +187,35 @@ data class AiConfig(
     val useAiAsFallbackOnly: Boolean = true
 )
 
+enum class TabClickAnimationStyle(val label: String) {
+    SLIDE("平滑滑动"),
+    FADE("淡入渐隐"),
+    NONE("无动画");
+
+    companion object {
+        fun fromRaw(raw: String?): TabClickAnimationStyle =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: SLIDE
+    }
+}
+
+enum class PredictiveBackStyle(val label: String, val description: String) {
+    SYSTEM_SCALE("缩放退场（推荐）", "前页按手势比例缩小并淡出，贴合系统预测性返回"),
+    SLIDE_RIGHT("右滑退场", "前页向右滑出，上一级菜单从左侧柔滑复原"),
+    FADE("轻柔淡出", "仅执行柔和透明度渐变过渡");
+
+    companion object {
+        fun fromRaw(raw: String?): PredictiveBackStyle =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: SYSTEM_SCALE
+    }
+}
+
+enum class AnalyticsGranularity(val label: String) {
+    YEAR("年度"),
+    MONTH("月"),
+    WEEK("周"),
+    DAY("日")
+}
+
 data class AppearanceSettings(
     val dynamicColor: Boolean = true,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -197,7 +226,31 @@ data class AppearanceSettings(
     val showChannelBadge: Boolean = true,
     val showParseBadge: Boolean = true,
     val tipTagText: String = "",
-    val customTipsRaw: String = ""
+    val customTipsRaw: String = "",
+    val tabClickAnimation: TabClickAnimationStyle = TabClickAnimationStyle.SLIDE,
+    val predictiveBackEnabled: Boolean = true,
+    val predictiveBackStyle: PredictiveBackStyle = PredictiveBackStyle.SYSTEM_SCALE
+)
+
+data class StorageFootprintInfo(
+    val databaseBytes: Long = 0L,
+    val walBytes: Long = 0L,
+    val preferencesBytes: Long = 0L,
+    val aiModelBytes: Long = 0L,
+    val cacheBytes: Long = 0L,
+    val transactionCount: Int = 0,
+    val rawNotificationCount: Int = 0,
+    val inquiryCount: Int = 0
+) {
+    val totalUserDataBytes: Long get() = databaseBytes + walBytes + preferencesBytes + aiModelBytes + cacheBytes
+}
+
+data class StorageOptimizeResult(
+    val beforeBytes: Long,
+    val afterBytes: Long,
+    val prunedRawLogs: Int,
+    val prunedInquiries: Int,
+    val clearedCacheBytes: Long
 )
 
 enum class NumberFormatStyle(val label: String, val example: String) {
@@ -315,7 +368,8 @@ data class ParsedNotificationResult(
     val confidence: Float,
     val reasoning: String,
     val needsInquiry: Boolean = false,
-    val inquiryReason: String = ""
+    val inquiryReason: String = "",
+    val occurredAtMillis: Long? = null
 )
 
 data class CapturedNotificationLog(

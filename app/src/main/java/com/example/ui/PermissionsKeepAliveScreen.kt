@@ -19,13 +19,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccessibilityNew
-import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.Security
-import androidx.compose.material.icons.rounded.Terminal
-import androidx.compose.material.icons.rounded.WarningAmber
+import com.example.ui.theme.AppIcons
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -99,7 +94,7 @@ fun PermissionsKeepAliveScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Rounded.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Icon(AppIcons.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                             Text("系统权限与进程保活", style = MaterialTheme.typography.titleMedium)
                         }
 
@@ -117,7 +112,7 @@ fun PermissionsKeepAliveScreen(
                                 )
                             }
                             Icon(
-                                imageVector = if (isListenerEnabled) Icons.Rounded.CheckCircle else Icons.Rounded.WarningAmber,
+                                imageVector = if (isListenerEnabled) Icons.Rounded.CheckCircle else AppIcons.WarningAmber,
                                 contentDescription = null,
                                 tint = if (isListenerEnabled) IncomeJade else ExpenseCoral
                             )
@@ -130,7 +125,7 @@ fun PermissionsKeepAliveScreen(
                                 .minimumInteractiveComponentSize()
                                 .testTag("settings_open_listener_button")
                         ) {
-                            Icon(Icons.Rounded.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(AppIcons.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(if (isListenerEnabled) "管理通知使用权" else "开启通知读取权限")
                         }
@@ -154,7 +149,7 @@ fun PermissionsKeepAliveScreen(
                                 onClick = { NotificationBridge.openAccessibilitySettings(context) },
                                 modifier = Modifier.testTag("settings_accessibility_button")
                             ) {
-                                Icon(Icons.Rounded.AccessibilityNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(AppIcons.AccessibilityNew, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(if (isAccessibilityEnabled) "已开启" else "去开启")
                             }
@@ -178,7 +173,7 @@ fun PermissionsKeepAliveScreen(
                                     onClick = { NotificationBridge.requestIgnoreBatteryOptimizations(context) },
                                     modifier = Modifier.testTag("settings_battery_button")
                                 ) {
-                                    Icon(Icons.Rounded.BatteryChargingFull, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Icon(AppIcons.BatteryChargingFull, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text("去设置")
                                 }
@@ -234,7 +229,7 @@ fun PermissionsKeepAliveScreen(
                                         .weight(1.3f)
                                         .testTag("apply_root_keepalive_button")
                                 ) {
-                                    Icon(Icons.Rounded.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Icon(AppIcons.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text("执行 Root 保活")
                                 }

@@ -14,13 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.rounded.Rule
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
-import androidx.compose.material.icons.rounded.FolderCopy
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Palette
-import androidx.compose.material.icons.rounded.Psychology
-import androidx.compose.material.icons.rounded.Security
+import com.example.ui.theme.AppIcons
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -98,15 +93,15 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.padding(vertical = 6.dp)) {
                         SettingsNavRow(
-                            icon = Icons.Rounded.AccountBalanceWallet,
-                            title = "账单管理",
-                            subtitle = "记账与预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 短时智能去重",
+                            icon = AppIcons.AccountBalanceWallet,
+                            title = "账单工具",
+                            subtitle = "记账与预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 智能去重 · 存储优化",
                             testTag = "menu_ledger_management",
                             onClick = onOpenLedgerManagement
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsNavRow(
-                            icon = Icons.AutoMirrored.Rounded.Rule,
+                            icon = AppIcons.Rule,
                             title = "通知识别与规则",
                             subtitle = "通知解析测试、自定义关键词与银行规则",
                             testTag = "menu_parser_rules",
@@ -114,8 +109,8 @@ fun SettingsScreen(
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsNavRow(
-                            icon = Icons.Rounded.Psychology,
-                            title = "AI 理解接口",
+                            icon = AppIcons.Psychology,
+                            title = "AI理解",
                             subtitle = aiStatusSummary,
                             testTag = "menu_ai_settings",
                             onClick = onOpenAiSettings
@@ -132,7 +127,7 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.padding(vertical = 6.dp)) {
                         SettingsNavRow(
-                            icon = Icons.Rounded.FolderCopy,
+                            icon = AppIcons.FolderCopy,
                             title = "导入与备份中心",
                             subtitle = "手动导入 (XLSX/CSV/JSON) · 本地备份与通知 · WebDAV 同步",
                             testTag = "menu_data_hub",
@@ -140,15 +135,15 @@ fun SettingsScreen(
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsNavRow(
-                            icon = Icons.Rounded.Palette,
+                            icon = AppIcons.Palette,
                             title = "外观与布局",
-                            subtitle = "莫奈动态取色、英文数字字体、卡片大小与元素位置",
+                            subtitle = "动态取色、字体、卡片密度、Tab动画与预测性返回",
                             testTag = "menu_appearance",
                             onClick = onOpenAppearance
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsNavRow(
-                            icon = Icons.Rounded.Security,
+                            icon = AppIcons.Security,
                             title = "系统权限与进程保活",
                             subtitle = permissionSummary,
                             testTag = "menu_permissions",

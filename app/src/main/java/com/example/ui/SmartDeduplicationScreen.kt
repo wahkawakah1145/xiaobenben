@@ -21,12 +21,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.CleaningServices
-import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
+import com.example.ui.theme.AppIcons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -170,7 +167,7 @@ fun SmartDeduplicationScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.CleaningServices,
+                                    imageVector = AppIcons.CleaningServices,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary
                                 )
@@ -234,7 +231,7 @@ fun SmartDeduplicationScreen(
                                         customErrorText = null
                                     },
                                     label = { Text("自定义短时窗口") },
-                                    leadingIcon = { Icon(Icons.Rounded.Schedule, contentDescription = null) },
+                                    leadingIcon = { Icon(AppIcons.Schedule, contentDescription = null) },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
                                     modifier = Modifier
@@ -313,7 +310,7 @@ fun SmartDeduplicationScreen(
                                         },
                                         modifier = Modifier.weight(1f)
                                     ) {
-                                        Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Icon(AppIcons.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("智能勾选重复项")
                                     }
@@ -426,7 +423,7 @@ fun SmartDeduplicationScreen(
                                 .minimumInteractiveComponentSize()
                                 .testTag("dedup_delete_selected_button")
                         ) {
-                            Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(AppIcons.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("一键清理重复")
                         }

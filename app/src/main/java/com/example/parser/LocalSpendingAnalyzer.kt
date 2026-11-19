@@ -1,6 +1,7 @@
 package com.example.parser
 
 import com.example.data.CurrencyExchangeManager
+import com.example.model.AnalyticsGranularity
 import com.example.model.CurrencyCatalog
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionType
@@ -14,10 +15,26 @@ object LocalSpendingAnalyzer {
         monthlyBudgetCents: Long,
         baseCurrencyCode: String = "CNY",
         ratesToCny: Map<String, Double> = CurrencyCatalog.defaultRatesToCny
+    ): String = generatePeriodSummary(
+        periodLabel = monthLabel,
+        granularity = AnalyticsGranularity.MONTH,
+        transactions = transactions,
+        monthlyBudgetCents = monthlyBudgetCents,
+        baseCurrencyCode = baseCurrencyCode,
+        ratesToCny = ratesToCny
+    )
+
+    fun generatePeriodSummary(
+        periodLabel: String,
+        granularity: AnalyticsGranularity,
+        transactions: List<LedgerTransaction>,
+        monthlyBudgetCents: Long,
+        baseCurrencyCode: String = "CNY",
+        ratesToCny: Map<String, Double> = CurrencyCatalog.defaultRatesToCny
     ): String {
         val confirmedTx = transactions.filter { it.confirmed }
         if (confirmedTx.isEmpty()) {
-            return "当前 $monthLabel 暂无已确认账单，记账后即可查看分析。"
+            return "当前 $periodLabel 暂无已确认账单，记账后即可查看分析。"
         }
 
         val symbol = CurrencyCatalog.resolve(baseCurrencyCode).symbol
@@ -40,23 +57,48 @@ object LocalSpendingAnalyzer {
             .maxByOrNull { it.value }
 
         val largestTx = expenses.maxByOrNull { toBase(it) }
-        val daysInMonth = Calendar.getInstance().get(Calendar.DAY_OF_MONTH).coerceAtLeast(1)
-        val dailyAvgYuan = (totalExpense / 100.0) / daysInMonth
+
+        val divisorDays = when (granularity) {
+            AnalyticsGranularity.YEAR -> 365.0
+            AnalyticsGranularity.MONTH -> Calendar.getInstance().get(Calendar.DAY_OF_MONTH).coerceAtLeast(1).toDouble()
+            AnalyticsGranularity.WEEK -> 7.0
+            AnalyticsGranularity.DAY -> 1.0
+        }
+        val avgHint = when (granularity) {
+            AnalyticsGranularity.YEAR -> "月均约 $symbol%.2f".format(totalExpense / 100.0 / 12.0)
+            AnalyticsGranularity.MONTH -> "日均约 $symbol%.2f".format((totalExpense / 100.0) / divisorDays)
+            AnalyticsGranularity.WEEK -> "日均约 $symbol%.2f".format((totalExpense / 100.0) / 7.0)
+            AnalyticsGranularity.DAY -> "共计 ${expenses.size} 笔消费"
+        }
+
+        val referenceBudgetCents = when {
+            monthlyBudgetCents <= 0L -> 0L
+            granularity == AnalyticsGranularity.YEAR -> monthlyBudgetCents * 12L
+            granularity == AnalyticsGranularity.MONTH -> monthlyBudgetCents
+            granularity == AnalyticsGranularity.WEEK -> (monthlyBudgetCents * 7L) / 30L
+            granularity == AnalyticsGranularity.DAY -> monthlyBudgetCents / 30L
+            else -> 0L
+        }.coerceAtLeast(if (monthlyBudgetCents > 0L) 1L else 0L)
 
         return buildString {
             appendLine(
-                "1. 收支概况：${monthLabel}累计支出 $symbol%.2f（日均约 $symbol%.2f），收入 $symbol%.2f。".format(
+                "1. 收支概况：${periodLabel}累计支出 $symbol%.2f（$avgHint），收入 $symbol%.2f，共 ${confirmedTx.size} 笔账单。".format(
                     totalExpense / 100.0,
-                    dailyAvgYuan,
                     totalIncome / 100.0
                 )
             )
-            if (monthlyBudgetCents > 0L) {
-                val pct = (totalExpense * 100.0 / monthlyBudgetCents).toInt()
+            if (referenceBudgetCents > 0L) {
+                val pct = (totalExpense * 100.0 / referenceBudgetCents).toInt()
+                val budgetScope = when (granularity) {
+                    AnalyticsGranularity.YEAR -> "年度参考预算"
+                    AnalyticsGranularity.MONTH -> "月度预算"
+                    AnalyticsGranularity.WEEK -> "周度折算预算"
+                    AnalyticsGranularity.DAY -> "日均折算预算"
+                }
                 val statusHint = when {
-                    pct >= 100 -> "已超出预算 ${pct - 100}%，建议收紧非必要开支。"
-                    pct >= 80 -> "已使用预算 $pct%，接近上限。"
-                    else -> "当前预算使用率 $pct%，节奏平稳。"
+                    pct >= 100 -> "已超出${budgetScope} ${pct - 100}%，建议关注非必要开支。"
+                    pct >= 80 -> "已使用${budgetScope} $pct%，接近上限。"
+                    else -> "当前${budgetScope}使用率 $pct%，节奏平稳。"
                 }
                 appendLine("2. 预算执行：$statusHint")
             }

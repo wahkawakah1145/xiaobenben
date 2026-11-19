@@ -9,20 +9,27 @@ import com.example.model.ExchangeRateState
 import com.example.model.LedgerTransaction
 import com.example.model.NotificationInquiry
 import com.example.model.ParseMethod
+import com.example.model.StorageFootprintInfo
+import com.example.model.StorageOptimizeResult
 import com.example.model.TransactionType
 import com.example.model.WebDavConfig
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 
 class LedgerRepository(
     private val dao: LedgerDao,
-    private val settingsStore: SettingsDataStore
+    private val settingsStore: SettingsDataStore,
+    private val database: LedgerDatabase? = null
 ) {
     constructor(context: Context) : this(
         dao = LedgerDatabase.getInstance(context).ledgerDao(),
-        settingsStore = SettingsDataStore(context.applicationContext)
+        settingsStore = SettingsDataStore(context.applicationContext),
+        database = LedgerDatabase.getInstance(context)
     )
 
     fun observeTransactions(): Flow<List<LedgerTransaction>> =
@@ -116,7 +123,8 @@ class LedgerRepository(
         ruleKeyword: String,
         ruleName: String,
         numberFormatPattern: String = com.example.model.NumberFormatStyle.AUTO.name,
-        ruleDefaultType: String = "AUTO"
+        ruleDefaultType: String = "AUTO",
+        occurredAtMillis: Long = inquiry.occurredAtMillis
     ): Result<Unit> {
         return try {
             require(amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万" }
@@ -140,9 +148,9 @@ class LedgerRepository(
                 sourceApp = com.example.parser.ChinaPaymentCatalog
                     .resolveSourceApp(inquiry.packageName, "${inquiry.title} ${inquiry.content}").name,
                 parseMethod = ParseMethod.RULE_ENGINE.name,
-                rawNotification = "${inquiry.title}: ${inquiry.content}".take(600),
+                rawNotification = compactText("${inquiry.title}: ${inquiry.content}", MAX_RAW_NOTIFICATION_LENGTH),
                 note = "经询问确认并学习",
-                occurredAtMillis = inquiry.occurredAtMillis,
+                occurredAtMillis = occurredAtMillis.coerceAtLeast(1L),
                 confirmed = true,
                 recordedBaseCurrencyCode = baseCode,
                 recordedRateToBase = snapshotRate,
@@ -214,8 +222,8 @@ class LedgerRepository(
                 channel = tx.channel.trim().ifBlank { "未知渠道" }.take(60),
                 category = tx.category.trim().ifBlank { "其他" }.take(40),
                 cardLastFour = tx.cardLastFour?.trim()?.takeIf { it.isNotEmpty() }?.take(8),
-                rawNotification = tx.rawNotification?.trim()?.takeIf { it.isNotEmpty() }?.take(600),
-                note = tx.note?.trim()?.takeIf { it.isNotEmpty() }?.take(200),
+                rawNotification = compactText(tx.rawNotification, MAX_RAW_NOTIFICATION_LENGTH),
+                note = compactText(tx.note, MAX_NOTE_LENGTH),
                 occurredAtMillis = tx.occurredAtMillis.coerceAtLeast(1L),
                 recordedBaseCurrencyCode = baseCode,
                 recordedRateToBase = snapshotRate,
@@ -257,7 +265,7 @@ class LedgerRepository(
                 merchant = merchant.trim().ifBlank { "未知商户" }.take(120),
                 channel = channel.trim().ifBlank { "未知渠道" }.take(60),
                 cardLastFour = cardLastFour?.trim()?.takeIf { it.isNotEmpty() }?.take(8),
-                note = note?.trim()?.takeIf { it.isNotEmpty() }?.take(200),
+                note = compactText(note, MAX_NOTE_LENGTH),
                 occurredAtMillis = occurredAtMillis.coerceAtLeast(1L),
                 confirmed = confirmed,
                 updatedAtMillis = System.currentTimeMillis()
@@ -536,7 +544,109 @@ class LedgerRepository(
         settingsStore.markBackupReminderSent(millis)
     }
 
+    suspend fun inspectStorageFootprint(context: Context): StorageFootprintInfo = withContext(Dispatchers.IO) {
+        val appCtx = context.applicationContext
+        val dbInstance = database ?: LedgerDatabase.getInstance(appCtx)
+        val actualPath = runCatching { dbInstance.openHelper.writableDatabase.path }.getOrNull()
+        val dbFile = if (!actualPath.isNullOrBlank()) {
+            File(actualPath)
+        } else {
+            appCtx.getDatabasePath("smart_ledger.db")
+        }
+        val walFile = File("${dbFile.path}-wal")
+        val shmFile = File("${dbFile.path}-shm")
+        val prefsFile = File(appCtx.filesDir, "datastore/smart_ledger_settings.preferences_pb")
+        val modelsDir = File(appCtx.filesDir, "local_ai_models")
+
+        val dbBytes = if (dbFile.exists()) dbFile.length() else 0L
+        val walBytes = (if (walFile.exists()) walFile.length() else 0L) +
+            (if (shmFile.exists()) shmFile.length() else 0L)
+        val prefsBytes = if (prefsFile.exists()) prefsFile.length() else 0L
+        val aiModelBytes = directorySizeBytes(modelsDir)
+        val cacheBytes = directorySizeBytes(appCtx.cacheDir)
+
+        StorageFootprintInfo(
+            databaseBytes = dbBytes,
+            walBytes = walBytes,
+            preferencesBytes = prefsBytes,
+            aiModelBytes = aiModelBytes,
+            cacheBytes = cacheBytes,
+            transactionCount = dao.countTransactions(),
+            rawNotificationCount = dao.countRawNotifications(),
+            inquiryCount = dao.countInquiries()
+        )
+    }
+
+    suspend fun optimizeStorage(
+        context: Context,
+        pruneRawLogsOlderThanDays: Int? = null
+    ): Result<StorageOptimizeResult> {
+        return try {
+            val appCtx = context.applicationContext
+            val before = inspectStorageFootprint(appCtx)
+            val now = System.currentTimeMillis()
+            val prunedInquiries = dao.pruneStaleInquiries(now - 30L * 86_400_000L)
+            val prunedRawLogs = if (pruneRawLogsOlderThanDays != null && pruneRawLogsOlderThanDays >= 0) {
+                val cutoff = if (pruneRawLogsOlderThanDays == 0) {
+                    Long.MAX_VALUE
+                } else {
+                    now - pruneRawLogsOlderThanDays.toLong() * 86_400_000L
+                }
+                dao.pruneOldRawNotifications(cutoff)
+            } else {
+                0
+            }
+
+            val clearedCacheBytes = withContext(Dispatchers.IO) {
+                var freed = 0L
+                appCtx.cacheDir?.listFiles()?.forEach { child ->
+                    freed += directorySizeBytes(child)
+                    child.deleteRecursively()
+                }
+                val modelsDir = File(appCtx.filesDir, "local_ai_models")
+                modelsDir.walkBottomUp().forEach { f ->
+                    if (f.isFile && f.name.endsWith(".tmp")) {
+                        freed += f.length()
+                        f.delete()
+                    }
+                }
+                freed
+            }
+
+            (database ?: LedgerDatabase.getInstance(appCtx)).vacuumAndCheckpoint()
+            val after = inspectStorageFootprint(appCtx)
+
+            Result.success(
+                StorageOptimizeResult(
+                    beforeBytes = before.totalUserDataBytes,
+                    afterBytes = after.totalUserDataBytes,
+                    prunedRawLogs = prunedRawLogs,
+                    prunedInquiries = prunedInquiries,
+                    clearedCacheBytes = clearedCacheBytes
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun compactText(raw: String?, maxLength: Int): String? {
+        val cleaned = raw?.replace(Regex("\\s+"), " ")?.trim() ?: return null
+        if (cleaned.isEmpty()) return null
+        return cleaned.take(maxLength)
+    }
+
+    private fun directorySizeBytes(target: File?): Long {
+        if (target == null || !target.exists()) return 0L
+        if (target.isFile) return target.length()
+        return target.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }
+
     companion object {
+        const val MAX_RAW_NOTIFICATION_LENGTH = 220
+        const val MAX_NOTE_LENGTH = 120
         fun defaultSeededRules(): List<CustomParsingRule> {
             val now = 1700000000000L
             return listOf(

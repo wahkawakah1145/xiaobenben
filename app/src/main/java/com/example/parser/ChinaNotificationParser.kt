@@ -5,6 +5,7 @@ import com.example.model.NumberFormatStyle
 import com.example.model.ParseMethod
 import com.example.model.ParsedNotificationResult
 import com.example.model.TransactionType
+import java.util.Calendar
 import kotlin.math.roundToLong
 
 object ChinaNotificationParser {
@@ -98,7 +99,8 @@ object ChinaNotificationParser {
         title: String,
         content: String,
         customRules: List<CustomParsingRule> = emptyList(),
-        enableLocalSemanticPass: Boolean = true
+        enableLocalSemanticPass: Boolean = false,
+        referenceTimeMillis: Long = System.currentTimeMillis()
     ): ParsedNotificationResult? {
         val combined = "$title\n$content".trim()
         if (combined.isBlank()) return null
@@ -182,6 +184,8 @@ object ChinaNotificationParser {
         val needsInquiry = !isHighPriorityCustomMatch &&
             (confidence < 0.85f || channel == "未知渠道" || (category == "其他" && hasGenericMerchant))
 
+        val extractedOccurredAt = extractOccurredAtMillis(combined, referenceTimeMillis)
+
         return ParsedNotificationResult(
             isFinancialTransaction = true,
             amountCents = amountCents,
@@ -202,8 +206,148 @@ object ChinaNotificationParser {
             needsInquiry = needsInquiry,
             inquiryReason = if (needsInquiry) {
                 uncertaintyReasons.distinct().joinToString("、").ifBlank { "格式不够明确，需确认" }
-            } else ""
+            } else "",
+            occurredAtMillis = extractedOccurredAt
         )
+    }
+
+    fun extractOccurredAtMillis(
+        text: String,
+        referenceMillis: Long = System.currentTimeMillis()
+    ): Long? {
+        if (text.isBlank()) return null
+        val refCal = Calendar.getInstance().apply { timeInMillis = referenceMillis }
+
+        // 1. Full date + time: yyyy-MM-dd HH:mm(:ss) / yyyy年M月d日 H时m分 / yyyy/M/d H:mm
+        val fullDateTimeRegex = Regex(
+            """(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})日?\s*[T\s,，]?\s*(\d{1,2})[:时](\d{2})(?:[:分](\d{2}))?"""
+        )
+        fullDateTimeRegex.find(text)?.let { m ->
+            val y = m.groupValues[1].toIntOrNull()
+            val mon = m.groupValues[2].toIntOrNull()
+            val d = m.groupValues[3].toIntOrNull()
+            val h = m.groupValues[4].toIntOrNull()
+            val min = m.groupValues[5].toIntOrNull()
+            val sec = m.groupValues[6].toIntOrNull() ?: 0
+            if (y != null && mon in 1..12 && d in 1..31 && h in 0..23 && min in 0..59 && sec in 0..59) {
+                return buildCalMillis(y, mon!! - 1, d!!, h!!, min!!, sec)
+            }
+        }
+
+        // 2. Month + Day + Time (no year): 11月18日 08:30(:00) or 11-18 08:30 or 11/18 08:30
+        val monthDayTimeRegex = Regex(
+            """(?<!\d)(\d{1,2})\s*[月/-]\s*(\d{1,2})日?\s*(\d{1,2})[:时](\d{2})(?:[:分](\d{2}))?"""
+        )
+        monthDayTimeRegex.find(text)?.let { m ->
+            val mon = m.groupValues[1].toIntOrNull()
+            val d = m.groupValues[2].toIntOrNull()
+            val h = m.groupValues[3].toIntOrNull()
+            val min = m.groupValues[4].toIntOrNull()
+            val sec = m.groupValues[5].toIntOrNull() ?: 0
+            if (mon in 1..12 && d in 1..31 && h in 0..23 && min in 0..59 && sec in 0..59) {
+                val cal = Calendar.getInstance().apply {
+                    set(refCal.get(Calendar.YEAR), mon!! - 1, d!!, h!!, min!!, sec)
+                    set(Calendar.MILLISECOND, 0)
+                }
+                if (cal.timeInMillis > referenceMillis + 86_400_000L) {
+                    cal.add(Calendar.YEAR, -1)
+                }
+                return cal.timeInMillis
+            }
+        }
+
+        // 3. Relative day + time: 今天 / 今日 / 昨天 / 昨日 / 前天 HH:mm
+        val relTimeRegex = Regex("""(今天|今日|昨天|昨日|前天)\s*(\d{1,2})[:时](\d{2})(?:[:分](\d{2}))?""")
+        relTimeRegex.find(text)?.let { m ->
+            val dayOffset = when (m.groupValues[1]) {
+                "昨天", "昨日" -> -1
+                "前天" -> -2
+                else -> 0
+            }
+            val h = m.groupValues[2].toIntOrNull()
+            val min = m.groupValues[3].toIntOrNull()
+            val sec = m.groupValues[4].toIntOrNull() ?: 0
+            if (h in 0..23 && min in 0..59 && sec in 0..59) {
+                val cal = (refCal.clone() as Calendar).apply {
+                    add(Calendar.DAY_OF_YEAR, dayOffset)
+                    set(Calendar.HOUR_OF_DAY, h!!)
+                    set(Calendar.MINUTE, min!!)
+                    set(Calendar.SECOND, sec)
+                    set(Calendar.MILLISECOND, 0)
+                }
+                return cal.timeInMillis
+            }
+        }
+
+        // 4. Explicit date without time: yyyy-MM-dd / yyyy年MM月dd日
+        val fullDateOnlyRegex = Regex("""(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})日?""")
+        fullDateOnlyRegex.find(text)?.let { m ->
+            val y = m.groupValues[1].toIntOrNull()
+            val mon = m.groupValues[2].toIntOrNull()
+            val d = m.groupValues[3].toIntOrNull()
+            if (y != null && mon in 1..12 && d in 1..31) {
+                val timeOnly = Regex("""(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)""").find(text)
+                val h = timeOnly?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it in 0..23 }
+                    ?: refCal.get(Calendar.HOUR_OF_DAY)
+                val min = timeOnly?.groupValues?.get(2)?.toIntOrNull()?.takeIf { it in 0..59 }
+                    ?: refCal.get(Calendar.MINUTE)
+                val sec = timeOnly?.groupValues?.get(3)?.toIntOrNull()?.takeIf { it in 0..59 } ?: 0
+                return buildCalMillis(y, mon!! - 1, d!!, h, min, sec)
+            }
+        }
+
+        // 5. Standalone time HH:mm(:ss) -> assume reference date, guard midnight delayed notification rollover
+        val timeOnlyRegex = Regex("""(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)""")
+        timeOnlyRegex.find(text)?.let { m ->
+            val h = m.groupValues[1].toIntOrNull()
+            val min = m.groupValues[2].toIntOrNull()
+            val sec = m.groupValues[3].toIntOrNull() ?: 0
+            if (h in 0..23 && min in 0..59 && sec in 0..59) {
+                val cal = (refCal.clone() as Calendar).apply {
+                    set(Calendar.HOUR_OF_DAY, h!!)
+                    set(Calendar.MINUTE, min!!)
+                    set(Calendar.SECOND, sec)
+                    set(Calendar.MILLISECOND, 0)
+                }
+                if (cal.timeInMillis > referenceMillis + 10 * 60_000L) {
+                    cal.add(Calendar.DAY_OF_YEAR, -1)
+                }
+                return cal.timeInMillis
+            }
+        }
+
+        // 6. Month+day only: 11月18日
+        val monthDayOnlyRegex = Regex("""(?<!\d)(\d{1,2})月(\d{1,2})日""")
+        monthDayOnlyRegex.find(text)?.let { m ->
+            val mon = m.groupValues[1].toIntOrNull()
+            val d = m.groupValues[2].toIntOrNull()
+            if (mon in 1..12 && d in 1..31) {
+                val cal = Calendar.getInstance().apply {
+                    set(
+                        refCal.get(Calendar.YEAR),
+                        mon!! - 1,
+                        d!!,
+                        refCal.get(Calendar.HOUR_OF_DAY),
+                        refCal.get(Calendar.MINUTE),
+                        0
+                    )
+                    set(Calendar.MILLISECOND, 0)
+                }
+                if (cal.timeInMillis > referenceMillis + 86_400_000L) {
+                    cal.add(Calendar.YEAR, -1)
+                }
+                return cal.timeInMillis
+            }
+        }
+
+        return null
+    }
+
+    private fun buildCalMillis(year: Int, monthZero: Int, day: Int, hour: Int, minute: Int, second: Int): Long {
+        return Calendar.getInstance().apply {
+            set(year, monthZero, day, hour, minute, second)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
     }
 
     fun extractKeywordCandidates(

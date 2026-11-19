@@ -115,7 +115,8 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             title = title,
             content = content,
             customRules = customRules,
-            enableLocalSemanticPass = settings.smartSemanticEnabled
+            enableLocalSemanticPass = false,
+            referenceTimeMillis = occurredAt
         )
         val aiConfig = repository.getAiConfigOnce()
         val shouldInvokeAi = aiConfig.providerMode != com.example.model.AiProviderMode.DISABLED && (
@@ -138,6 +139,10 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             ruleParsed
         }
 
+        val resolvedInquiryTime = parsed?.occurredAtMillis
+            ?: ChinaNotificationParser.extractOccurredAtMillis("$title\n$content", occurredAt)
+            ?: occurredAt
+
         if (parsed == null || !parsed.isFinancialTransaction || parsed.amountCents <= 0L) {
             if (ChinaNotificationParser.hasUncertainFinancialCue(packageName, title, content)) {
                 val inquiry = com.example.model.NotificationInquiry(
@@ -152,7 +157,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                     suggestedMerchant = title.ifBlank { appLabel }.take(40),
                     suggestedChannel = appLabel,
                     reason = "未能自动提取金额或模板，等待确认并生成规则",
-                    occurredAtMillis = occurredAt
+                    occurredAtMillis = resolvedInquiryTime
                 )
                 repository.addInquiry(inquiry)
                 NotificationBridge.appendLog(
@@ -197,7 +202,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 suggestedChannel = parsed.channel,
                 cardLastFour = parsed.cardLastFour,
                 reason = parsed.inquiryReason.ifBlank { "信息不够明确，请确认后学习为规则" },
-                occurredAtMillis = occurredAt
+                occurredAtMillis = resolvedInquiryTime
             )
             repository.addInquiry(inquiry)
             val currencySymbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
@@ -221,6 +226,11 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         }
 
         val needsManualConfirm = settings.requireManualConfirm
+        val resolvedTxOccurredAt = parsed.occurredAtMillis ?: occurredAt
+        val compactRaw = "$title: $content"
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+            .take(220)
         val tx = LedgerTransaction(
             amountCents = parsed.amountCents,
             currencyCode = parsed.currencyCode,
@@ -231,9 +241,9 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             cardLastFour = parsed.cardLastFour,
             sourceApp = parsed.sourceApp.name,
             parseMethod = parsed.parseMethod.name,
-            rawNotification = "$title: $content".take(600),
-            note = parsed.reasoning.take(200),
-            occurredAtMillis = occurredAt,
+            rawNotification = compactRaw,
+            note = parsed.reasoning.take(120),
+            occurredAtMillis = resolvedTxOccurredAt,
             confirmed = !needsManualConfirm
         )
 
@@ -241,7 +251,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         saveResult.onSuccess {
             val currencySymbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
             val formattedAmount = "$currencySymbol%.2f".format(parsed.amountCents / 100.0)
-            val methodTag = if (parsed.parseMethod == ParseMethod.LOCAL_NLP) "语义识别" else "规则匹配"
+            val methodTag = if (parsed.parseMethod == ParseMethod.LOCAL_NLP) "AI理解" else "规则匹配"
             val stateLabel = if (needsManualConfirm) "待进软件确认" else "已自动入账"
             NotificationBridge.appendLog(
                 packageName = packageName,

@@ -27,16 +27,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Rule
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Bolt
-import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.HelpOutline
-import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.Psychology
-import androidx.compose.material.icons.rounded.Save
+import com.example.ui.components.formatDateTimeFull
+import com.example.ui.theme.AppIcons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -203,36 +197,12 @@ fun ParserHubScreen(
                                     .minimumInteractiveComponentSize()
                                     .testTag("bench_rule_parse_button")
                             ) {
-                                Icon(Icons.Rounded.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("规则匹配")
                             }
 
                             Button(
-                                onClick = {
-                                    viewModel.analyzeNotificationText(
-                                        packageName = selectedPackage,
-                                        title = titleInput,
-                                        content = bodyInput,
-                                        enableSemanticPass = true
-                                    )
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("bench_semantic_parse_button")
-                            ) {
-                                Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("语义解析")
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
                                 onClick = {
                                     viewModel.analyzeWithConfiguredAi(
                                         context = context,
@@ -246,38 +216,38 @@ fun ParserHubScreen(
                                     .minimumInteractiveComponentSize()
                                     .testTag("bench_ai_parse_button")
                             ) {
-                                Icon(Icons.Rounded.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("AI 理解")
+                                Text("AI理解")
                             }
+                        }
 
-                            OutlinedButton(
-                                onClick = {
-                                    if (!isListenerEnabled) {
-                                        onShowMessage("请先开启通知读取权限")
-                                        NotificationBridge.openNotificationListenerSettings(context)
-                                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                        !NotificationBridge.hasPostNotificationPermission(context)
-                                    ) {
-                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    } else {
-                                        NotificationBridge.dispatchTestPaymentNotification(
-                                            context = context,
-                                            title = titleInput,
-                                            body = bodyInput
-                                        )
-                                        onShowMessage("已发送测试系统通知")
-                                    }
-                                },
-                                modifier = Modifier
-                                    .weight(1.25f)
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("bench_send_system_notification_button")
-                            ) {
-                                Icon(Icons.Rounded.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("系统通知测试")
-                            }
+                        OutlinedButton(
+                            onClick = {
+                                if (!isListenerEnabled) {
+                                    onShowMessage("请先开启通知读取权限")
+                                    NotificationBridge.openNotificationListenerSettings(context)
+                                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                    !NotificationBridge.hasPostNotificationPermission(context)
+                                ) {
+                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    NotificationBridge.dispatchTestPaymentNotification(
+                                        context = context,
+                                        title = titleInput,
+                                        body = bodyInput
+                                    )
+                                    onShowMessage("已发送测试系统通知")
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .minimumInteractiveComponentSize()
+                                .testTag("bench_send_system_notification_button")
+                        ) {
+                            Icon(AppIcons.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("系统通知测试")
                         }
 
                         AnimatedVisibility(visible = parseState !is ParseBenchState.Idle) {
@@ -309,7 +279,7 @@ fun ParserHubScreen(
                                                 },
                                                 modifier = Modifier.fillMaxWidth()
                                             ) {
-                                                Icon(Icons.Rounded.HelpOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Icon(AppIcons.HelpOutline, contentDescription = null, modifier = Modifier.size(16.dp))
                                                 Spacer(modifier = Modifier.width(6.dp))
                                                 Text("加入首页「待询问」并学习规则")
                                             }
@@ -376,6 +346,13 @@ fun ParserHubScreen(
                                                 }
                                                 ParseMethodBadge(method = result.parseMethod)
                                             }
+                                            result.occurredAtMillis?.let { ts ->
+                                                Text(
+                                                    text = "识别时间：${formatDateTimeFull(ts)}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                             if (result.needsInquiry) {
                                                 Text(
                                                     text = "置信度较低（${result.inquiryReason}），后台收到同类通知将主动向你询问",
@@ -414,7 +391,7 @@ fun ParserHubScreen(
                                                         .weight(1f)
                                                         .testTag("bench_save_parsed_button")
                                                 ) {
-                                                    Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                    Icon(AppIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                                                     Spacer(modifier = Modifier.width(6.dp))
                                                     Text("确认入账")
                                                 }
@@ -439,7 +416,7 @@ fun ParserHubScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Rounded.Rule, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Icon(AppIcons.Rule, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Text("识别规则（点击可编辑）", style = MaterialTheme.typography.titleMedium)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -645,7 +622,7 @@ private fun CustomRuleCard(
             )
             IconButton(onClick = onDelete) {
                 Icon(
-                    imageVector = Icons.Rounded.DeleteOutline,
+                    imageVector = AppIcons.DeleteOutline,
                     contentDescription = "删除规则",
                     tint = ExpenseCoral
                 )

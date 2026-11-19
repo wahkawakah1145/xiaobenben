@@ -18,9 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Edit
+import com.example.ui.theme.AppIcons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -112,7 +111,7 @@ fun BatchSelectionActionBar(
                         .testTag("batch_select_all_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.DoneAll,
+                        imageVector = AppIcons.DoneAll,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
@@ -134,7 +133,7 @@ fun BatchSelectionActionBar(
                         .testTag("batch_delete_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.DeleteOutline,
+                        imageVector = AppIcons.DeleteOutline,
                         contentDescription = null,
                         tint = ExpenseCoral,
                         modifier = Modifier.size(18.dp)

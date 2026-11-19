@@ -20,24 +20,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccountBalance
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.CardGiftcard
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.LocalHospital
-import androidx.compose.material.icons.rounded.Movie
-import androidx.compose.material.icons.rounded.Payments
-import androidx.compose.material.icons.rounded.ReceiptLong
-import androidx.compose.material.icons.rounded.Restaurant
-import androidx.compose.material.icons.rounded.Savings
-import androidx.compose.material.icons.rounded.ShoppingBag
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -52,7 +43,9 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
+import com.example.ui.theme.AppIcons
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,8 +75,10 @@ import com.example.ui.theme.TransferCobalt
 import com.example.ui.theme.UnionPayBlue
 import com.example.ui.theme.WechatGreen
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.roundToLong
 
 fun formatCurrency(
@@ -138,17 +133,17 @@ fun channelBrandColor(channel: String): Color {
 
 fun categoryIcon(category: String): ImageVector {
     return when (category) {
-        "餐饮美食" -> Icons.Rounded.Restaurant
-        "交通出行" -> Icons.Rounded.DirectionsCar
-        "购物消费" -> Icons.Rounded.ShoppingBag
+        "餐饮美食" -> AppIcons.Restaurant
+        "交通出行" -> AppIcons.DirectionsCar
+        "购物消费" -> AppIcons.ShoppingBag
         "居家生活" -> Icons.Rounded.Home
-        "休闲娱乐" -> Icons.Rounded.Movie
-        "医疗健康" -> Icons.Rounded.LocalHospital
-        "工资奖金" -> Icons.Rounded.Payments
-        "理财收益" -> Icons.Rounded.Savings
-        "退款返现" -> Icons.Rounded.ReceiptLong
-        "转账红包", "转账收款" -> Icons.Rounded.CardGiftcard
-        else -> Icons.Rounded.AccountBalance
+        "休闲娱乐" -> AppIcons.Movie
+        "医疗健康" -> AppIcons.LocalHospital
+        "工资奖金" -> AppIcons.Payments
+        "理财收益" -> AppIcons.Savings
+        "退款返现" -> AppIcons.ReceiptLong
+        "转账红包", "转账收款" -> AppIcons.CardGiftcard
+        else -> AppIcons.AccountBalance
     }
 }
 
@@ -198,7 +193,7 @@ fun ParseMethodBadge(method: ParseMethod, modifier: Modifier = Modifier) {
         ) {
             if (method == ParseMethod.LOCAL_NLP) {
                 Icon(
-                    imageVector = Icons.Rounded.AutoAwesome,
+                    imageVector = AppIcons.AutoAwesome,
                     contentDescription = null,
                     tint = fg,
                     modifier = Modifier.size(11.dp)
@@ -450,7 +445,7 @@ fun TransactionDetailSheet(
                         .testTag("delete_tx_button"),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = ExpenseCoral)
                 ) {
-                    Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(AppIcons.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("删除")
                 }
@@ -483,7 +478,8 @@ fun TransactionEditorDialog(
         merchant: String,
         channel: String,
         cardLastFour: String?,
-        note: String?
+        note: String?,
+        occurredAtMillis: Long
     ) -> Unit
 ) {
     var selectedType by remember {
@@ -505,6 +501,16 @@ fun TransactionEditorDialog(
     }
     var cardTail by remember { mutableStateOf(initialTransaction?.cardLastFour ?: "") }
     var note by remember { mutableStateOf(initialTransaction?.note ?: "") }
+    val initialMillis = remember(initialTransaction) {
+        initialTransaction?.occurredAtMillis ?: System.currentTimeMillis()
+    }
+    var dateText by remember(initialMillis) {
+        mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(initialMillis)))
+    }
+    var timeText by remember(initialMillis) {
+        mutableStateOf(SimpleDateFormat("HH:mm", Locale.US).format(Date(initialMillis)))
+    }
+    var showDatePicker by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf<String?>(null) }
 
     val availableCategories = when (selectedType) {
@@ -638,10 +644,69 @@ fun TransactionEditorDialog(
                     )
                     OutlinedTextField(
                         value = note,
-                        onValueChange = { note = it.take(100) },
+                        onValueChange = { note = it.take(120) },
                         label = { Text("备注 (可选)") },
                         singleLine = true,
                         modifier = Modifier.weight(1.4f)
+                    )
+                }
+
+                Text("记账时间（可修正通知延迟/导入偏差）", style = MaterialTheme.typography.labelMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = dateText,
+                        onValueChange = { dateText = it.take(10); validationError = null },
+                        label = { Text("日期 (yyyy-MM-dd)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1.25f)
+                            .testTag("editor_date_input")
+                    )
+                    OutlinedTextField(
+                        value = timeText,
+                        onValueChange = { timeText = it.take(5); validationError = null },
+                        label = { Text("时间 (HH:mm)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(0.95f)
+                            .testTag("editor_time_input")
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AssistChip(
+                        onClick = { showDatePicker = true },
+                        label = { Text("日历选日期") }
+                    )
+                    AssistChip(
+                        onClick = {
+                            val now = Date(System.currentTimeMillis())
+                            dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now)
+                            timeText = SimpleDateFormat("HH:mm", Locale.US).format(now)
+                        },
+                        label = { Text("此刻") }
+                    )
+                    AssistChip(
+                        onClick = {
+                            val millis = (parseDateTimeInputMillis(dateText, timeText) ?: System.currentTimeMillis()) - 3_600_000L
+                            val d = Date(millis)
+                            dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
+                            timeText = SimpleDateFormat("HH:mm", Locale.US).format(d)
+                        },
+                        label = { Text("-1小时") }
+                    )
+                    AssistChip(
+                        onClick = {
+                            val millis = System.currentTimeMillis() - 86_400_000L
+                            val d = Date(millis)
+                            dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
+                            timeText = SimpleDateFormat("HH:mm", Locale.US).format(d)
+                        },
+                        label = { Text("昨天此时") }
                     )
                 }
 
@@ -662,6 +727,11 @@ fun TransactionEditorDialog(
                         validationError = "请输入有效的交易金额（大于 0）"
                         return@Button
                     }
+                    val parsedTimeMillis = parseDateTimeInputMillis(dateText, timeText)
+                    if (parsedTimeMillis == null) {
+                        validationError = "请输入有效日期和时间，例如 2026-11-19 与 08:30"
+                        return@Button
+                    }
                     val cents = (yuan * 100.0).roundToLong().coerceAtLeast(1L)
                     onSave(
                         cents,
@@ -671,7 +741,8 @@ fun TransactionEditorDialog(
                         merchant.trim().ifBlank { category },
                         channel.trim().ifBlank { "手动记账" },
                         cardTail.trim().ifBlank { null },
-                        note.trim().ifBlank { null }
+                        note.trim().ifBlank { null },
+                        parsedTimeMillis
                     )
                 },
                 modifier = Modifier.testTag("editor_save_button")
@@ -685,4 +756,56 @@ fun TransactionEditorDialog(
             }
         }
     )
+
+    if (showDatePicker) {
+        val initialPickerUtc = remember(dateText) {
+            val cal = Calendar.getInstance()
+            cal.timeInMillis = parseDateTimeInputMillis(dateText, "12:00") ?: initialMillis
+            val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+            utc.clear()
+            utc.set(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
+            utc.timeInMillis
+        }
+        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialPickerUtc)
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { utcMillis ->
+                            val utcCal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                                timeInMillis = utcMillis
+                            }
+                            dateText = "%04d-%02d-%02d".format(
+                                Locale.US,
+                                utcCal.get(Calendar.YEAR),
+                                utcCal.get(Calendar.MONTH) + 1,
+                                utcCal.get(Calendar.DAY_OF_MONTH)
+                            )
+                            validationError = null
+                        }
+                        showDatePicker = false
+                    }
+                ) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) {
+                    Text("取消")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+}
+
+fun parseDateTimeInputMillis(dateInput: String, timeInput: String): Long? {
+    val cleanDate = dateInput.trim().replace('/', '-').replace('.', '-')
+    val cleanTime = timeInput.trim().replace('：', ':')
+    val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply { isLenient = false }
+    return runCatching {
+        fmt.parse("$cleanDate $cleanTime")?.time
+    }.getOrNull()
 }
