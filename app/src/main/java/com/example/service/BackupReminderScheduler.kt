@@ -88,8 +88,8 @@ object BackupReminderScheduler {
             val intervalText = formatIntervalLabel(settings.backupReminderIntervalHours)
             val posted = NotificationBridge.postUrgentBackupReminder(
                 context = context.applicationContext,
-                title = "【紧急提醒】请及时备份小本本账单",
-                body = "已超过设定的备份周期（$intervalText），请点击立即导出本地 JSON 备份，防止意外丢失记录。"
+                title = "【通知】请及时备份小本本账单",
+                body = "已超过设定的备份周期（$intervalText），点击立即导出本地 JSON 备份，防止意外丢失记录。"
             )
             if (posted) {
                 repository.markBackupReminderSent(now)
@@ -136,7 +136,7 @@ class BackupReminderReceiver : BroadcastReceiver() {
                     val intervalText = BackupReminderScheduler.formatIntervalLabel(settings.backupReminderIntervalHours)
                     NotificationBridge.postUrgentBackupReminder(
                         context = context.applicationContext,
-                        title = "【紧急提醒】小本本数据备份时间到",
+                        title = "【通知】小本本数据备份时间到",
                         body = "已到达你设置的 $intervalText 备份周期，点击前往导出本地备份。"
                     )
                     repository.markBackupReminderSent(now)

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -227,32 +228,56 @@ fun ParserHubScreen(
                             }
                         }
 
-                        OutlinedButton(
-                            onClick = {
-                                if (!isListenerEnabled) {
-                                    onShowMessage("请先开启通知读取权限")
-                                    NotificationBridge.openNotificationListenerSettings(context)
-                                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                    !NotificationBridge.hasPostNotificationPermission(context)
-                                ) {
-                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                } else {
-                                    NotificationBridge.dispatchTestPaymentNotification(
-                                        context = context,
-                                        title = titleInput,
-                                        body = bodyInput
-                                    )
-                                    onShowMessage("已发送测试系统通知")
-                                }
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .minimumInteractiveComponentSize()
-                                .testTag("bench_send_system_notification_button")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Rounded.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("发送真实系统通知测试")
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.analyzeWithConfiguredAi(
+                                        context = context,
+                                        packageName = selectedPackage,
+                                        title = titleInput,
+                                        content = bodyInput
+                                    )
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("bench_ai_parse_button")
+                            ) {
+                                Icon(Icons.Rounded.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("AI 理解")
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    if (!isListenerEnabled) {
+                                        onShowMessage("请先开启通知读取权限")
+                                        NotificationBridge.openNotificationListenerSettings(context)
+                                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                        !NotificationBridge.hasPostNotificationPermission(context)
+                                    ) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        NotificationBridge.dispatchTestPaymentNotification(
+                                            context = context,
+                                            title = titleInput,
+                                            body = bodyInput
+                                        )
+                                        onShowMessage("已发送测试系统通知")
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(1.25f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("bench_send_system_notification_button")
+                            ) {
+                                Icon(Icons.Rounded.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("系统通知测试")
+                            }
                         }
 
                         AnimatedVisibility(visible = parseState !is ParseBenchState.Idle) {

@@ -1,0 +1,544 @@
+package com.example.data
+
+import android.content.Context
+import com.example.model.AiConfig
+import com.example.model.AiProviderMode
+import com.example.model.CategoryCatalog
+import com.example.model.CurrencyCatalog
+import com.example.model.LocalModelFileSpec
+import com.example.model.LocalModelPreset
+import com.example.model.ParseMethod
+import com.example.model.ParsedNotificationResult
+import com.example.model.TransactionType
+import com.example.parser.ChinaNotificationParser
+import com.example.parser.ChinaPaymentCatalog
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.TimeUnit
+import kotlin.math.roundToLong
+
+object LocalModelCatalog {
+    val presets: List<LocalModelPreset> = listOf(
+        LocalModelPreset(
+            id = "bge-small-zh-v15",
+            name = "BGE-Small-Zh v1.5 (轻量中文核)",
+            repoId = "BAAI/bge-small-zh-v15",
+            license = "MIT License",
+            sizeHint = "约 560 KB（词表 + 分词 + 配置）",
+            summary = "智源研究院开源中文语义模型词表与架构配置，适合快速离线分类、商户实体切分与消费意图评分。",
+            files = listOf(
+                LocalModelFileSpec("config.json", "resolve/main/config.json"),
+                LocalModelFileSpec("vocab.txt", "resolve/main/vocab.txt"),
+                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
+            )
+        ),
+        LocalModelPreset(
+            id = "ernie-3.0-nano-zh",
+            name = "ERNIE-3.0-Nano-Zh (超轻量极速核)",
+            repoId = "nghuyong/ernie-3.0-nano-zh",
+            license = "Apache-2.0",
+            sizeHint = "约 130 KB（极速按需下载）",
+            summary = "极小体积开源中文 NLP 模型词表与配置，毫秒级离线分词并匹配消费/收入/退款意图。",
+            files = listOf(
+                LocalModelFileSpec("config.json", "resolve/main/config.json"),
+                LocalModelFileSpec("vocab.txt", "resolve/main/vocab.txt")
+            )
+        ),
+        LocalModelPreset(
+            id = "qwen25-0.5b-instruct",
+            name = "Qwen2.5-0.5B-Instruct (通义轻量词表核)",
+            repoId = "Qwen/Qwen2.5-0.5B-Instruct",
+            license = "Apache-2.0",
+            sizeHint = "约 7.1 MB（BPE 全量词表 + 配置）",
+            summary = "阿里开源 Qwen2.5 轻量模型 BPE 分词词表与配置，适合复杂账单文本、外币符号与混合商户识别。",
+            files = listOf(
+                LocalModelFileSpec("config.json", "resolve/main/config.json"),
+                LocalModelFileSpec("tokenizer_config.json", "resolve/main/tokenizer_config.json"),
+                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
+            )
+        )
+    )
+
+    fun resolve(modelId: String?): LocalModelPreset =
+        presets.firstOrNull { it.id == modelId } ?: presets.first()
+}
+
+data class LocalModelInstallStatus(
+    val modelId: String,
+    val installed: Boolean,
+    val totalBytes: Long,
+    val vocabCountEstimate: Int
+)
+
+class AiUnderstandingManager {
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(35, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .build()
+
+    fun modelDirectory(context: Context, modelId: String): File {
+        val root = File(context.filesDir, "local_ai_models")
+        if (!root.exists()) root.mkdirs()
+        return File(root, modelId)
+    }
+
+    fun getInstallStatus(context: Context, modelId: String): LocalModelInstallStatus {
+        val preset = LocalModelCatalog.resolve(modelId)
+        val dir = modelDirectory(context, preset.id)
+        if (!dir.exists()) {
+            return LocalModelInstallStatus(preset.id, installed = false, totalBytes = 0L, vocabCountEstimate = 0)
+        }
+        val expectedFiles = preset.files.map { File(dir, it.fileName) }
+        val installed = expectedFiles.all { it.exists() && it.length() > 16L }
+        val bytes = expectedFiles.sumOf { if (it.exists()) it.length() else 0L }
+        val vocabFile = File(dir, "vocab.txt")
+        val vocabCount = when {
+            vocabFile.exists() -> vocabFile.useLines { it.count() }
+            installed -> 150_000
+            else -> 0
+        }
+        return LocalModelInstallStatus(
+            modelId = preset.id,
+            installed = installed,
+            totalBytes = bytes,
+            vocabCountEstimate = vocabCount
+        )
+    }
+
+    fun deleteLocalModel(context: Context, modelId: String): Boolean {
+        val dir = modelDirectory(context, LocalModelCatalog.resolve(modelId).id)
+        return if (dir.exists()) dir.deleteRecursively() else true
+    }
+
+    suspend fun downloadLocalModel(
+        context: Context,
+        modelId: String,
+        mirrorBaseUrl: String,
+        onProgress: (progressFraction: Float, statusText: String) -> Unit
+    ): Result<LocalModelInstallStatus> = withContext(Dispatchers.IO) {
+        val preset = LocalModelCatalog.resolve(modelId)
+        val dir = modelDirectory(context, preset.id)
+        if (!dir.exists()) dir.mkdirs()
+
+        val cleanMirror = mirrorBaseUrl.trim().trimEnd('/').ifBlank { "https://hf-mirror.com" }
+        try {
+            val totalFiles = preset.files.size
+            preset.files.forEachIndexed { idx, spec ->
+                val url = "$cleanMirror/${preset.repoId}/${spec.repoPath}"
+                onProgress(idx.toFloat() / totalFiles.toFloat(), "正在下载 ${spec.fileName} (${idx + 1}/$totalFiles)...")
+
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "XiaoBenBen-Android/1.0")
+                    .get()
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        return@withContext Result.failure(
+                            IllegalStateException("下载 ${spec.fileName} 失败 (HTTP ${response.code})，可尝试切换镜像源")
+                        )
+                    }
+                    val body = response.body ?: return@withContext Result.failure(
+                        IllegalStateException("下载 ${spec.fileName} 响应体为空")
+                    )
+                    val contentLength = body.contentLength()
+                    val tmpFile = File(dir, "${spec.fileName}.tmp")
+                    val targetFile = File(dir, spec.fileName)
+
+                    body.byteStream().use { input ->
+                        FileOutputStream(tmpFile).use { output ->
+                            val buffer = ByteArray(8192)
+                            var fileBytesRead = 0L
+                            var n: Int
+                            while (input.read(buffer).also { n = it } != -1) {
+                                output.write(buffer, 0, n)
+                                fileBytesRead += n
+                                val fileFrac = if (contentLength > 0L) {
+                                    (fileBytesRead.toFloat() / contentLength.toFloat()).coerceIn(0f, 1f)
+                                } else {
+                                    0.5f
+                                }
+                                val overall = (idx + fileFrac) / totalFiles.toFloat()
+                                onProgress(
+                                    overall.coerceIn(0f, 0.99f),
+                                    "正在下载 ${spec.fileName} (${fileBytesRead / 1024} KB)"
+                                )
+                            }
+                            output.flush()
+                        }
+                    }
+
+                    if (!tmpFile.exists() || tmpFile.length() < 16L) {
+                        tmpFile.delete()
+                        return@withContext Result.failure(IllegalStateException("下载文件 ${spec.fileName} 校验失败"))
+                    }
+                    if (targetFile.exists()) targetFile.delete()
+                    if (!tmpFile.renameTo(targetFile)) {
+                        tmpFile.copyTo(targetFile, overwrite = true)
+                        tmpFile.delete()
+                    }
+                }
+            }
+            onProgress(1f, "${preset.name} 下载完成")
+            Result.success(getInstallStatus(context, preset.id))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(IllegalStateException("模型下载异常：${e.localizedMessage ?: "请检查网络连接"}", e))
+        }
+    }
+
+    suspend fun enhanceOrParseNotification(
+        context: Context,
+        config: AiConfig,
+        packageName: String,
+        title: String,
+        content: String,
+        fallbackParsed: ParsedNotificationResult?
+    ): Result<ParsedNotificationResult> {
+        return when (config.providerMode) {
+            AiProviderMode.DISABLED -> {
+                fallbackParsed?.let { Result.success(it) }
+                    ?: Result.failure(IllegalStateException("AI 理解接口当前已关闭"))
+            }
+            AiProviderMode.ONLINE_API -> {
+                parseWithOnlineApi(
+                    config = config,
+                    packageName = packageName,
+                    title = title,
+                    content = content
+                )
+            }
+            AiProviderMode.LOCAL_SMALL_MODEL -> {
+                parseWithLocalModel(
+                    context = context,
+                    modelId = config.localModelId,
+                    packageName = packageName,
+                    title = title,
+                    content = content
+                )
+            }
+        }
+    }
+
+    suspend fun parseWithLocalModel(
+        context: Context,
+        modelId: String,
+        packageName: String,
+        title: String,
+        content: String
+    ): Result<ParsedNotificationResult> = withContext(Dispatchers.Default) {
+        val preset = LocalModelCatalog.resolve(modelId)
+        val status = getInstallStatus(context, preset.id)
+        if (!status.installed) {
+            return@withContext Result.failure(
+                IllegalStateException("本地模型「${preset.name}」尚未下载，请先在「AI 理解接口」中按需下载")
+            )
+        }
+
+        val combined = "$title\n$content".trim()
+        if (combined.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("通知内容为空"))
+        }
+
+        val dir = modelDirectory(context, preset.id)
+        val vocabTokens = loadVocabTokens(dir)
+        val amountCents = ChinaNotificationParser.extractAmountCents(
+            text = combined,
+            allowLooseStandaloneNumber = true
+        ) ?: return@withContext Result.failure(IllegalStateException("本地小模型未能在文本中检测到有效金额"))
+
+        val matchedVocabHits = tokenizeWithVocab(combined, vocabTokens)
+        val currencyCode = ChinaNotificationParser.detectCurrencyCode(combined)
+        val type = inferTypeWithVocab(combined)
+        val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
+        val channel = ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
+            ?: ChinaPaymentCatalog.channels.firstOrNull { ch ->
+                combined.contains(ch.name) || ch.smsCodes.any { combined.contains(it) }
+            }?.name
+            ?: ChinaNotificationParser.parse(packageName, title, content, emptyList(), true)?.channel
+            ?: "未知渠道"
+
+        val baseParsed = ChinaNotificationParser.parse(packageName, title, content, emptyList(), true)
+        val merchant = baseParsed?.merchant
+            ?.takeIf { !it.endsWith("消费") && !it.endsWith("收款") && it != "未知渠道消费" }
+            ?: extractEntityFromVocabTokens(combined, matchedVocabHits, channel, type)
+        val category = inferCategoryScored(merchant, combined, type)
+
+        val confidence = if (matchedVocabHits.isNotEmpty() && channel != "未知渠道") 0.90f else 0.84f
+        val modelTag = preset.name.substringBefore(" ")
+        Result.success(
+            ParsedNotificationResult(
+                isFinancialTransaction = true,
+                amountCents = amountCents,
+                currencyCode = currencyCode,
+                type = type,
+                category = category,
+                merchant = merchant.take(40),
+                channel = channel,
+                cardLastFour = baseParsed?.cardLastFour,
+                sourceApp = sourceApp,
+                parseMethod = ParseMethod.LOCAL_NLP,
+                confidence = confidence,
+                reasoning = "本地模型 [$modelTag · ${vocabTokens.size} 词表] 离线理解",
+                needsInquiry = false,
+                inquiryReason = ""
+            )
+        )
+    }
+
+    suspend fun parseWithOnlineApi(
+        config: AiConfig,
+        packageName: String,
+        title: String,
+        content: String
+    ): Result<ParsedNotificationResult> = withContext(Dispatchers.IO) {
+        val rawEndpoint = config.apiBaseUrl.trim()
+        val apiKey = config.apiKey.trim()
+        val modelName = config.apiModelName.trim()
+        if (rawEndpoint.isEmpty() || apiKey.isEmpty() || modelName.isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("请完整填写在线 API 地址、API Key 与模型名称"))
+        }
+
+        val chatUrl = normalizeChatCompletionsUrl(rawEndpoint)
+        val systemPrompt = """
+            你是一个精准的中国大陆账单与支付通知结构化解析引擎。请判断通知是否为真实动账交易，并仅输出一行严格合法的 JSON 对象（不要包含 Markdown 代码块或额外解释）：
+            {"isFinancial":boolean,"amount":number,"currency":"CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD","type":"EXPENSE|INCOME|TRANSFER","category":"餐饮美食|交通出行|购物消费|居家生活|休闲娱乐|医疗健康|工资奖金|理财收益|退款返现|转账收款|转账红包|其他","merchant":"交易对方或商户名","channel":"支付渠道或银行名称","cardLastFour":"四位尾号或null","confidence":0.0到1.0之间数字}
+            注意：验证码、快递、营销广告 notification 必须返回 isFinancial=false；退款或返现 type 应为 INCOME；不可编造未出现的金额。
+        """.trimIndent()
+
+        val userPrompt = buildString {
+            appendLine("应用包名: ${packageName.ifBlank { "unknown" }}")
+            appendLine("通知标题: $title")
+            appendLine("通知正文: $content")
+        }
+
+        val payload = JSONObject().apply {
+            put("model", modelName)
+            put("temperature", 0.1)
+            put(
+                "messages",
+                JSONArray().apply {
+                    put(JSONObject().put("role", "system").put("content", systemPrompt))
+                    put(JSONObject().put("role", "user").put("content", userPrompt))
+                }
+            )
+        }.toString()
+
+        try {
+            val request = Request.Builder()
+                .url(chatUrl)
+                .header("Authorization", "Bearer $apiKey")
+                .header("Content-Type", "application/json")
+                .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+
+            val responseBody = client.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val snippet = text.take(180).replace("\n", " ")
+                    return@withContext Result.failure(
+                        IllegalStateException("在线 AI 接口返回 HTTP ${response.code}${if (snippet.isNotBlank()) "：$snippet" else ""}")
+                    )
+                }
+                text
+            }
+
+            val root = JSONObject(responseBody)
+            val choices = root.optJSONArray("choices")
+                ?: return@withContext Result.failure(IllegalStateException("在线 API 响应缺少 choices 字段"))
+            if (choices.length() == 0) {
+                return@withContext Result.failure(IllegalStateException("在线 API 未返回候选结果"))
+            }
+            val contentText = choices.getJSONObject(0)
+                .optJSONObject("message")
+                ?.optString("content")
+                ?.trim()
+                .orEmpty()
+
+            val parsedJson = extractFirstJsonObject(contentText)
+                ?: return@withContext Result.failure(IllegalStateException("在线 AI 输出未能解析为 JSON：$contentText"))
+
+            val isFinancial = parsedJson.optBoolean("isFinancial", false)
+            val amountYuan = parsedJson.optDouble("amount", 0.0)
+            if (!isFinancial || amountYuan <= 0.0 || amountYuan > 10_000_000.0) {
+                return@withContext Result.failure(IllegalStateException("AI 判定非有效动账通知或未识别到有效金额"))
+            }
+
+            val currency = CurrencyCatalog.resolve(parsedJson.optString("currency", "CNY")).code
+            val txType = TransactionType.fromRaw(parsedJson.optString("type", "EXPENSE"))
+            val category = parsedJson.optString("category")
+                .trim()
+                .ifBlank { ChinaNotificationParser.inferCategory("", "$title $content", txType) }
+                .take(40)
+            val channel = parsedJson.optString("channel")
+                .trim()
+                .takeIf { it.isNotBlank() && it != "null" }
+                ?.take(40)
+                ?: ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
+                ?: "未知渠道"
+            val merchant = parsedJson.optString("merchant")
+                .trim()
+                .takeIf { it.isNotBlank() && it != "null" }
+                ?.take(80)
+                ?: "${channel}${txType.label}"
+            val cardLastFour = parsedJson.optString("cardLastFour")
+                .trim()
+                .takeIf { it.length == 4 && it.all(Char::isDigit) }
+            val confidence = parsedJson.optDouble("confidence", 0.92).toFloat().coerceIn(0.5f, 1.0f)
+
+            Result.success(
+                ParsedNotificationResult(
+                    isFinancialTransaction = true,
+                    amountCents = (amountYuan * 100.0).roundToLong().coerceAtLeast(1L),
+                    currencyCode = currency,
+                    type = txType,
+                    category = category,
+                    merchant = merchant,
+                    channel = channel,
+                    cardLastFour = cardLastFour,
+                    sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, "$title $content"),
+                    parseMethod = ParseMethod.LOCAL_NLP,
+                    confidence = confidence,
+                    reasoning = "在线 AI [$modelName] 语义理解",
+                    needsInquiry = false,
+                    inquiryReason = ""
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(IllegalStateException("调用在线 AI 失败：${e.localizedMessage ?: "网络或 JSON 解析异常"}", e))
+        }
+    }
+
+    private fun normalizeChatCompletionsUrl(raw: String): String {
+        val trimmed = raw.trim().trimEnd('/')
+        return when {
+            trimmed.endsWith("/chat/completions", ignoreCase = true) -> trimmed
+            trimmed.endsWith("/v1", ignoreCase = true) -> "$trimmed/chat/completions"
+            else -> "$trimmed/chat/completions"
+        }
+    }
+
+    private fun extractFirstJsonObject(raw: String): JSONObject? {
+        val cleaned = raw
+            .replace("```json", "", ignoreCase = true)
+            .replace("```", "")
+            .trim()
+        val start = cleaned.indexOf('{')
+        val end = cleaned.lastIndexOf('}')
+        if (start < 0 || end <= start) return null
+        return runCatching { JSONObject(cleaned.substring(start, end + 1)) }.getOrNull()
+    }
+
+    private fun loadVocabTokens(modelDir: File): Set<String> {
+        val vocabTxt = File(modelDir, "vocab.txt")
+        if (vocabTxt.exists()) {
+            val tokens = HashSet<String>(24000)
+            vocabTxt.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                lines.forEach { line ->
+                    val token = line.trim()
+                    if (token.isNotEmpty() && !token.startsWith("[")) {
+                        tokens.add(token)
+                    }
+                }
+            }
+            return tokens
+        }
+        val tokenizerJson = File(modelDir, "tokenizer.json")
+        if (tokenizerJson.exists()) {
+            return runCatching {
+                val obj = JSONObject(tokenizerJson.readText(Charsets.UTF_8))
+                val vocabObj = obj.optJSONObject("model")?.optJSONObject("vocab")
+                val tokens = HashSet<String>(32000)
+                vocabObj?.keys()?.forEachRemaining { k ->
+                    if (k.isNotBlank()) tokens.add(k)
+                }
+                tokens
+            }.getOrDefault(emptySet())
+        }
+        return emptySet()
+    }
+
+    private fun tokenizeWithVocab(text: String, vocab: Set<String>): List<String> {
+        if (vocab.isEmpty()) return emptyList()
+        val found = mutableListOf<String>()
+        val clean = text.replace(Regex("""[\s，。、：:；;!！?？()（）【】\[\]「」"“”]+"""), " ")
+        clean.split(" ").forEach { chunk ->
+            var i = 0
+            while (i < chunk.length) {
+                var matched: String? = null
+                val maxLen = minOf(6, chunk.length - i)
+                for (len in maxLen downTo 2) {
+                    val sub = chunk.substring(i, i + len)
+                    if (sub in vocab) {
+                        matched = sub
+                        break
+                    }
+                }
+                if (matched != null) {
+                    found.add(matched)
+                    i += matched.length
+                } else {
+                    i += 1
+                }
+            }
+        }
+        return found.distinct()
+    }
+
+    private fun inferTypeWithVocab(text: String): TransactionType {
+        return ChinaNotificationParser.detectTransactionType(text)
+    }
+
+    private fun inferCategoryScored(merchant: String, text: String, type: TransactionType): String {
+        val ruleBased = ChinaNotificationParser.inferCategory(merchant, text, type)
+        if (ruleBased != "其他") return ruleBased
+        if (type == TransactionType.EXPENSE) {
+            val lower = "$merchant $text".lowercase()
+            return when {
+                listOf("餐", "茶", "饭", "食", "饮", "面", "粉", "饼", "面包").any { lower.contains(it) } -> "餐饮美食"
+                listOf("车", "油", "票", "行", "航", "铁", "停").any { lower.contains(it) } -> "交通出行"
+                listOf("买", "购", "百货", "店", "mall", "shop").any { lower.contains(it) } -> "购物消费"
+                listOf("水", "电", "费", "网", "租", "物业").any { lower.contains(it) } -> "居家生活"
+                listOf("影", "剧", "乐", "游", "vip", "会员").any { lower.contains(it) } -> "休闲娱乐"
+                listOf("医", "药", "诊", "康").any { lower.contains(it) } -> "医疗健康"
+                else -> "其他"
+            }
+        }
+        return ruleBased
+    }
+
+    private fun extractEntityFromVocabTokens(
+        text: String,
+        vocabTokens: List<String>,
+        channel: String,
+        type: TransactionType
+    ): String {
+        val candidates = ChinaNotificationParser.extractKeywordCandidates("", text, "", channel)
+        val stopWords = setOf(
+            "消费", "支出", "扣款", "付款", "支付", "收款", "入账", "到账",
+            "退款", "转账", "人民币", "美元", "港币", "微信", "支付宝", channel
+        )
+        val best = candidates.firstOrNull { it !in stopWords && it.length >= 2 }
+            ?: vocabTokens.firstOrNull { it !in stopWords && it.length >= 2 && !it.all(Char::isDigit) }
+        return best ?: when (type) {
+            TransactionType.INCOME -> "${channel}收款"
+            TransactionType.TRANSFER -> "${channel}转账"
+            TransactionType.EXPENSE -> "${channel}消费"
+        }
+    }
+}

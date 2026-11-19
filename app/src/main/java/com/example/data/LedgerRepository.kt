@@ -42,9 +42,13 @@ class LedgerRepository(
 
     fun observeExchangeRates(): Flow<ExchangeRateState> = settingsStore.exchangeRateStateFlow
 
+    fun observeAiConfig(): Flow<com.example.model.AiConfig> = settingsStore.aiConfigFlow
+
     suspend fun getSettingsOnce(): BudgetSettings = settingsStore.getBudgetSettingsOnce()
 
     suspend fun getExchangeRatesOnce(): ExchangeRateState = settingsStore.getExchangeRateStateOnce()
+
+    suspend fun getAiConfigOnce(): com.example.model.AiConfig = settingsStore.getAiConfigOnce()
 
     suspend fun getRulesOnce(): List<CustomParsingRule> =
         dao.getAllRulesOnce().map { it.toDomain() }
@@ -480,6 +484,17 @@ class LedgerRepository(
     suspend fun saveAppearanceSettings(settings: AppearanceSettings): Result<Unit> {
         return try {
             settingsStore.saveAppearanceSettings(settings)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveAiConfig(config: com.example.model.AiConfig): Result<Unit> {
+        return try {
+            settingsStore.saveAiConfig(config)
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e

@@ -66,12 +66,16 @@ const val ROUTE_LEDGER = "ledger"
 const val ROUTE_ANALYTICS = "analytics"
 const val ROUTE_SETTINGS = "settings"
 
+const val ROUTE_SETTINGS_LEDGER_MGMT = "settings/ledger_mgmt"
 const val ROUTE_SETTINGS_PARSER = "settings/parser"
+const val ROUTE_SETTINGS_AI = "settings/ai"
 const val ROUTE_SETTINGS_CURRENCY = "settings/currency"
 const val ROUTE_SETTINGS_DATA_HUB = "settings/data_hub"
 const val ROUTE_SETTINGS_LOCAL_BACKUP = "settings/local_backup"
 const val ROUTE_SETTINGS_DEDUP = "settings/dedup"
 const val ROUTE_SETTINGS_APPEARANCE = "settings/appearance"
+const val ROUTE_SETTINGS_PERMISSIONS = "settings/permissions"
+const val ROUTE_SETTINGS_ABOUT = "settings/about"
 
 private data class TopDestination(
     val route: String,
@@ -146,6 +150,7 @@ fun AppNavigation(
                         isIgnoringBattery = NotificationBridge.isIgnoringBatteryOptimizations(context)
                         NotificationBridge.requestListenerRebind(context)
                         viewModel.checkBackupReminderDue(context)
+                        viewModel.checkExchangeRateAutoUpdateIfDue()
                     }
                 }
                 lifecycleOwner.lifecycle.addObserver(observer)
@@ -156,7 +161,12 @@ fun AppNavigation(
             val inquiries by viewModel.inquiriesState.collectAsStateWithLifecycle()
             val settings by viewModel.settingsState.collectAsStateWithLifecycle()
             val exchangeRates by viewModel.exchangeRateState.collectAsStateWithLifecycle()
+            val aiConfig by viewModel.aiConfigState.collectAsStateWithLifecycle()
             val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
+
+            LaunchedEffect(settings.exchangeRateUpdateFrequency) {
+                viewModel.checkExchangeRateAutoUpdateIfDue()
+            }
 
             LaunchedEffect(settings.rootKeepAliveEnabled) {
                 viewModel.checkRootStatus()
@@ -194,11 +204,13 @@ fun AppNavigation(
             val currentTitle = when (currentRoute) {
                 ROUTE_ANALYTICS -> "收支分析"
                 ROUTE_SETTINGS -> "设置"
+                ROUTE_SETTINGS_LEDGER_MGMT, ROUTE_SETTINGS_CURRENCY, ROUTE_SETTINGS_DEDUP -> "账单管理"
                 ROUTE_SETTINGS_PARSER -> "通知识别与规则"
-                ROUTE_SETTINGS_CURRENCY -> "币种与汇率"
+                ROUTE_SETTINGS_AI -> "AI 理解接口"
                 ROUTE_SETTINGS_DATA_HUB, ROUTE_SETTINGS_LOCAL_BACKUP -> "导入与备份中心"
-                ROUTE_SETTINGS_DEDUP -> "智能去重"
                 ROUTE_SETTINGS_APPEARANCE -> "外观与布局"
+                ROUTE_SETTINGS_PERMISSIONS -> "系统权限与进程保活"
+                ROUTE_SETTINGS_ABOUT -> "关于"
                 else -> stringResource(R.string.app_name)
             }
 
@@ -315,18 +327,29 @@ fun AppNavigation(
                             composable(ROUTE_SETTINGS) {
                                 SettingsScreen(
                                     settings = settings,
+                                    aiConfig = aiConfig,
                                     isListenerEnabled = isListenerEnabled,
                                     isAccessibilityEnabled = isAccessibilityEnabled,
                                     isIgnoringBattery = isIgnoringBattery,
+                                    onOpenLedgerManagement = { navController.navigate(ROUTE_SETTINGS_LEDGER_MGMT) },
+                                    onOpenParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                                    onOpenAiSettings = { navController.navigate(ROUTE_SETTINGS_AI) },
+                                    onOpenDataHub = { navController.navigate(ROUTE_SETTINGS_DATA_HUB) },
+                                    onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) },
+                                    onOpenPermissions = { navController.navigate(ROUTE_SETTINGS_PERMISSIONS) },
+                                    onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) }
+                                )
+                            }
+                            composable(ROUTE_SETTINGS_LEDGER_MGMT) {
+                                LedgerManagementScreen(
+                                    settings = settings,
+                                    exchangeRates = exchangeRates,
+                                    transactionsState = transactionsState,
                                     viewModel = viewModel,
                                     onShowMessage = { msg ->
                                         scope.launch { snackbarHostState.showSnackbar(msg) }
                                     },
-                                    onOpenParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
-                                    onOpenCurrency = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
-                                    onOpenDataHub = { navController.navigate(ROUTE_SETTINGS_DATA_HUB) },
-                                    onOpenDedup = { navController.navigate(ROUTE_SETTINGS_DEDUP) },
-                                    onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) }
+                                    initialTab = LedgerMgmtTab.BEHAVIOR_BUDGET
                                 )
                             }
                             composable(ROUTE_SETTINGS_PARSER) {
@@ -338,11 +361,24 @@ fun AppNavigation(
                                     }
                                 )
                             }
+                            composable(ROUTE_SETTINGS_AI) {
+                                AiSettingsScreen(
+                                    viewModel = viewModel,
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    }
+                                )
+                            }
                             composable(ROUTE_SETTINGS_CURRENCY) {
-                                CurrencySettingsScreen(
+                                LedgerManagementScreen(
                                     settings = settings,
                                     exchangeRates = exchangeRates,
-                                    viewModel = viewModel
+                                    transactionsState = transactionsState,
+                                    viewModel = viewModel,
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    },
+                                    initialTab = LedgerMgmtTab.CURRENCY_RATES
                                 )
                             }
                             composable(ROUTE_SETTINGS_DATA_HUB) {
@@ -366,15 +402,40 @@ fun AppNavigation(
                                 )
                             }
                             composable(ROUTE_SETTINGS_DEDUP) {
-                                SmartDeduplicationScreen(
+                                LedgerManagementScreen(
+                                    settings = settings,
+                                    exchangeRates = exchangeRates,
                                     transactionsState = transactionsState,
-                                    viewModel = viewModel
+                                    viewModel = viewModel,
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    },
+                                    initialTab = LedgerMgmtTab.SMART_DEDUP
                                 )
                             }
                             composable(ROUTE_SETTINGS_APPEARANCE) {
                                 AppearanceSettingsScreen(
                                     appearance = appearance,
                                     viewModel = viewModel
+                                )
+                            }
+                            composable(ROUTE_SETTINGS_PERMISSIONS) {
+                                PermissionsKeepAliveScreen(
+                                    settings = settings,
+                                    isListenerEnabled = isListenerEnabled,
+                                    isAccessibilityEnabled = isAccessibilityEnabled,
+                                    isIgnoringBattery = isIgnoringBattery,
+                                    viewModel = viewModel,
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    }
+                                )
+                            }
+                            composable(ROUTE_SETTINGS_ABOUT) {
+                                AboutScreen(
+                                    onShowMessage = { msg ->
+                                        scope.launch { snackbarHostState.showSnackbar(msg) }
+                                    }
                                 )
                             }
                         }

@@ -6,12 +6,13 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
-enum class DeduplicationTimeWindow(val label: String, val maxDiffMillis: Long?) {
-    UNLIMITED("不限时间", null),
-    THIRTY_DAYS("30天内", 30L * 24 * 3_600_000L),
-    SEVEN_DAYS("7天内", 7L * 24 * 3_600_000L),
-    ONE_DAY("24小时内", 24L * 3_600_000L),
-    ONE_HOUR("1小时内", 3_600_000L)
+enum class DeduplicationTimeWindow(val label: String, val maxDiffMillis: Long) {
+    FIVE_MINUTES("5 分钟内", 5L * 60_000L),
+    FIFTEEN_MINUTES("15 分钟内", 15L * 60_000L),
+    THIRTY_MINUTES("30 分钟内", 30L * 60_000L),
+    ONE_HOUR("1 小时内", 3_600_000L),
+    SIX_HOURS("6 小时内", 6L * 3_600_000L),
+    ONE_DAY("24 小时内", 24L * 3_600_000L)
 }
 
 enum class DeduplicationChannelFilter(val label: String) {
@@ -36,10 +37,21 @@ data class DuplicateGroup(
 
 object SmartDeduplicator {
 
+    const val DEFAULT_SHORT_WINDOW_MINUTES = 30
+    const val MAX_SHORT_WINDOW_MILLIS = 7L * 24L * 3_600_000L
+
     private val bracketSuffixRegex = Regex("""[（(【\[][^）)】\]]{1,24}[）)】\]]""")
     private val brandPrefixRegex = Regex("""^(支付宝|微信支付|微信|云闪付|银联|财付通|美团|抖音支付|京东支付)[-·:：\s]+""")
     private val legalSuffixRegex = Regex("""(有限责任公司|股份有限公司|有限公司|旗舰店|专卖店|官方店|自营店|直营店|小程序|中国|分店|门店)$""")
     private val punctuationRegex = Regex("""[\s\-_.*·•/\\,:：;；'"`~!@#\$%^&+=|?<>，。！？、（）()【】\[\]{}]+""")
+
+    fun formatWindowLabel(minutes: Int): String {
+        val safe = minutes.coerceIn(1, 7 * 24 * 60)
+        return when {
+            safe >= 60 && safe % 60 == 0 -> "${safe / 60} 小时内"
+            else -> "$safe 分钟内"
+        }
+    }
 
     fun normalizeMerchant(raw: String): String {
         var s = raw.trim().lowercase()
@@ -82,13 +94,25 @@ object SmartDeduplicator {
 
     fun findDuplicateGroups(
         transactions: List<LedgerTransaction>,
-        timeWindow: DeduplicationTimeWindow = DeduplicationTimeWindow.UNLIMITED,
+        timeWindow: DeduplicationTimeWindow = DeduplicationTimeWindow.THIRTY_MINUTES,
+        channelFilter: DeduplicationChannelFilter = DeduplicationChannelFilter.ALL,
+        minSimilarity: Double = 0.58
+    ): List<DuplicateGroup> = findDuplicateGroups(
+        transactions = transactions,
+        maxWindowMillis = timeWindow.maxDiffMillis,
+        channelFilter = channelFilter,
+        minSimilarity = minSimilarity
+    )
+
+    fun findDuplicateGroups(
+        transactions: List<LedgerTransaction>,
+        maxWindowMillis: Long,
         channelFilter: DeduplicationChannelFilter = DeduplicationChannelFilter.ALL,
         minSimilarity: Double = 0.58
     ): List<DuplicateGroup> {
         if (transactions.size < 2) return emptyList()
 
-        val maxWindow = timeWindow.maxDiffMillis
+        val boundedWindow = maxWindowMillis.coerceIn(60_000L, MAX_SHORT_WINDOW_MILLIS)
         val buckets = transactions.groupBy { tx ->
             Triple(tx.amountCents, tx.currencyCode.uppercase(), tx.txType)
         }
@@ -103,6 +127,7 @@ object SmartDeduplicator {
 
             for (i in 0 until n) {
                 if (visited[i]) continue
+                val anchorTime = sorted[i].occurredAtMillis
                 val componentIndices = mutableListOf(i)
                 visited[i] = true
                 val queue = ArrayDeque<Int>()
@@ -114,8 +139,12 @@ object SmartDeduplicator {
                         if (visited[j]) continue
                         val t1 = sorted[cur]
                         val t2 = sorted[j]
-                        val withinTime = maxWindow == null || abs(t1.occurredAtMillis - t2.occurredAtMillis) <= maxWindow
-                        if (withinTime && areMerchantsSimilar(t1.merchant, t2.merchant, minSimilarity)) {
+                        // Enforce both pairwise and anchor span <= boundedWindow so long-term repeats are never chained
+                        val withinPairWindow = abs(t1.occurredAtMillis - t2.occurredAtMillis) <= boundedWindow
+                        val withinSpanWindow = abs(anchorTime - t2.occurredAtMillis) <= boundedWindow
+                        if (withinPairWindow && withinSpanWindow &&
+                            areMerchantsSimilar(t1.merchant, t2.merchant, minSimilarity)
+                        ) {
                             visited[j] = true
                             componentIndices.add(j)
                             queue.add(j)
@@ -144,7 +173,7 @@ object SmartDeduplicator {
                     }
                     val span = (items.first().occurredAtMillis - items.last().occurredAtMillis).coerceAtLeast(0L)
                     val reason = buildString {
-                        append("同金额")
+                        append("短时同金额")
                         if (minSim >= 0.99) append(" · 对象一致") else append(" · 对象相似度 ${(minSim * 100).toInt()}%")
                         if (isCrossChannel) {
                             append(" · 跨渠道 (${distinctChannels.joinToString("/")})")

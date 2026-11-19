@@ -134,6 +134,59 @@ enum class FabPlacement(val label: String) {
     }
 }
 
+enum class ExchangeRateAutoUpdateFrequency(
+    val label: String,
+    val intervalHours: Int
+) {
+    MANUAL("仅手动更新", 0),
+    EVERY_6_HOURS("每 6 小时", 6),
+    DAILY("每天", 24),
+    EVERY_3_DAYS("每 3 天", 72),
+    WEEKLY("每周", 168);
+
+    companion object {
+        fun fromRaw(raw: String?): ExchangeRateAutoUpdateFrequency =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: MANUAL
+    }
+}
+
+enum class AiProviderMode(val label: String, val description: String) {
+    DISABLED("关闭", "仅使用内置规则与本地基础正则语义"),
+    LOCAL_SMALL_MODEL("本地开源小模型", "按需下载开源中文轻量模型词表与配置，离线推理"),
+    ONLINE_API("在线 API 接口", "连接自定义 OpenAI 兼容在线大模型接口")
+    ;
+
+    companion object {
+        fun fromRaw(raw: String?): AiProviderMode =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: DISABLED
+    }
+}
+
+data class LocalModelFileSpec(
+    val fileName: String,
+    val repoPath: String
+)
+
+data class LocalModelPreset(
+    val id: String,
+    val name: String,
+    val repoId: String,
+    val license: String,
+    val sizeHint: String,
+    val summary: String,
+    val files: List<LocalModelFileSpec>
+)
+
+data class AiConfig(
+    val providerMode: AiProviderMode = AiProviderMode.DISABLED,
+    val localModelId: String = "bge-small-zh-v15",
+    val localModelMirror: String = "https://hf-mirror.com",
+    val apiBaseUrl: String = "",
+    val apiKey: String = "",
+    val apiModelName: String = "",
+    val useAiAsFallbackOnly: Boolean = true
+)
+
 data class AppearanceSettings(
     val dynamicColor: Boolean = true,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -143,7 +196,7 @@ data class AppearanceSettings(
     val fabPlacement: FabPlacement = FabPlacement.BOTTOM_END,
     val showChannelBadge: Boolean = true,
     val showParseBadge: Boolean = true,
-    val tipTagText: String = "金钱真相",
+    val tipTagText: String = "",
     val customTipsRaw: String = ""
 )
 
@@ -235,7 +288,8 @@ data class BudgetSettings(
     val backupReminderEnabled: Boolean = false,
     val backupReminderIntervalHours: Int = 168,
     val lastLocalBackupMillis: Long = 0L,
-    val lastBackupReminderMillis: Long = 0L
+    val lastBackupReminderMillis: Long = 0L,
+    val exchangeRateUpdateFrequency: String = ExchangeRateAutoUpdateFrequency.MANUAL.name
 )
 
 data class WebDavConfig(

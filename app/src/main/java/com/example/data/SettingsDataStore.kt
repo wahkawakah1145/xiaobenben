@@ -63,6 +63,15 @@ class SettingsDataStore(private val context: Context) {
         val EXCHANGE_RATES_STATUS = stringPreferencesKey("exchange_rates_status")
         val EXCHANGE_RATES_SOURCE = stringPreferencesKey("exchange_rates_source")
         val EXCHANGE_RATES_DATE_TEXT = stringPreferencesKey("exchange_rates_date_text")
+        val EXCHANGE_RATE_AUTO_UPDATE_FREQ = stringPreferencesKey("exchange_rate_auto_update_freq")
+
+        val AI_PROVIDER_MODE = stringPreferencesKey("ai_provider_mode")
+        val AI_LOCAL_MODEL_ID = stringPreferencesKey("ai_local_model_id")
+        val AI_LOCAL_MODEL_MIRROR = stringPreferencesKey("ai_local_model_mirror")
+        val AI_API_BASE_URL = stringPreferencesKey("ai_api_base_url")
+        val AI_API_KEY = stringPreferencesKey("ai_api_key")
+        val AI_API_MODEL_NAME = stringPreferencesKey("ai_api_model_name")
+        val AI_FALLBACK_ONLY = booleanPreferencesKey("ai_fallback_only")
     }
 
     val budgetSettingsFlow: Flow<BudgetSettings> = context.smartLedgerDataStore.data.map { prefs ->
@@ -77,7 +86,9 @@ class SettingsDataStore(private val context: Context) {
             backupReminderEnabled = prefs[Keys.BACKUP_REMINDER_ENABLED] ?: false,
             backupReminderIntervalHours = (prefs[Keys.BACKUP_REMINDER_INTERVAL_HOURS] ?: 168).coerceIn(1, 8760),
             lastLocalBackupMillis = prefs[Keys.LAST_LOCAL_BACKUP_MILLIS] ?: 0L,
-            lastBackupReminderMillis = prefs[Keys.LAST_BACKUP_REMINDER_MILLIS] ?: 0L
+            lastBackupReminderMillis = prefs[Keys.LAST_BACKUP_REMINDER_MILLIS] ?: 0L,
+            exchangeRateUpdateFrequency = com.example.model.ExchangeRateAutoUpdateFrequency
+                .fromRaw(prefs[Keys.EXCHANGE_RATE_AUTO_UPDATE_FREQ]).name
         )
     }
 
@@ -93,6 +104,7 @@ class SettingsDataStore(private val context: Context) {
     }
 
     val appearanceSettingsFlow: Flow<AppearanceSettings> = context.smartLedgerDataStore.data.map { prefs ->
+        val storedTag = prefs[Keys.TIP_TAG_TEXT] ?: ""
         AppearanceSettings(
             dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: true,
             themeMode = ThemeMode.fromRaw(prefs[Keys.THEME_MODE]),
@@ -102,8 +114,20 @@ class SettingsDataStore(private val context: Context) {
             fabPlacement = FabPlacement.fromRaw(prefs[Keys.FAB_PLACEMENT]),
             showChannelBadge = prefs[Keys.SHOW_CHANNEL_BADGE] ?: true,
             showParseBadge = prefs[Keys.SHOW_PARSE_BADGE] ?: true,
-            tipTagText = prefs[Keys.TIP_TAG_TEXT] ?: "金钱真相",
+            tipTagText = if (storedTag == "金钱真相") "" else storedTag,
             customTipsRaw = prefs[Keys.CUSTOM_TIPS_RAW] ?: ""
+        )
+    }
+
+    val aiConfigFlow: Flow<com.example.model.AiConfig> = context.smartLedgerDataStore.data.map { prefs ->
+        com.example.model.AiConfig(
+            providerMode = com.example.model.AiProviderMode.fromRaw(prefs[Keys.AI_PROVIDER_MODE]),
+            localModelId = prefs[Keys.AI_LOCAL_MODEL_ID] ?: "bge-small-zh-v15",
+            localModelMirror = prefs[Keys.AI_LOCAL_MODEL_MIRROR] ?: "https://hf-mirror.com",
+            apiBaseUrl = prefs[Keys.AI_API_BASE_URL] ?: "",
+            apiKey = prefs[Keys.AI_API_KEY] ?: "",
+            apiModelName = prefs[Keys.AI_API_MODEL_NAME] ?: "",
+            useAiAsFallbackOnly = prefs[Keys.AI_FALLBACK_ONLY] ?: true
         )
     }
 
@@ -123,6 +147,8 @@ class SettingsDataStore(private val context: Context) {
     suspend fun getWebDavConfigOnce(): WebDavConfig = webDavConfigFlow.first()
 
     suspend fun getExchangeRateStateOnce(): ExchangeRateState = exchangeRateStateFlow.first()
+
+    suspend fun getAiConfigOnce(): com.example.model.AiConfig = aiConfigFlow.first()
 
     suspend fun isRulesSeeded(): Boolean =
         context.smartLedgerDataStore.data.first()[Keys.RULES_SEEDED] ?: false
@@ -146,6 +172,8 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.BACKUP_REMINDER_INTERVAL_HOURS] = settings.backupReminderIntervalHours.coerceIn(1, 8760)
             prefs[Keys.LAST_LOCAL_BACKUP_MILLIS] = settings.lastLocalBackupMillis.coerceAtLeast(0L)
             prefs[Keys.LAST_BACKUP_REMINDER_MILLIS] = settings.lastBackupReminderMillis.coerceAtLeast(0L)
+            prefs[Keys.EXCHANGE_RATE_AUTO_UPDATE_FREQ] = com.example.model.ExchangeRateAutoUpdateFrequency
+                .fromRaw(settings.exchangeRateUpdateFrequency).name
         }
     }
 
@@ -189,8 +217,20 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.FAB_PLACEMENT] = settings.fabPlacement.name
             prefs[Keys.SHOW_CHANNEL_BADGE] = settings.showChannelBadge
             prefs[Keys.SHOW_PARSE_BADGE] = settings.showParseBadge
-            prefs[Keys.TIP_TAG_TEXT] = settings.tipTagText.trim().ifBlank { "金钱真相" }
+            prefs[Keys.TIP_TAG_TEXT] = settings.tipTagText.trim().take(16)
             prefs[Keys.CUSTOM_TIPS_RAW] = settings.customTipsRaw
+        }
+    }
+
+    suspend fun saveAiConfig(config: com.example.model.AiConfig) {
+        context.smartLedgerDataStore.edit { prefs ->
+            prefs[Keys.AI_PROVIDER_MODE] = config.providerMode.name
+            prefs[Keys.AI_LOCAL_MODEL_ID] = config.localModelId.trim().ifBlank { "bge-small-zh-v15" }
+            prefs[Keys.AI_LOCAL_MODEL_MIRROR] = config.localModelMirror.trim().ifBlank { "https://hf-mirror.com" }
+            prefs[Keys.AI_API_BASE_URL] = config.apiBaseUrl.trim()
+            prefs[Keys.AI_API_KEY] = config.apiKey.trim()
+            prefs[Keys.AI_API_MODEL_NAME] = config.apiModelName.trim()
+            prefs[Keys.AI_FALLBACK_ONLY] = config.useAiAsFallbackOnly
         }
     }
 

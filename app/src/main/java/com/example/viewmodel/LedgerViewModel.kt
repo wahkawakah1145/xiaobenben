@@ -2,16 +2,21 @@ package com.example.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.AiUnderstandingManager
 import com.example.data.CurrencyExchangeManager
 import com.example.data.ImportPreviewResult
 import com.example.data.LedgerRepository
 import com.example.data.LocalBackupManager
+import com.example.data.LocalModelCatalog
 import com.example.data.ManualImportManager
 import com.example.data.WebDavSyncManager
+import com.example.model.AiConfig
+import com.example.model.AiProviderMode
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CurrencyCatalog
 import com.example.model.CustomParsingRule
+import com.example.model.ExchangeRateAutoUpdateFrequency
 import com.example.model.ExchangeRateState
 import com.example.model.LedgerTransaction
 import com.example.model.NotificationInquiry
@@ -80,10 +85,29 @@ sealed interface LocalBackupActionState {
     data class Error(val message: String) : LocalBackupActionState
 }
 
+sealed interface AiModelDownloadState {
+    data object Idle : AiModelDownloadState
+    data class Downloading(
+        val modelId: String,
+        val progress: Float,
+        val statusText: String
+    ) : AiModelDownloadState
+    data class Success(val modelId: String, val message: String) : AiModelDownloadState
+    data class Error(val message: String) : AiModelDownloadState
+}
+
+sealed interface AiTestState {
+    data object Idle : AiTestState
+    data object Loading : AiTestState
+    data class Success(val result: ParsedNotificationResult) : AiTestState
+    data class Error(val message: String) : AiTestState
+}
+
 class LedgerViewModel(
     private val repository: LedgerRepository,
     private val webDavSyncManager: WebDavSyncManager = WebDavSyncManager(),
-    private val exchangeManager: CurrencyExchangeManager = CurrencyExchangeManager()
+    private val exchangeManager: CurrencyExchangeManager = CurrencyExchangeManager(),
+    private val aiManager: AiUnderstandingManager = AiUnderstandingManager()
 ) : ViewModel() {
 
     init {
@@ -178,6 +202,18 @@ class LedgerViewModel(
                 initialValue = WebDavConfig()
             )
 
+    val aiConfigState: StateFlow<AiConfig> =
+        repository.observeAiConfig()
+            .catch { error ->
+                if (error is CancellationException) throw error
+                emit(AiConfig())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                initialValue = AiConfig()
+            )
+
     private val _parseBenchState = MutableStateFlow<ParseBenchState>(ParseBenchState.Idle)
     val parseBenchState: StateFlow<ParseBenchState> = _parseBenchState.asStateFlow()
 
@@ -192,6 +228,12 @@ class LedgerViewModel(
 
     private val _localBackupActionState = MutableStateFlow<LocalBackupActionState>(LocalBackupActionState.Idle)
     val localBackupActionState: StateFlow<LocalBackupActionState> = _localBackupActionState.asStateFlow()
+
+    private val _aiModelDownloadState = MutableStateFlow<AiModelDownloadState>(AiModelDownloadState.Idle)
+    val aiModelDownloadState: StateFlow<AiModelDownloadState> = _aiModelDownloadState.asStateFlow()
+
+    private val _aiTestState = MutableStateFlow<AiTestState>(AiTestState.Idle)
+    val aiTestState: StateFlow<AiTestState> = _aiTestState.asStateFlow()
 
     private val _rootStatusState = MutableStateFlow(RootKeepAliveStatus())
     val rootStatusState: StateFlow<RootKeepAliveStatus> = _rootStatusState.asStateFlow()
@@ -424,6 +466,40 @@ class LedgerViewModel(
         }
     }
 
+    fun analyzeWithConfiguredAi(
+        context: android.content.Context,
+        packageName: String,
+        title: String,
+        content: String
+    ) {
+        if (title.isBlank() && content.isBlank()) {
+            _parseBenchState.value = ParseBenchState.Error("请输入通知标题或正文内容")
+            return
+        }
+        viewModelScope.launch {
+            val config = repository.getAiConfigOnce()
+            if (config.providerMode == AiProviderMode.DISABLED) {
+                _parseBenchState.value = ParseBenchState.Error("尚未启用 AI 理解接口，请先前往「设置 -> AI 理解接口」选择本地小模型或填写在线 API")
+                return@launch
+            }
+            val result = aiManager.enhanceOrParseNotification(
+                context = context,
+                config = config,
+                packageName = packageName,
+                title = title,
+                content = content,
+                fallbackParsed = null
+            )
+            result
+                .onSuccess { parsed ->
+                    _parseBenchState.value = ParseBenchState.Parsed(parsed, title, content)
+                }
+                .onFailure { err ->
+                    _parseBenchState.value = ParseBenchState.Error(err.message ?: "AI 理解失败")
+                }
+        }
+    }
+
     fun saveParsedResult(
         parsed: ParsedNotificationResult,
         rawTitle: String,
@@ -514,17 +590,115 @@ class LedgerViewModel(
         }
     }
 
-    fun updateExchangeRateDatabase() {
+    fun updateExchangeRateDatabase(silent: Boolean = false) {
         viewModelScope.launch {
-            _rateUpdateState.value = RateUpdateState.Loading
+            if (!silent) _rateUpdateState.value = RateUpdateState.Loading
             exchangeManager.refreshRatesDatabase(repository)
                 .onSuccess { updated ->
-                    _rateUpdateState.value = RateUpdateState.Success(updated.lastStatus)
+                    if (!silent) {
+                        _rateUpdateState.value = RateUpdateState.Success(updated.lastStatus)
+                    }
                 }
                 .onFailure { err ->
-                    val msg = err.message ?: "汇率更新失败"
-                    _rateUpdateState.value = RateUpdateState.Error(msg)
+                    if (!silent) {
+                        val msg = err.message ?: "汇率更新失败"
+                        _rateUpdateState.value = RateUpdateState.Error(msg)
+                    }
                 }
+        }
+    }
+
+    fun checkExchangeRateAutoUpdateIfDue() {
+        viewModelScope.launch {
+            val settings = repository.getSettingsOnce()
+            val freq = ExchangeRateAutoUpdateFrequency.fromRaw(settings.exchangeRateUpdateFrequency)
+            if (freq == ExchangeRateAutoUpdateFrequency.MANUAL || freq.intervalHours <= 0) return@launch
+            val rates = repository.getExchangeRatesOnce()
+            val now = System.currentTimeMillis()
+            val intervalMillis = freq.intervalHours * 3_600_000L
+            if (rates.updatedAtMillis <= 0L || (now - rates.updatedAtMillis) >= intervalMillis) {
+                if (_rateUpdateState.value !is RateUpdateState.Loading) {
+                    exchangeManager.refreshRatesDatabase(repository)
+                }
+            }
+        }
+    }
+
+    fun saveAiConfig(config: AiConfig) {
+        viewModelScope.launch {
+            repository.saveAiConfig(config)
+                .onFailure { _actionMessage.value = "保存 AI 配置失败" }
+        }
+    }
+
+    fun downloadLocalAiModel(
+        context: android.content.Context,
+        modelId: String,
+        mirrorBaseUrl: String
+    ) {
+        viewModelScope.launch {
+            val preset = LocalModelCatalog.resolve(modelId)
+            _aiModelDownloadState.value = AiModelDownloadState.Downloading(
+                modelId = preset.id,
+                progress = 0f,
+                statusText = "正在连接镜像下载 ${preset.name}..."
+            )
+            aiManager.downloadLocalModel(
+                context = context,
+                modelId = preset.id,
+                mirrorBaseUrl = mirrorBaseUrl
+            ) { progress, statusText ->
+                _aiModelDownloadState.value = AiModelDownloadState.Downloading(
+                    modelId = preset.id,
+                    progress = progress,
+                    statusText = statusText
+                )
+            }
+                .onSuccess { installStatus ->
+                    _aiModelDownloadState.value = AiModelDownloadState.Success(
+                        modelId = preset.id,
+                        message = "下载完成（已占用 ${installStatus.totalBytes / 1024} KB）"
+                    )
+                    val cur = repository.getAiConfigOnce()
+                    repository.saveAiConfig(
+                        cur.copy(
+                            providerMode = AiProviderMode.LOCAL_SMALL_MODEL,
+                            localModelId = preset.id,
+                            localModelMirror = mirrorBaseUrl
+                        )
+                    )
+                }
+                .onFailure { err ->
+                    _aiModelDownloadState.value = AiModelDownloadState.Error(err.message ?: "模型下载失败")
+                }
+        }
+    }
+
+    fun deleteLocalAiModel(context: android.content.Context, modelId: String) {
+        aiManager.deleteLocalModel(context, modelId)
+        _aiModelDownloadState.value = AiModelDownloadState.Idle
+        _actionMessage.value = "已清理本地模型缓存"
+    }
+
+    fun testAiUnderstanding(
+        context: android.content.Context,
+        config: AiConfig,
+        sampleTitle: String,
+        sampleContent: String
+    ) {
+        viewModelScope.launch {
+            repository.saveAiConfig(config)
+            _aiTestState.value = AiTestState.Loading
+            aiManager.enhanceOrParseNotification(
+                context = context,
+                config = config,
+                packageName = "manual.ai.test",
+                title = sampleTitle,
+                content = sampleContent,
+                fallbackParsed = null
+            )
+                .onSuccess { parsed -> _aiTestState.value = AiTestState.Success(parsed) }
+                .onFailure { err -> _aiTestState.value = AiTestState.Error(err.message ?: "AI 理解测试失败") }
         }
     }
 
@@ -671,11 +845,11 @@ class LedgerViewModel(
         val intervalText = BackupReminderScheduler.formatIntervalLabel(settingsState.value.backupReminderIntervalHours)
         val ok = NotificationBridge.postUrgentBackupReminder(
             context = context,
-            title = "【紧急提醒】请及时备份小本本账单",
-            body = "定期备份提醒已生效（每 $intervalText），点击可直接前往导出本地 JSON 备份。"
+            title = "【通知】请及时备份小本本账单",
+            body = "定期备份通知已生效（每 $intervalText），点击可直接前往导出本地 JSON 备份。"
         )
         if (ok) {
-            _localBackupActionState.value = LocalBackupActionState.Success("已发送高优先级紧急备份通知")
+            _localBackupActionState.value = LocalBackupActionState.Success("已发送测试通知")
         } else {
             _localBackupActionState.value = LocalBackupActionState.Error("未获得通知发送权限，请先授权后再试")
         }

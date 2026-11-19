@@ -119,7 +119,7 @@ fun LocalBackupScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasPostNotifPermission = granted
-        onShowMessage(if (granted) "已授予紧急提醒通知权限" else "未授予通知权限，无法弹出提醒")
+        onShowMessage(if (granted) "已授予备份通知权限" else "未授予通知权限，无法弹出提醒")
     }
 
     val presetHours = listOf(
@@ -281,10 +281,10 @@ fun LocalBackupScreen(
                                         tint = MaterialTheme.colorScheme.error,
                                         modifier = Modifier.size(18.dp)
                                     )
-                                    Text("定期备份紧急提醒", style = MaterialTheme.typography.titleMedium)
+                                    Text("定期备份通知", style = MaterialTheme.typography.titleMedium)
                                 }
                                 Text(
-                                    text = "到达设定周期后通过高优先级「紧急通知」渠道发出横幅与响铃震动提醒",
+                                    text = "到达设定周期后发送横幅与响铃震动通知（默认高优先级）",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -310,7 +310,7 @@ fun LocalBackupScreen(
                                 onClick = { notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("授予通知权限以接收紧急备份提醒")
+                                Text("授予通知权限以接收备份通知")
                             }
                         }
 
@@ -407,7 +407,7 @@ fun LocalBackupScreen(
                         ) {
                             Icon(Icons.Rounded.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("立即发送测试紧急通知")
+                            Text("立即发送测试通知")
                         }
                     }
                 }

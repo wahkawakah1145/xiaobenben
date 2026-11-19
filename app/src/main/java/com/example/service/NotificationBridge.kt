@@ -155,10 +155,10 @@ object NotificationBridge {
             }
             val urgentBackupChannel = NotificationChannel(
                 CHANNEL_BACKUP_URGENT_ID,
-                "紧急数据备份提醒",
+                "数据备份通知",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "定期提醒立即导出本地备份的高优先级紧急通知"
+                description = "定期提醒导出本地备份的通知"
                 enableVibration(true)
                 enableLights(true)
                 vibrationPattern = longArrayOf(0L, 350L, 180L, 350L)

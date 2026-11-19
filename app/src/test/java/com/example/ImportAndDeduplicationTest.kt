@@ -124,27 +124,37 @@ class ImportAndDeduplicationTest {
             confirmed = true
         )
 
-        val allInOneHour = SmartDeduplicator.findDuplicateGroups(
+        val shortThirtyMinutes = SmartDeduplicator.findDuplicateGroups(
             transactions = listOf(txAlipay, txCmb, txSameChannelOld, txDifferentMerchant),
-            timeWindow = DeduplicationTimeWindow.ONE_HOUR,
+            timeWindow = DeduplicationTimeWindow.THIRTY_MINUTES,
             channelFilter = DeduplicationChannelFilter.CROSS_CHANNEL
         )
 
-        assertEquals(1, allInOneHour.size)
-        val group = allInOneHour.first()
+        assertEquals(1, shortThirtyMinutes.size)
+        val group = shortThirtyMinutes.first()
         assertEquals(2, group.items.size)
         assertTrue(group.isCrossChannel)
         assertEquals("tx-alipay", group.suggestedKeepId)
         assertTrue(group.items.none { it.id == "tx-other" })
         assertTrue(group.items.none { it.id == "tx-old" })
 
-        val unlimitedAll = SmartDeduplicator.findDuplicateGroups(
+        // Even with maximum 7-day window, 3-day-old long-term repeated item in ALL filter should NOT merge with 2-minute window if custom window is 15 minutes
+        val customFifteenMin = SmartDeduplicator.findDuplicateGroups(
             transactions = listOf(txAlipay, txCmb, txSameChannelOld, txDifferentMerchant),
-            timeWindow = DeduplicationTimeWindow.UNLIMITED,
+            maxWindowMillis = 15L * 60_000L,
             channelFilter = DeduplicationChannelFilter.ALL
         )
-        assertEquals(1, unlimitedAll.size)
-        assertEquals(3, unlimitedAll.first().items.size)
+        assertEquals(1, customFifteenMin.size)
+        assertEquals(2, customFifteenMin.first().items.size)
+        assertTrue(customFifteenMin.first().items.none { it.id == "tx-old" })
+
+        // Tiny 1-minute window excludes the 3-minute-apart transaction as non-duplicate
+        val oneMinuteWindow = SmartDeduplicator.findDuplicateGroups(
+            transactions = listOf(txAlipay, txCmb, txSameChannelOld),
+            maxWindowMillis = 60_000L,
+            channelFilter = DeduplicationChannelFilter.ALL
+        )
+        assertEquals(0, oneMinuteWindow.size)
     }
 
     private fun buildMinimalXlsxBytes(): ByteArray {

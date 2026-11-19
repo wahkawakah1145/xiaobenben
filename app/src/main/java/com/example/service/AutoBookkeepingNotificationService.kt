@@ -110,13 +110,33 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         }
 
         val customRules = repository.getRulesOnce()
-        val parsed = ChinaNotificationParser.parse(
+        val ruleParsed = ChinaNotificationParser.parse(
             packageName = packageName,
             title = title,
             content = content,
             customRules = customRules,
             enableLocalSemanticPass = settings.smartSemanticEnabled
         )
+        val aiConfig = repository.getAiConfigOnce()
+        val shouldInvokeAi = aiConfig.providerMode != com.example.model.AiProviderMode.DISABLED && (
+            !aiConfig.useAiAsFallbackOnly ||
+                ruleParsed == null ||
+                !ruleParsed.isFinancialTransaction ||
+                ruleParsed.needsInquiry
+            )
+        val parsed = if (shouldInvokeAi) {
+            val aiResult = com.example.data.AiUnderstandingManager().enhanceOrParseNotification(
+                context = applicationContext,
+                config = aiConfig,
+                packageName = packageName,
+                title = title,
+                content = content,
+                fallbackParsed = ruleParsed
+            ).getOrNull()
+            aiResult ?: ruleParsed
+        } else {
+            ruleParsed
+        }
 
         if (parsed == null || !parsed.isFinancialTransaction || parsed.amountCents <= 0L) {
             if (ChinaNotificationParser.hasUncertainFinancialCue(packageName, title, content)) {

@@ -68,6 +68,7 @@ import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CardDensity
 import com.example.model.CurrencyCatalog
+import com.example.model.ExchangeRateAutoUpdateFrequency
 import com.example.model.ExchangeRateState
 import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
@@ -449,6 +450,38 @@ fun CurrencySettingsScreen(
                                 Text(state.message, color = ExpenseCoral, style = MaterialTheme.typography.bodySmall)
                             }
                             else -> Unit
+                        }
+
+                        HorizontalDivider()
+
+                        val currentAutoFreq = ExchangeRateAutoUpdateFrequency.fromRaw(settings.exchangeRateUpdateFrequency)
+                        Text("自动更新频率", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            text = if (currentAutoFreq == ExchangeRateAutoUpdateFrequency.MANUAL) {
+                                "当前为仅手动更新，点击上方按钮时才会联网获取牌价。"
+                            } else {
+                                "打开或回到应用时若距上次更新已超过「${currentAutoFreq.label}」，将自动静默刷新汇率库。"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            ExchangeRateAutoUpdateFrequency.entries.forEach { freq ->
+                                FilterChip(
+                                    selected = currentAutoFreq == freq,
+                                    onClick = {
+                                        viewModel.saveSettings(settings.copy(exchangeRateUpdateFrequency = freq.name))
+                                        if (freq != ExchangeRateAutoUpdateFrequency.MANUAL) {
+                                            viewModel.checkExchangeRateAutoUpdateIfDue()
+                                        }
+                                    },
+                                    label = { Text(freq.label) },
+                                    modifier = Modifier.testTag("rate_freq_${freq.name}")
+                                )
+                            }
                         }
 
                         HorizontalDivider()
@@ -881,8 +914,8 @@ fun AppearanceSettingsScreen(
                                 tagInput = next.take(16)
                                 viewModel.saveAppearanceSettings(appearance.copy(tipTagText = tagInput))
                             },
-                            label = { Text("Tag 标签文案") },
-                            placeholder = { Text("金钱真相") },
+                            label = { Text("Tag 标签文案（留空默认显示“我告诉你”）") },
+                            placeholder = { Text("默认显示：我告诉你") },
                             singleLine = true,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -920,10 +953,10 @@ fun AppearanceSettingsScreen(
                             }
                             OutlinedButton(
                                 onClick = {
-                                    tagInput = "金钱真相"
+                                    tagInput = ""
                                     tipsContentInput = ""
                                     viewModel.saveAppearanceSettings(
-                                        appearance.copy(tipTagText = "金钱真相", customTipsRaw = "")
+                                        appearance.copy(tipTagText = "", customTipsRaw = "")
                                     )
                                 },
                                 modifier = Modifier.weight(1f)

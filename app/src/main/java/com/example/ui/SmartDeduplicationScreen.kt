@@ -19,11 +19,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -45,13 +47,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.model.LedgerTransaction
@@ -76,16 +81,19 @@ fun SmartDeduplicationScreen(
     modifier: Modifier = Modifier
 ) {
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
-    var timeWindow by remember { mutableStateOf(DeduplicationTimeWindow.UNLIMITED) }
+    var customWindowMinutes by rememberSaveable { mutableIntStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_MINUTES) }
+    var customValueInput by rememberSaveable { mutableStateOf("30") }
+    var customUnitHours by rememberSaveable { mutableStateOf(false) }
+    var customErrorText by remember { mutableStateOf<String?>(null) }
     var channelFilter by remember { mutableStateOf(DeduplicationChannelFilter.ALL) }
     var searchQuery by remember { mutableStateOf("") }
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
 
-    val candidateGroups by remember(allTransactions, timeWindow, channelFilter) {
+    val candidateGroups by remember(allTransactions, customWindowMinutes, channelFilter) {
         derivedStateOf {
             SmartDeduplicator.findDuplicateGroups(
                 transactions = allTransactions,
-                timeWindow = timeWindow,
+                maxWindowMillis = customWindowMinutes * 60_000L,
                 channelFilter = channelFilter
             )
         }
@@ -166,10 +174,10 @@ fun SmartDeduplicationScreen(
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary
                                 )
-                                Text("智能去重整合筛选", style = MaterialTheme.typography.titleMedium)
+                                Text("短时智能去重筛选", style = MaterialTheme.typography.titleMedium)
                             }
                             Text(
-                                text = "自动识别金额一致且交易对象相似的疑似重复账单，已默认保留信息更完整的记录，可按时间范围、渠道与关键词进一步筛选。",
+                                text = "仅识别短时间窗口内金额相同且交易对象相似的重复入账，自动排除跨周期的长期重复消费（当前窗口：${SmartDeduplicator.formatWindowLabel(customWindowMinutes)}）。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -193,13 +201,87 @@ fun SmartDeduplicationScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 DeduplicationTimeWindow.entries.forEach { win ->
+                                    val winMinutes = (win.maxDiffMillis / 60_000L).toInt()
                                     FilterChip(
-                                        selected = timeWindow == win,
-                                        onClick = { timeWindow = win },
+                                        selected = customWindowMinutes == winMinutes,
+                                        onClick = {
+                                            customWindowMinutes = winMinutes
+                                            customErrorText = null
+                                            if (winMinutes >= 60 && winMinutes % 60 == 0) {
+                                                customUnitHours = true
+                                                customValueInput = (winMinutes / 60).toString()
+                                            } else {
+                                                customUnitHours = false
+                                                customValueInput = winMinutes.toString()
+                                            }
+                                        },
                                         label = { Text(win.label) },
                                         modifier = Modifier.testTag("dedup_window_${win.name}")
                                     )
                                 }
+                            }
+
+                            // Custom Short Time Window Controls
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = customValueInput,
+                                    onValueChange = {
+                                        customValueInput = it.filter(Char::isDigit).take(4)
+                                        customErrorText = null
+                                    },
+                                    label = { Text("自定义短时窗口") },
+                                    leadingIcon = { Icon(Icons.Rounded.Schedule, contentDescription = null) },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("dedup_custom_window_input")
+                                )
+                                FilterChip(
+                                    selected = !customUnitHours,
+                                    onClick = { customUnitHours = false },
+                                    label = { Text("分钟") },
+                                    modifier = Modifier.testTag("dedup_unit_minutes")
+                                )
+                                FilterChip(
+                                    selected = customUnitHours,
+                                    onClick = { customUnitHours = true },
+                                    label = { Text("小时") },
+                                    modifier = Modifier.testTag("dedup_unit_hours")
+                                )
+                                OutlinedButton(
+                                    onClick = {
+                                        val num = customValueInput.trim().toIntOrNull()
+                                        val maxMinutes = (SmartDeduplicator.MAX_SHORT_WINDOW_MILLIS / 60_000L).toInt()
+                                        if (num == null || num <= 0) {
+                                            customErrorText = "请输入大于 0 的整数"
+                                        } else {
+                                            val computed = if (customUnitHours) num * 60 else num
+                                            if (computed > maxMinutes) {
+                                                customErrorText = "仅支持 7 天（${maxMinutes / 60} 小时）以内的短时重复检测"
+                                            } else {
+                                                customWindowMinutes = computed
+                                                customErrorText = null
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("dedup_apply_custom_window")
+                                ) {
+                                    Text("应用")
+                                }
+                            }
+                            if (customErrorText != null) {
+                                Text(
+                                    text = customErrorText!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ExpenseCoral
+                                )
                             }
 
                             Row(

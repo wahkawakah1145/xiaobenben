@@ -156,7 +156,7 @@ fun LedgerHomeScreen(
         FinanceHumorTips.effectiveTips(appearance.customTipsRaw)
     }
     var tipIndex by remember { mutableIntStateOf(Random.nextInt(activeTips.size.coerceAtLeast(1))) }
-    val tipTagText = appearance.tipTagText.ifBlank { "金钱真相" }
+    val tipTagText = appearance.tipTagText.ifBlank { "我告诉你" }
     val currentTipText = FinanceHumorTips.tipAt(tipIndex, appearance.customTipsRaw)
     val onTipBannerTapped: () -> Unit = {
         tipIndex += 1

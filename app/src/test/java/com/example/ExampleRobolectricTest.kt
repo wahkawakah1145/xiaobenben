@@ -139,4 +139,48 @@ class ExampleRobolectricTest {
     org.junit.Assert.assertFalse("batch-tx-1" in remainingIds)
     org.junit.Assert.assertTrue("batch-tx-2" in remainingIds)
   }
+
+  @Test
+  fun `appearance default tipTagText is empty and exchange rate update frequency persists`() = kotlinx.coroutines.runBlocking {
+    val defaultAppearance = com.example.model.AppearanceSettings()
+    assertEquals("", defaultAppearance.tipTagText)
+
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+    val updatedSettings = com.example.model.BudgetSettings(
+      monthlyBudgetCents = 600_000L,
+      exchangeRateUpdateFrequency = com.example.model.ExchangeRateAutoUpdateFrequency.EVERY_6_HOURS.name
+    )
+    repository.saveSettings(updatedSettings).getOrThrow()
+    val loadedSettings = repository.getSettingsOnce()
+    assertEquals(
+      com.example.model.ExchangeRateAutoUpdateFrequency.EVERY_6_HOURS.name,
+      loadedSettings.exchangeRateUpdateFrequency
+    )
+  }
+
+  @Test
+  fun `aiConfig persists and LocalModelCatalog resolves open source small models`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+    val preset = com.example.data.LocalModelCatalog.resolve("qwen25-0.5b-instruct")
+    assertEquals("Qwen/Qwen2.5-0.5B-Instruct", preset.repoId)
+    org.junit.Assert.assertTrue(preset.files.isNotEmpty())
+
+    val config = com.example.model.AiConfig(
+      providerMode = com.example.model.AiProviderMode.ONLINE_API,
+      localModelId = preset.id,
+      localModelMirror = "https://huggingface.co",
+      apiBaseUrl = "https://api.deepseek.com/v1/chat/completions",
+      apiKey = "sk-test-token",
+      apiModelName = "deepseek-chat",
+      useAiAsFallbackOnly = false
+    )
+    repository.saveAiConfig(config).getOrThrow()
+    val loaded = repository.getAiConfigOnce()
+    assertEquals(com.example.model.AiProviderMode.ONLINE_API, loaded.providerMode)
+    assertEquals("https://api.deepseek.com/v1/chat/completions", loaded.apiBaseUrl)
+    assertEquals("deepseek-chat", loaded.apiModelName)
+    assertEquals(false, loaded.useAiAsFallbackOnly)
+  }
 }
