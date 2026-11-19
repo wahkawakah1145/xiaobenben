@@ -1,12 +1,19 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -40,8 +47,10 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -57,6 +66,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -69,8 +79,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -79,8 +91,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.data.CurrencyExchangeManager
@@ -99,6 +109,8 @@ import com.example.model.TransactionType
 import com.example.parser.ChinaNotificationParser
 import com.example.parser.FinanceHumorTips
 import com.example.service.NotificationBridge
+import com.example.ui.components.BatchEditTransactionsDialog
+import com.example.ui.components.BatchSelectionActionBar
 import com.example.ui.components.ChannelBadge
 import com.example.ui.components.ParseMethodBadge
 import com.example.ui.components.TransactionDetailSheet
@@ -159,6 +171,11 @@ fun LedgerHomeScreen(
         }
     }
 
+    val haptic = LocalHapticFeedback.current
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showBatchEditDialog by remember { mutableStateOf(false) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+
     val filterOptions = listOf("全部", "支出", "收入", "外币", "支付宝", "微信支付", "银行卡", "云闪付")
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
 
@@ -167,6 +184,20 @@ fun LedgerHomeScreen(
     }
     val confirmedTransactions by remember(allTransactions) {
         derivedStateOf { allTransactions.filter { it.confirmed } }
+    }
+
+    LaunchedEffect(confirmedTransactions) {
+        if (selectedIds.isNotEmpty()) {
+            val validIds = confirmedTransactions.mapTo(HashSet()) { it.id }
+            val pruned = selectedIds.intersect(validIds)
+            if (pruned.size != selectedIds.size) {
+                selectedIds = pruned
+            }
+        }
+    }
+
+    BackHandler(enabled = selectedIds.isNotEmpty()) {
+        selectedIds = emptySet()
     }
 
     val nowCal = remember { Calendar.getInstance() }
@@ -218,6 +249,18 @@ fun LedgerHomeScreen(
     val groupedByDate by remember(filteredTransactions) {
         derivedStateOf {
             filteredTransactions.groupBy { formatDateHeader(it.occurredAtMillis) }
+        }
+    }
+
+    val isSelectionMode = selectedIds.isNotEmpty()
+    val visibleFilteredIds = remember(filteredTransactions) {
+        filteredTransactions.map { it.id }.filter { it.isNotBlank() }.toSet()
+    }
+    val allVisibleSelected = visibleFilteredIds.isNotEmpty() && visibleFilteredIds.all { it in selectedIds }
+
+    val toggleItemSelection: (String) -> Unit = { txId ->
+        if (txId.isNotBlank()) {
+            selectedIds = if (txId in selectedIds) selectedIds - txId else selectedIds + txId
         }
     }
 
@@ -331,8 +374,18 @@ fun LedgerHomeScreen(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("搜索商户、银行、币种或备注") },
+                        placeholder = { Text("搜索商户、银行、币种或备注（长按条目可批量编辑）") },
                         leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { searchQuery = "" },
+                                    modifier = Modifier.testTag("ledger_search_clear_button")
+                                ) {
+                                    Icon(Icons.Rounded.Close, contentDescription = "清空搜索")
+                                }
+                            }
+                        },
                         singleLine = true,
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
@@ -353,6 +406,33 @@ fun LedgerHomeScreen(
                                 label = { Text(option) },
                                 modifier = Modifier.testTag("filter_chip_$option")
                             )
+                        }
+                    }
+
+                    if ((searchQuery.isNotBlank() || selectedFilter != "全部") && filteredTransactions.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "筛选结果共 ${filteredTransactions.size} 笔（长按任意条目可多选）",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(
+                                onClick = {
+                                    selectedIds = if (allVisibleSelected) {
+                                        selectedIds - visibleFilteredIds
+                                    } else {
+                                        selectedIds + visibleFilteredIds
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("search_batch_select_button")
+                            ) {
+                                Text(if (allVisibleSelected) "取消选中结果" else "多选全部结果")
+                            }
                         }
                     }
                 }
@@ -444,6 +524,7 @@ fun LedgerHomeScreen(
                                 key = { it.id.ifBlank { "${it.occurredAtMillis}_${it.merchant}" } }
                             ) { tx ->
                                 val (recordedBase, recordedRate, recordedCents) = viewModel.recordedSnapshotDisplay(tx)
+                                val isSelected = tx.id in selectedIds
                                 TransactionRowCard(
                                     transaction = tx,
                                     recordedBaseCurrencyCode = recordedBase,
@@ -453,7 +534,23 @@ fun LedgerHomeScreen(
                                     verticalPadding = rowVerticalPadding,
                                     showChannelBadge = appearance.showChannelBadge,
                                     showParseBadge = appearance.showParseBadge,
-                                    onClick = { selectedTransaction = tx }
+                                    isSelectionMode = isSelectionMode,
+                                    isSelected = isSelected,
+                                    onClick = {
+                                        if (isSelectionMode) {
+                                            toggleItemSelection(tx.id)
+                                        } else {
+                                            selectedTransaction = tx
+                                        }
+                                    },
+                                    onLongClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        if (isSelectionMode) {
+                                            toggleItemSelection(tx.id)
+                                        } else if (tx.id.isNotBlank()) {
+                                            selectedIds = setOf(tx.id)
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -462,19 +559,37 @@ fun LedgerHomeScreen(
             }
         }
 
-        FloatingActionButton(
-            onClick = { showCreateDialog = true },
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier
-                .align(fabAlignment)
-                .padding(20.dp)
-                .testTag("add_transaction_fab")
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Add,
-                contentDescription = stringResource(R.string.add_transaction_cd)
+        if (isSelectionMode) {
+            BatchSelectionActionBar(
+                selectedCount = selectedIds.size,
+                allVisibleSelected = allVisibleSelected,
+                onToggleSelectAll = {
+                    selectedIds = if (allVisibleSelected) {
+                        selectedIds - visibleFilteredIds
+                    } else {
+                        selectedIds + visibleFilteredIds
+                    }
+                },
+                onClearSelection = { selectedIds = emptySet() },
+                onBatchEdit = { showBatchEditDialog = true },
+                onBatchDelete = { showBatchDeleteConfirm = true },
+                modifier = Modifier.align(Alignment.BottomCenter)
             )
+        } else {
+            FloatingActionButton(
+                onClick = { showCreateDialog = true },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier
+                    .align(fabAlignment)
+                    .padding(20.dp)
+                    .testTag("add_transaction_fab")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = stringResource(R.string.add_transaction_cd)
+                )
+            }
         }
     }
 
@@ -575,6 +690,52 @@ fun LedgerHomeScreen(
                     ruleDefaultType = ruleDefaultType
                 )
                 resolvingInquiry = null
+            }
+        )
+    }
+
+    if (showBatchEditDialog && selectedIds.isNotEmpty()) {
+        BatchEditTransactionsDialog(
+            selectedCount = selectedIds.size,
+            onDismiss = { showBatchEditDialog = false },
+            onConfirm = { type, category, channel, merchant, currencyCode, note ->
+                viewModel.batchUpdateTransactions(
+                    txIds = selectedIds.toList(),
+                    type = type,
+                    category = category,
+                    channel = channel,
+                    merchant = merchant,
+                    currencyCode = currencyCode,
+                    note = note
+                )
+                showBatchEditDialog = false
+                selectedIds = emptySet()
+            }
+        )
+    }
+
+    if (showBatchDeleteConfirm && selectedIds.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteConfirm = false },
+            title = { Text("确认批量删除") },
+            text = { Text("确定要删除所选的 ${selectedIds.size} 笔账单记录吗？删除后无法撤销。") },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteConfirm = false }) {
+                    Text("取消")
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteTransactions(selectedIds.toList())
+                        showBatchDeleteConfirm = false
+                        selectedIds = emptySet()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ExpenseCoral),
+                    modifier = Modifier.testTag("batch_delete_confirm_button")
+                ) {
+                    Text("确认删除")
+                }
             }
         )
     }
@@ -1440,6 +1601,7 @@ private fun MonthlySummaryCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TransactionRowCard(
     transaction: LedgerTransaction,
@@ -1450,7 +1612,10 @@ private fun TransactionRowCard(
     verticalPadding: Dp,
     showChannelBadge: Boolean,
     showParseBadge: Boolean,
-    onClick: () -> Unit
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     val typeColor = transactionTypeColor(transaction.txType)
     val numberFont = LocalNumberFontFamily.current
@@ -1459,11 +1624,22 @@ private fun TransactionRowCard(
     Card(
         shape = RoundedCornerShape(cornerRadius),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.34f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            }
         ),
+        border = if (isSelected) {
+            BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+        } else null,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clip(RoundedCornerShape(cornerRadius))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .testTag("transaction_card_${transaction.id}")
     ) {
         Row(
@@ -1471,8 +1647,16 @@ private fun TransactionRowCard(
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = verticalPadding),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            AnimatedVisibility(visible = isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onClick() },
+                    modifier = Modifier.testTag("tx_select_checkbox_${transaction.id}")
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .size(42.dp)

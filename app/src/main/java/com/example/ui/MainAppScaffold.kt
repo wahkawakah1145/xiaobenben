@@ -68,9 +68,9 @@ const val ROUTE_SETTINGS = "settings"
 
 const val ROUTE_SETTINGS_PARSER = "settings/parser"
 const val ROUTE_SETTINGS_CURRENCY = "settings/currency"
-const val ROUTE_SETTINGS_IMPORT = "settings/import"
+const val ROUTE_SETTINGS_DATA_HUB = "settings/data_hub"
 const val ROUTE_SETTINGS_LOCAL_BACKUP = "settings/local_backup"
-const val ROUTE_SETTINGS_WEBDAV = "settings/webdav"
+const val ROUTE_SETTINGS_DEDUP = "settings/dedup"
 const val ROUTE_SETTINGS_APPEARANCE = "settings/appearance"
 
 private data class TopDestination(
@@ -196,9 +196,8 @@ fun AppNavigation(
                 ROUTE_SETTINGS -> "设置"
                 ROUTE_SETTINGS_PARSER -> "通知识别与规则"
                 ROUTE_SETTINGS_CURRENCY -> "币种与汇率"
-                ROUTE_SETTINGS_IMPORT -> "手动导入"
-                ROUTE_SETTINGS_LOCAL_BACKUP -> "本地备份与定时提醒"
-                ROUTE_SETTINGS_WEBDAV -> "WebDAV 备份同步"
+                ROUTE_SETTINGS_DATA_HUB, ROUTE_SETTINGS_LOCAL_BACKUP -> "导入与备份中心"
+                ROUTE_SETTINGS_DEDUP -> "智能去重"
                 ROUTE_SETTINGS_APPEARANCE -> "外观与布局"
                 else -> stringResource(R.string.app_name)
             }
@@ -325,9 +324,8 @@ fun AppNavigation(
                                     },
                                     onOpenParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
                                     onOpenCurrency = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
-                                    onOpenImport = { navController.navigate(ROUTE_SETTINGS_IMPORT) },
-                                    onOpenLocalBackup = { navController.navigate(ROUTE_SETTINGS_LOCAL_BACKUP) },
-                                    onOpenWebDav = { navController.navigate(ROUTE_SETTINGS_WEBDAV) },
+                                    onOpenDataHub = { navController.navigate(ROUTE_SETTINGS_DATA_HUB) },
+                                    onOpenDedup = { navController.navigate(ROUTE_SETTINGS_DEDUP) },
                                     onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) }
                                 )
                             }
@@ -347,29 +345,30 @@ fun AppNavigation(
                                     viewModel = viewModel
                                 )
                             }
-                            composable(ROUTE_SETTINGS_IMPORT) {
-                                ManualImportScreen(
+                            composable(ROUTE_SETTINGS_DATA_HUB) {
+                                DataHubScreen(
+                                    settings = settings,
                                     viewModel = viewModel,
+                                    initialTab = DataHubTab.IMPORT,
                                     onShowMessage = { msg ->
                                         scope.launch { snackbarHostState.showSnackbar(msg) }
                                     }
                                 )
                             }
                             composable(ROUTE_SETTINGS_LOCAL_BACKUP) {
-                                LocalBackupScreen(
+                                DataHubScreen(
                                     settings = settings,
                                     viewModel = viewModel,
+                                    initialTab = DataHubTab.LOCAL_BACKUP,
                                     onShowMessage = { msg ->
                                         scope.launch { snackbarHostState.showSnackbar(msg) }
                                     }
                                 )
                             }
-                            composable(ROUTE_SETTINGS_WEBDAV) {
-                                WebDavSettingsScreen(
-                                    viewModel = viewModel,
-                                    onShowMessage = { msg ->
-                                        scope.launch { snackbarHostState.showSnackbar(msg) }
-                                    }
+                            composable(ROUTE_SETTINGS_DEDUP) {
+                                SmartDeduplicationScreen(
+                                    transactionsState = transactionsState,
+                                    viewModel = viewModel
                                 )
                             }
                             composable(ROUTE_SETTINGS_APPEARANCE) {

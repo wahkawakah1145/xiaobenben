@@ -501,12 +501,10 @@ fun ManualImportScreen(
                 val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                 if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
             }
-            val text = context.contentResolver.openInputStream(uri)
-                ?.bufferedReader(Charsets.UTF_8)
-                ?.use { it.readText() }
-                .orEmpty()
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: ByteArray(0)
             selectedFileName = fileName
-            viewModel.previewManualImport(text, fileName)
+            viewModel.previewManualImportBytes(bytes, fileName)
         }.onFailure {
             onShowMessage("读取文件失败：${it.localizedMessage ?: "无法打开文件"}")
         }
@@ -532,13 +530,24 @@ fun ManualImportScreen(
                     ) {
                         Text("从文件导入", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "支持导入备份 JSON、微信/支付宝导出的 CSV 账单文件。",
+                            text = "支持导入 XLSX 表格、微信/支付宝导出的 CSV、以及备份 JSON 文件（自动跳过前置说明并识别表头）。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Button(
                             onClick = {
-                                filePickerLauncher.launch(arrayOf("application/json", "text/csv", "text/comma-separated-values", "text/*"))
+                                filePickerLauncher.launch(
+                                    arrayOf(
+                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        "application/vnd.ms-excel",
+                                        "text/csv",
+                                        "text/comma-separated-values",
+                                        "application/csv",
+                                        "application/json",
+                                        "text/*",
+                                        "application/octet-stream"
+                                    )
+                                )
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -547,7 +556,7 @@ fun ManualImportScreen(
                         ) {
                             Icon(Icons.Rounded.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(selectedFileName?.let { "已选：$it (重新选择)" } ?: "选择 JSON / CSV 文件")
+                            Text(selectedFileName?.let { "已选：$it (重新选择)" } ?: "选择 XLSX / CSV / JSON 文件")
                         }
                     }
                 }
@@ -624,6 +633,13 @@ fun ManualImportScreen(
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
+                                if (preview.detectedColumnsSummary.isNotBlank()) {
+                                    Text(
+                                        text = "映射列：${preview.detectedColumnsSummary}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                    )
+                                }
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)

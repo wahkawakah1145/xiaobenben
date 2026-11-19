@@ -213,6 +213,9 @@ interface LedgerDao {
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteTransactionById(id: String)
 
+    @Query("DELETE FROM transactions WHERE id IN (:ids)")
+    suspend fun deleteTransactionsByIds(ids: List<String>)
+
     @Query("SELECT * FROM parsing_rules ORDER BY priority DESC, createdAtMillis DESC")
     fun observeAllRules(): Flow<List<ParsingRuleEntity>>
 

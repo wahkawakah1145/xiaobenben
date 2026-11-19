@@ -87,4 +87,56 @@ class ExampleRobolectricTest {
     assertEquals(true, decodedSettings.backupReminderEnabled)
     assertEquals(48, decodedSettings.backupReminderIntervalHours)
   }
+
+  @Test
+  fun `batchUpdateTransactions and deleteTransactions update Room database accurately`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+    val tx1 = com.example.model.LedgerTransaction(
+      id = "batch-tx-1",
+      amountCents = 2500L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "其他",
+      merchant = "无名小店1",
+      channel = "支付宝",
+      occurredAtMillis = 1_731_900_000_000L,
+      confirmed = true
+    )
+    val tx2 = com.example.model.LedgerTransaction(
+      id = "batch-tx-2",
+      amountCents = 3800L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "其他",
+      merchant = "无名小店2",
+      channel = "微信支付",
+      occurredAtMillis = 1_731_910_000_000L,
+      confirmed = true
+    )
+    repository.addTransaction(tx1).getOrThrow()
+    repository.addTransaction(tx2).getOrThrow()
+
+    val updatedCount = repository.batchUpdateTransactions(
+      txIds = listOf("batch-tx-1", "batch-tx-2"),
+      category = "餐饮美食",
+      channel = "招商银行",
+      note = "团队聚餐"
+    ).getOrThrow()
+    assertEquals(2, updatedCount)
+
+    val afterUpdate = repository.getAllTransactionsOnce().filter { it.id.startsWith("batch-tx-") }
+    assertEquals(2, afterUpdate.size)
+    afterUpdate.forEach {
+      assertEquals("餐饮美食", it.category)
+      assertEquals("招商银行", it.channel)
+      assertEquals("团队聚餐", it.note)
+    }
+
+    val deletedCount = repository.deleteTransactions(listOf("batch-tx-1")).getOrThrow()
+    assertEquals(1, deletedCount)
+    val remainingIds = repository.getAllTransactionsOnce().map { it.id }
+    org.junit.Assert.assertFalse("batch-tx-1" in remainingIds)
+    org.junit.Assert.assertTrue("batch-tx-2" in remainingIds)
+  }
 }

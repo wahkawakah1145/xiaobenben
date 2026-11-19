@@ -298,6 +298,42 @@ class LedgerViewModel(
         }
     }
 
+    fun deleteTransactions(txIds: Collection<String>) {
+        viewModelScope.launch {
+            repository.deleteTransactions(txIds)
+                .onSuccess { count ->
+                    if (count > 0) _actionMessage.value = "已删除 $count 笔账单"
+                }
+                .onFailure { _actionMessage.value = "批量删除失败：${it.localizedMessage ?: "请重试"}" }
+        }
+    }
+
+    fun batchUpdateTransactions(
+        txIds: Collection<String>,
+        type: TransactionType? = null,
+        category: String? = null,
+        channel: String? = null,
+        merchant: String? = null,
+        currencyCode: String? = null,
+        note: String? = null
+    ) {
+        viewModelScope.launch {
+            repository.batchUpdateTransactions(
+                txIds = txIds,
+                type = type,
+                category = category,
+                channel = channel,
+                merchant = merchant,
+                currencyCode = currencyCode,
+                note = note
+            )
+                .onSuccess { count ->
+                    if (count > 0) _actionMessage.value = "已批量修改 $count 笔账单"
+                }
+                .onFailure { _actionMessage.value = "批量修改失败：${it.localizedMessage ?: "请重试"}" }
+        }
+    }
+
     fun resolveInquiry(
         inquiry: NotificationInquiry,
         amountCents: Long,
@@ -501,6 +537,22 @@ class LedgerViewModel(
             .onFailure { err ->
                 _importUiState.value = ImportUiState.Error(err.message ?: "无法解析导入内容")
             }
+    }
+
+    fun previewManualImportBytes(bytes: ByteArray, fileNameHint: String? = null) {
+        val rules = (rulesState.value as? UiState.Success)?.data ?: emptyList()
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                ManualImportManager.parseImportedBytes(bytes, fileNameHint, rules)
+            }
+            result
+                .onSuccess { preview ->
+                    _importUiState.value = ImportUiState.Ready(preview)
+                }
+                .onFailure { err ->
+                    _importUiState.value = ImportUiState.Error(err.message ?: "无法解析所选文件")
+                }
+        }
     }
 
     fun commitManualImport(items: List<LedgerTransaction>) {

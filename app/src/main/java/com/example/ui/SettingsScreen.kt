@@ -26,12 +26,11 @@ import androidx.compose.material.icons.automirrored.rounded.Rule
 import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.CloudSync
+import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.CurrencyExchange
-import androidx.compose.material.icons.rounded.FileUpload
+import androidx.compose.material.icons.rounded.FolderCopy
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Palette
-import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -78,9 +77,8 @@ fun SettingsScreen(
     onShowMessage: (String) -> Unit,
     onOpenParser: () -> Unit,
     onOpenCurrency: () -> Unit,
-    onOpenImport: () -> Unit,
-    onOpenLocalBackup: () -> Unit,
-    onOpenWebDav: () -> Unit,
+    onOpenDataHub: () -> Unit,
+    onOpenDedup: () -> Unit,
     onOpenAppearance: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -138,27 +136,19 @@ fun SettingsScreen(
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsNavRow(
-                            icon = Icons.Rounded.FileUpload,
-                            title = "手动导入",
-                            subtitle = "导入 JSON / 微信支付宝 CSV 或批量文本账单",
-                            testTag = "menu_manual_import",
-                            onClick = onOpenImport
+                            icon = Icons.Rounded.FolderCopy,
+                            title = "导入与备份中心",
+                            subtitle = "手动导入 (XLSX/CSV/JSON) · 本地备份与提醒 · WebDAV 同步",
+                            testTag = "menu_data_hub",
+                            onClick = onOpenDataHub
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsNavRow(
-                            icon = Icons.Rounded.SaveAlt,
-                            title = "本地备份与定时提醒",
-                            subtitle = "本地导出恢复 JSON 备份 · 定期紧急通知提醒",
-                            testTag = "menu_local_backup",
-                            onClick = onOpenLocalBackup
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        SettingsNavRow(
-                            icon = Icons.Rounded.CloudSync,
-                            title = "WebDAV 备份同步",
-                            subtitle = "配置 WebDAV 服务器地址并备份或恢复账本",
-                            testTag = "menu_webdav_sync",
-                            onClick = onOpenWebDav
+                            icon = Icons.Rounded.CleaningServices,
+                            title = "智能去重",
+                            subtitle = "筛选相同金额且交易对象相似的重复账单",
+                            testTag = "menu_smart_dedup",
+                            onClick = onOpenDedup
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsNavRow(

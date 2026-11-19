@@ -302,6 +302,73 @@ class LedgerRepository(
         }
     }
 
+    suspend fun deleteTransactions(txIds: Collection<String>): Result<Int> {
+        return try {
+            val cleanIds = txIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (cleanIds.isEmpty()) return Result.success(0)
+            cleanIds.chunked(400).forEach { chunk ->
+                dao.deleteTransactionsByIds(chunk)
+            }
+            Result.success(cleanIds.size)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun batchUpdateTransactions(
+        txIds: Collection<String>,
+        type: TransactionType? = null,
+        category: String? = null,
+        channel: String? = null,
+        merchant: String? = null,
+        currencyCode: String? = null,
+        note: String? = null
+    ): Result<Int> {
+        return try {
+            val idSet = txIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            if (idSet.isEmpty()) return Result.success(0)
+            val now = System.currentTimeMillis()
+            val settings = if (currencyCode != null) settingsStore.getBudgetSettingsOnce() else null
+            val rates = if (currencyCode != null) settingsStore.getExchangeRateStateOnce().ratesToCny else null
+            val baseCode = settings?.let { CurrencyCatalog.resolve(it.baseCurrencyCode).code }
+            val resolvedNewCurrency = currencyCode?.let { CurrencyCatalog.resolve(it).code }
+
+            val existing = dao.getAllTransactionsOnce().filter { it.id in idSet }
+            val updated = existing.map { entity ->
+                val newCurrency = resolvedNewCurrency ?: entity.currencyCode
+                val currencyChanged = resolvedNewCurrency != null && !resolvedNewCurrency.equals(entity.currencyCode, ignoreCase = true)
+                val newRecordedBase = if (currencyChanged && baseCode != null) baseCode else entity.recordedBaseCurrencyCode
+                val newRecordedRate = if (currencyChanged && baseCode != null && rates != null) {
+                    CurrencyExchangeManager.rateBetween(newCurrency, baseCode, rates)
+                } else {
+                    entity.recordedRateToBase
+                }
+                entity.copy(
+                    type = type?.name ?: entity.type,
+                    category = category?.trim()?.takeIf { it.isNotEmpty() }?.take(40) ?: entity.category,
+                    channel = channel?.trim()?.takeIf { it.isNotEmpty() }?.take(60) ?: entity.channel,
+                    merchant = merchant?.trim()?.takeIf { it.isNotEmpty() }?.take(120) ?: entity.merchant,
+                    currencyCode = newCurrency,
+                    note = if (note != null) note.trim().takeIf { it.isNotEmpty() }?.take(200) else entity.note,
+                    recordedBaseCurrencyCode = newRecordedBase,
+                    recordedRateToBase = newRecordedRate,
+                    confirmed = true,
+                    updatedAtMillis = now
+                )
+            }
+            if (updated.isNotEmpty()) {
+                dao.upsertTransactions(updated)
+            }
+            Result.success(updated.size)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun importTransactions(items: List<LedgerTransaction>): Result<Int> {
         return try {
             val settings = settingsStore.getBudgetSettingsOnce()
