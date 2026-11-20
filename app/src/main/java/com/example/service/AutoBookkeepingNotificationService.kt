@@ -110,6 +110,24 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         }
 
         val customRules = repository.getRulesOnce()
+        val ignoreRule = ChinaNotificationParser.matchesIgnoreRule(
+            packageName = packageName,
+            title = title,
+            content = content,
+            customRules = customRules
+        )
+        if (ignoreRule != null) {
+            NotificationBridge.appendLog(
+                packageName = packageName,
+                appLabel = appLabel,
+                title = title,
+                content = content,
+                status = "已按忽略规则跳过",
+                summary = "命中忽略规则「${ignoreRule.name}」"
+            )
+            return
+        }
+
         val ruleParsed = ChinaNotificationParser.parse(
             packageName = packageName,
             title = title,

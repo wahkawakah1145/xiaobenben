@@ -1,5 +1,8 @@
 package com.example.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +46,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,8 +82,21 @@ fun AiSettingsScreen(
     val context = LocalContext.current
     val aiConfig by viewModel.aiConfigState.collectAsStateWithLifecycle()
     val downloadState by viewModel.aiModelDownloadState.collectAsStateWithLifecycle()
+    val customModels by viewModel.customModelsState.collectAsStateWithLifecycle()
     val aiTestState by viewModel.aiTestState.collectAsStateWithLifecycle()
     val aiManager = remember { AiUnderstandingManager() }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshCustomModels(context)
+    }
+
+    val importWeightLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.importLocalAiWeight(context, uri)
+        }
+    }
 
     var selectedMode by remember(aiConfig.providerMode) { mutableStateOf(aiConfig.providerMode) }
     var selectedLocalModelId by remember(aiConfig.localModelId) { mutableStateOf(aiConfig.localModelId) }
@@ -246,8 +263,101 @@ fun AiSettingsScreen(
                                 is AiModelDownloadState.Idle -> Unit
                             }
 
+                            OutlinedButton(
+                                enabled = downloadState !is AiModelDownloadState.Downloading,
+                                onClick = { importWeightLauncher.launch(arrayOf("*/*")) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("import_custom_model_weight_button")
+                            ) {
+                                Icon(AppIcons.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("从本地导入模型权重 / 词表 (.gguf / .onnx / .tflite / .json)")
+                            }
+
+                            if (customModels.isNotEmpty()) {
+                                HorizontalDivider()
+                                Text("已导入的自定义本地权重 (${customModels.size})", style = MaterialTheme.typography.labelLarge)
+                                customModels.forEach { custom ->
+                                    val isSelected = selectedLocalModelId == custom.id
+                                    Surface(
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f)
+                                        },
+                                        border = BorderStroke(
+                                            width = if (isSelected) 1.5.dp else 1.dp,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                        ),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(14.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(custom.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                                    val vocabText = if (custom.vocabTokenCount > 0) " · 词元 ${custom.vocabTokenCount}" else ""
+                                                    Text(
+                                                        text = "${custom.formatLabel} · ${custom.fileName} (${custom.sizeBytes / 1024} KB$vocabText)",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                                Icon(
+                                                    imageVector = Icons.Rounded.CheckCircle,
+                                                    contentDescription = "已导入",
+                                                    tint = IncomeJade
+                                                )
+                                            }
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Button(
+                                                    onClick = {
+                                                        selectedLocalModelId = custom.id
+                                                        viewModel.saveAiConfig(
+                                                            currentEditedConfig().copy(
+                                                                providerMode = AiProviderMode.LOCAL_SMALL_MODEL,
+                                                                localModelId = custom.id
+                                                            )
+                                                        )
+                                                        onShowMessage("已启用自导入模型：${custom.displayName}")
+                                                    },
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .testTag("select_custom_model_${custom.id}")
+                                                ) {
+                                                    Text(if (isSelected) "当前已启用" else "切换使用")
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { viewModel.deleteCustomImportedModel(context, custom.id) },
+                                                    modifier = Modifier.testTag("delete_custom_model_${custom.id}")
+                                                ) {
+                                                    Icon(AppIcons.DeleteOutline, contentDescription = "移除自定义模型", modifier = Modifier.size(16.dp))
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text("移除")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                HorizontalDivider()
+                            }
+
+                            Text("内置推荐开源小模型（${LocalModelCatalog.presets.size} 款可按需下载）", style = MaterialTheme.typography.labelLarge)
+
                             LocalModelCatalog.presets.forEach { preset ->
-                                val status = remember(preset.id, downloadState, selectedLocalModelId) {
+                                val status = remember(preset.id, downloadState, selectedLocalModelId, customModels) {
                                     aiManager.getInstallStatus(context, preset.id)
                                 }
                                 val isSelected = selectedLocalModelId == preset.id

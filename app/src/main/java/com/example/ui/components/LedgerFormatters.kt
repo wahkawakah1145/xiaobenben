@@ -1,6 +1,9 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +12,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
@@ -45,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
+import com.example.R
 import com.example.ui.theme.AppIcons
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -54,14 +60,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.model.AppIconStyle
 import com.example.model.CategoryCatalog
 import com.example.model.CurrencyCatalog
+import com.example.model.IconVisualStyle
 import com.example.model.LedgerTransaction
 import com.example.model.ParseMethod
 import com.example.model.TransactionType
@@ -522,6 +536,9 @@ fun TransactionEditorDialog(
     val quickChannels = listOf("支付宝", "微信支付", "云闪付", "招商银行", "工商银行", "建设银行", "手动记账")
     val currencyInfo = CurrencyCatalog.resolve(selectedCurrency)
 
+    val clipboardManager = LocalClipboardManager.current
+    var rawCopied by remember(initialTransaction?.id) { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -534,6 +551,58 @@ fun TransactionEditorDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                val rawRecord = initialTransaction?.rawNotification?.takeIf { it.isNotBlank() }
+                if (rawRecord != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("editor_raw_record_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "原始记录（可长按选区复制）",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                TextButton(
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(rawRecord))
+                                        rawCopied = true
+                                    },
+                                    modifier = Modifier.testTag("editor_copy_raw_button")
+                                ) {
+                                    Icon(
+                                        imageVector = if (rawCopied) Icons.Rounded.Check else AppIcons.ContentCopy,
+                                        contentDescription = "复制原始记录",
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(if (rawCopied) "已复制" else "复制")
+                                }
+                            }
+                            SelectionContainer {
+                                Text(
+                                    text = rawRecord,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.testTag("editor_raw_record_text")
+                                )
+                            }
+                        }
+                    }
+                }
+
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     TransactionType.entries.forEachIndexed { index, txType ->
                         SegmentedButton(
@@ -808,4 +877,160 @@ fun parseDateTimeInputMillis(dateInput: String, timeInput: String): Long? {
     return runCatching {
         fmt.parse("$cleanDate $cleanTime")?.time
     }.getOrNull()
+}
+
+fun appIconDrawableRes(styleId: String?): Int? {
+    return when (AppIconStyle.fromId(styleId)) {
+        AppIconStyle.EMERALD -> R.drawable.app_icon_ledger
+        AppIconStyle.MINIMAL -> R.drawable.img_icon_minimal
+        AppIconStyle.INK -> R.drawable.img_icon_ink
+        AppIconStyle.CYBER -> R.drawable.img_icon_cyber
+        AppIconStyle.VINTAGE -> R.drawable.img_icon_vintage
+        AppIconStyle.MONET_ADAPTIVE -> null
+    }
+}
+
+@Composable
+fun AppBrandIconAvatar(
+    styleId: String,
+    size: Dp,
+    cornerDp: Dp,
+    modifier: Modifier = Modifier,
+    contentDescription: String = "小本本应用图标"
+) {
+    val resId = appIconDrawableRes(styleId)
+    val shape = RoundedCornerShape(cornerDp.coerceAtLeast(0.dp))
+    if (resId != null) {
+        Surface(
+            shape = shape,
+            shadowElevation = 2.dp,
+            modifier = modifier.size(size)
+        ) {
+            Image(
+                painter = painterResource(id = resId),
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(shape)
+            )
+        }
+    } else {
+        Surface(
+            shape = shape,
+            shadowElevation = 2.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)),
+            modifier = modifier.size(size)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primaryContainer,
+                                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.85f)
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = AppIcons.AccountBalanceWallet,
+                    contentDescription = contentDescription,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(size * 0.56f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CategoryIconAvatar(
+    category: String,
+    tintColor: Color,
+    visualStyle: IconVisualStyle,
+    size: Dp = 42.dp,
+    modifier: Modifier = Modifier
+) {
+    val iconVec = categoryIcon(category)
+    val iconSize = size * 0.5f
+    when (visualStyle) {
+        IconVisualStyle.FILLED -> {
+            Box(
+                modifier = modifier
+                    .size(size)
+                    .clip(CircleShape)
+                    .background(tintColor.copy(alpha = 0.13f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = iconVec,
+                    contentDescription = category,
+                    tint = tintColor,
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+        IconVisualStyle.OUTLINED -> {
+            Box(
+                modifier = modifier
+                    .size(size)
+                    .clip(CircleShape)
+                    .background(tintColor.copy(alpha = 0.04f))
+                    .border(1.4.dp, tintColor.copy(alpha = 0.58f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = iconVec,
+                    contentDescription = category,
+                    tint = tintColor,
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+        IconVisualStyle.DUOTONE -> {
+            val squircle = RoundedCornerShape(13.dp)
+            Box(
+                modifier = modifier
+                    .size(size)
+                    .clip(squircle)
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                tintColor.copy(alpha = 0.24f),
+                                tintColor.copy(alpha = 0.07f)
+                            )
+                        )
+                    )
+                    .border(0.8.dp, tintColor.copy(alpha = 0.22f), squircle),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = iconVec,
+                    contentDescription = category,
+                    tint = tintColor,
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+        IconVisualStyle.SQUIRCLE -> {
+            val stampShape = RoundedCornerShape(13.dp)
+            Box(
+                modifier = modifier
+                    .size(size)
+                    .clip(stampShape)
+                    .background(tintColor.copy(alpha = 0.90f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = iconVec,
+                    contentDescription = category,
+                    tint = Color.White,
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+    }
 }

@@ -5,6 +5,10 @@ import android.os.Build
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -38,6 +43,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -49,6 +55,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -56,20 +64,26 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.model.AppIconStyle
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CardDensity
 import com.example.model.CurrencyCatalog
+import com.example.model.CustomPaletteStyle
 import com.example.model.ExchangeRateAutoUpdateFrequency
 import com.example.model.ExchangeRateState
 import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
+import com.example.model.IconVisualStyle
 import com.example.model.LatinNumberFont
 import com.example.model.PredictiveBackStyle
 import com.example.model.TabClickAnimationStyle
 import com.example.model.ThemeMode
 import com.example.model.WebDavConfig
+import com.example.ui.components.AppBrandIconAvatar
+import com.example.ui.components.CustomColorPickerDialog
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatDateTimeFull
 import com.example.ui.theme.ExpenseCoral
@@ -79,6 +93,9 @@ import com.example.viewmodel.ImportUiState
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.RateUpdateState
 import com.example.viewmodel.WebDavActionState
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @Composable
 fun WebDavSettingsScreen(
@@ -735,6 +752,7 @@ fun AppearanceSettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val supportsMonet = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    var showColorPickerDialog by remember { mutableStateOf(false) }
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -754,7 +772,7 @@ fun AppearanceSettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("色彩与字体", style = MaterialTheme.typography.titleMedium)
+                        Text("色彩、调色板与字体", style = MaterialTheme.typography.titleMedium)
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -764,7 +782,7 @@ fun AppearanceSettingsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("莫奈动态取色 (Material You)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 Text(
-                                    text = if (supportsMonet) "跟随系统壁纸自动生成主题配色" else "当前系统低于 Android 12，自动使用默认配色",
+                                    text = if (supportsMonet) "关闭后可使用自定义色轮 / HSV / RGB / Hex 调色" else "当前系统低于 Android 12，自动使用自定义调色板",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -776,6 +794,74 @@ fun AppearanceSettingsScreen(
                                     viewModel.saveAppearanceSettings(appearance.copy(dynamicColor = enabled))
                                 },
                                 modifier = Modifier.testTag("toggle_monet_color")
+                            )
+                        }
+
+                        if (!appearance.dynamicColor || !supportsMonet) {
+                            val currentSeed = Color(appearance.customPrimaryColorArgb.toInt())
+                            val hexLabel = "#%06X".format(appearance.customPrimaryColorArgb.toInt() and 0xFFFFFF)
+
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showColorPickerDialog = true }
+                                    .testTag("open_custom_color_picker_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(CircleShape)
+                                            .background(currentSeed)
+                                            .border(2.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), CircleShape)
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "主题主色：$hexLabel",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = "点击打开圆形色环、HSV / RGB 滑块与 Hex 调色窗口",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    OutlinedButton(onClick = { showColorPickerDialog = true }) {
+                                        Text("调色板")
+                                    }
+                                }
+                            }
+
+                            Text("调色板衍生风格", style = MaterialTheme.typography.labelLarge)
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                CustomPaletteStyle.entries.forEach { paletteStyle ->
+                                    FilterChip(
+                                        selected = appearance.customPaletteStyle == paletteStyle,
+                                        onClick = {
+                                            viewModel.saveAppearanceSettings(appearance.copy(customPaletteStyle = paletteStyle))
+                                        },
+                                        label = { Text(paletteStyle.label) },
+                                        modifier = Modifier.testTag("palette_style_${paletteStyle.name}")
+                                    )
+                                }
+                            }
+                            Text(
+                                text = appearance.customPaletteStyle.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
 
@@ -801,6 +887,445 @@ fun AppearanceSettingsScreen(
                                     label = { Text(font.label) },
                                     modifier = Modifier.testTag("font_chip_${font.name}")
                                 )
+                            }
+                        }
+                    }
+                }
+            }
+
+            item(key = "page_dpi_scaling") {
+                val dpiSnaps = listOf(
+                    0.85f to "紧凑",
+                    1.00f to "标准",
+                    1.15f to "舒适",
+                    1.30f to "大屏"
+                )
+                var dpiTextInput by remember(appearance.uiDensityScale) {
+                    mutableStateOf(String.format(Locale.US, "%.2f", appearance.uiDensityScale))
+                }
+
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("页面缩放与显示密度 (DPI)", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = "支持 4 档磁吸微调及无级数值缩放，即时全局生效",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = "${(appearance.uiDensityScale * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.titleMedium.copy(fontFamily = LocalNumberFontFamily.current),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Slider(
+                                value = appearance.uiDensityScale.coerceIn(0.80f, 1.35f),
+                                onValueChange = { raw ->
+                                    val snapped = dpiSnaps
+                                        .firstOrNull { (target, _) -> abs(raw - target) <= 0.024f }
+                                        ?.first
+                                        ?: ((raw * 100f).roundToInt() / 100f)
+                                    val clamped = snapped.coerceIn(0.80f, 1.35f)
+                                    dpiTextInput = String.format(Locale.US, "%.2f", clamped)
+                                    viewModel.saveAppearanceSettings(appearance.copy(uiDensityScale = clamped))
+                                },
+                                valueRange = 0.80f..1.35f,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("dpi_scale_slider")
+                            )
+                            OutlinedTextField(
+                                value = dpiTextInput,
+                                onValueChange = { raw ->
+                                    val filtered = raw.filter { it.isDigit() || it == '.' }.take(5)
+                                    dpiTextInput = filtered
+                                    val parsed = filtered.toFloatOrNull()
+                                    if (parsed != null && parsed in 0.80f..1.35f) {
+                                        viewModel.saveAppearanceSettings(appearance.copy(uiDensityScale = parsed))
+                                    }
+                                },
+                                label = { Text("倍率") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                modifier = Modifier
+                                    .width(86.dp)
+                                    .testTag("dpi_scale_input")
+                            )
+                        }
+
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            dpiSnaps.forEach { (scale, label) ->
+                                FilterChip(
+                                    selected = abs(appearance.uiDensityScale - scale) < 0.015f,
+                                    onClick = {
+                                        dpiTextInput = String.format(Locale.US, "%.2f", scale)
+                                        viewModel.saveAppearanceSettings(appearance.copy(uiDensityScale = scale))
+                                    },
+                                    label = { Text("$label (${String.format(Locale.US, "%.2f", scale)}x)") },
+                                    modifier = Modifier.testTag("dpi_snap_${label}")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            item(key = "icon_style_settings") {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("应用图标风格与账单图标样式", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = "选择主页品牌图标与关于页展示风格，支持 6 种艺术样式",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            AppIconStyle.entries.forEach { style ->
+                                val selected = appearance.appIconStyleId.equals(style.id, ignoreCase = true)
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainer
+                                    },
+                                    border = BorderStroke(
+                                        width = if (selected) 2.dp else 1.dp,
+                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                    ),
+                                    modifier = Modifier
+                                        .width(96.dp)
+                                        .clickable {
+                                            viewModel.saveAppearanceSettings(appearance.copy(appIconStyleId = style.id))
+                                        }
+                                        .testTag("app_icon_style_${style.id}")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        AppBrandIconAvatar(
+                                            styleId = style.id,
+                                            size = 46.dp,
+                                            cornerDp = 12.dp
+                                        )
+                                        Text(
+                                            text = style.label,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider()
+
+                        Text("账单分类徽标样式", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            IconVisualStyle.entries.forEach { iconStyle ->
+                                FilterChip(
+                                    selected = appearance.iconVisualStyle == iconStyle,
+                                    onClick = { viewModel.saveAppearanceSettings(appearance.copy(iconVisualStyle = iconStyle)) },
+                                    label = { Text(iconStyle.label) },
+                                    modifier = Modifier.testTag("icon_visual_style_${iconStyle.name}")
+                                )
+                            }
+                        }
+                        Text(
+                            text = appearance.iconVisualStyle.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            item(key = "home_brand_header_customization") {
+                var nameInput by remember(appearance.homeBrandCustomName) {
+                    mutableStateOf(appearance.homeBrandCustomName)
+                }
+                var subtitleInput by remember(appearance.homeBrandCustomSubtitle) {
+                    mutableStateOf(appearance.homeBrandCustomSubtitle)
+                }
+                val previewTitle = nameInput.ifBlank { "小本本" }
+
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("主页顶部品牌栏自定义", style = MaterialTheme.typography.titleMedium)
+
+                        // Live left-aligned TopAppBar preview
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (appearance.homeBrandShowIcon) {
+                                    AppBrandIconAvatar(
+                                        styleId = appearance.appIconStyleId,
+                                        size = appearance.homeBrandIconSizeDp.dp,
+                                        cornerDp = appearance.homeBrandIconCornerDp.dp
+                                    )
+                                    if (appearance.homeBrandShowTitle) {
+                                        Spacer(modifier = Modifier.width(appearance.homeBrandIconSpacingDp.dp))
+                                    }
+                                }
+                                if (appearance.homeBrandShowTitle) {
+                                    Column {
+                                        Text(
+                                            text = previewTitle,
+                                            fontSize = appearance.homeBrandTitleSizeSp.sp,
+                                            fontWeight = if (appearance.homeBrandTitleBold) FontWeight.Bold else FontWeight.Medium,
+                                            maxLines = 1
+                                        )
+                                        if (subtitleInput.isNotBlank()) {
+                                            Text(
+                                                text = subtitleInput,
+                                                fontSize = appearance.homeBrandSubtitleSizeSp.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                } else if (!appearance.homeBrandShowIcon) {
+                                    Text(
+                                        text = "已隐藏图标与标题",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("顶栏显示应用图标", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = appearance.homeBrandShowIcon,
+                                onCheckedChange = {
+                                    viewModel.saveAppearanceSettings(appearance.copy(homeBrandShowIcon = it))
+                                },
+                                modifier = Modifier.testTag("toggle_home_brand_icon")
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("顶栏显示左对齐大号名称", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = appearance.homeBrandShowTitle,
+                                onCheckedChange = {
+                                    viewModel.saveAppearanceSettings(appearance.copy(homeBrandShowTitle = it))
+                                },
+                                modifier = Modifier.testTag("toggle_home_brand_title")
+                            )
+                        }
+
+                        if (appearance.homeBrandShowTitle) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("标题加粗显示", style = MaterialTheme.typography.bodyMedium)
+                                Switch(
+                                    checked = appearance.homeBrandTitleBold,
+                                    onCheckedChange = {
+                                        viewModel.saveAppearanceSettings(appearance.copy(homeBrandTitleBold = it))
+                                    }
+                                )
+                            }
+
+                            OutlinedTextField(
+                                value = nameInput,
+                                onValueChange = { next ->
+                                    nameInput = next.take(24)
+                                    viewModel.saveAppearanceSettings(appearance.copy(homeBrandCustomName = nameInput))
+                                },
+                                label = { Text("主页显示名称（留空默认“小本本”）") },
+                                placeholder = { Text("小本本") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("home_brand_name_input")
+                            )
+
+                            OutlinedTextField(
+                                value = subtitleInput,
+                                onValueChange = { next ->
+                                    subtitleInput = next.take(32)
+                                    viewModel.saveAppearanceSettings(appearance.copy(homeBrandCustomSubtitle = subtitleInput))
+                                },
+                                label = { Text("副标题（可选，例如个人手账格言）") },
+                                placeholder = { Text("留空则只显示主名称") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("home_brand_subtitle_input")
+                            )
+
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("名称字号", style = MaterialTheme.typography.labelLarge)
+                                    Text("${appearance.homeBrandTitleSizeSp} sp", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                                }
+                                Slider(
+                                    value = appearance.homeBrandTitleSizeSp.toFloat().coerceIn(16f, 36f),
+                                    onValueChange = { v ->
+                                        viewModel.saveAppearanceSettings(
+                                            appearance.copy(homeBrandTitleSizeSp = v.roundToInt().coerceIn(16, 36))
+                                        )
+                                    },
+                                    valueRange = 16f..36f,
+                                    modifier = Modifier.testTag("home_brand_title_size_slider")
+                                )
+                            }
+
+                            if (subtitleInput.isNotBlank()) {
+                                Column {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("副标题字号", style = MaterialTheme.typography.labelLarge)
+                                        Text("${appearance.homeBrandSubtitleSizeSp} sp", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                    Slider(
+                                        value = appearance.homeBrandSubtitleSizeSp.toFloat().coerceIn(9f, 16f),
+                                        onValueChange = { v ->
+                                            viewModel.saveAppearanceSettings(
+                                                appearance.copy(homeBrandSubtitleSizeSp = v.roundToInt().coerceIn(9, 16))
+                                            )
+                                        },
+                                        valueRange = 9f..16f
+                                    )
+                                }
+                            }
+                        }
+
+                        if (appearance.homeBrandShowIcon) {
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("顶栏图标尺寸", style = MaterialTheme.typography.labelLarge)
+                                    Text("${appearance.homeBrandIconSizeDp} dp", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                                }
+                                Slider(
+                                    value = appearance.homeBrandIconSizeDp.toFloat().coerceIn(20f, 52f),
+                                    onValueChange = { v ->
+                                        viewModel.saveAppearanceSettings(
+                                            appearance.copy(homeBrandIconSizeDp = v.roundToInt().coerceIn(20, 52))
+                                        )
+                                    },
+                                    valueRange = 20f..52f,
+                                    modifier = Modifier.testTag("home_brand_icon_size_slider")
+                                )
+                            }
+
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("图标圆角弧度", style = MaterialTheme.typography.labelLarge)
+                                    Text("${appearance.homeBrandIconCornerDp} dp", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                                }
+                                Slider(
+                                    value = appearance.homeBrandIconCornerDp.toFloat().coerceIn(0f, 26f),
+                                    onValueChange = { v ->
+                                        viewModel.saveAppearanceSettings(
+                                            appearance.copy(homeBrandIconCornerDp = v.roundToInt().coerceIn(0, 26))
+                                        )
+                                    },
+                                    valueRange = 0f..26f
+                                )
+                            }
+
+                            if (appearance.homeBrandShowTitle) {
+                                Column {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("图标与名称间距", style = MaterialTheme.typography.labelLarge)
+                                        Text("${appearance.homeBrandIconSpacingDp} dp", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                    Slider(
+                                        value = appearance.homeBrandIconSpacingDp.toFloat().coerceIn(4f, 24f),
+                                        onValueChange = { v ->
+                                            viewModel.saveAppearanceSettings(
+                                                appearance.copy(homeBrandIconSpacingDp = v.roundToInt().coerceIn(4, 24))
+                                            )
+                                        },
+                                        valueRange = 4f..24f
+                                    )
+                                }
                             }
                         }
                     }
@@ -843,7 +1368,7 @@ fun AppearanceSettingsScreen(
                             }
                         }
 
-                        Text("记一笔按钮位置", style = MaterialTheme.typography.labelLarge)
+                        Text("主页多功能 (+) 按钮位置", style = MaterialTheme.typography.labelLarge)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FabPlacement.entries.forEach { placement ->
                                 FilterChip(
@@ -1038,5 +1563,21 @@ fun AppearanceSettingsScreen(
                 }
             }
         }
+    }
+
+    if (showColorPickerDialog) {
+        CustomColorPickerDialog(
+            initialColorArgb = appearance.customPrimaryColorArgb,
+            onDismiss = { showColorPickerDialog = false },
+            onConfirm = { newColorArgb ->
+                showColorPickerDialog = false
+                viewModel.saveAppearanceSettings(
+                    appearance.copy(
+                        dynamicColor = false,
+                        customPrimaryColorArgb = newColorArgb
+                    )
+                )
+            }
+        )
     }
 }

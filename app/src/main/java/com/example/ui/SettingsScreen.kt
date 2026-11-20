@@ -27,11 +27,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.BuildConfig
-import com.example.data.LocalModelCatalog
+import com.example.data.AiUnderstandingManager
 import com.example.model.AiConfig
 import com.example.model.AiProviderMode
 import com.example.model.BudgetSettings
@@ -54,12 +55,13 @@ fun SettingsScreen(
     onOpenAbout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val baseCurrencyInfo = CurrencyCatalog.resolve(settings.baseCurrencyCode)
     val rateFreq = ExchangeRateAutoUpdateFrequency.fromRaw(settings.exchangeRateUpdateFrequency)
     val aiStatusSummary = when (aiConfig.providerMode) {
         AiProviderMode.DISABLED -> "未启用 · 仅使用规则引擎（点击接入本地模型或在线 API）"
         AiProviderMode.LOCAL_SMALL_MODEL -> {
-            val modelName = LocalModelCatalog.resolve(aiConfig.localModelId).name
+            val modelName = AiUnderstandingManager().resolveModelDisplayName(context, aiConfig.localModelId)
             "本地开源小模型 · $modelName"
         }
         AiProviderMode.ONLINE_API -> {
@@ -128,7 +130,7 @@ fun SettingsScreen(
                     Column(modifier = Modifier.padding(vertical = 6.dp)) {
                         SettingsNavRow(
                             icon = AppIcons.FolderCopy,
-                            title = "导入与备份中心",
+                            title = "备份与恢复",
                             subtitle = "手动导入 (XLSX/CSV/JSON) · 本地备份与通知 · WebDAV 同步",
                             testTag = "menu_data_hub",
                             onClick = onOpenDataHub
@@ -137,14 +139,14 @@ fun SettingsScreen(
                         SettingsNavRow(
                             icon = AppIcons.Palette,
                             title = "外观与布局",
-                            subtitle = "动态取色、字体、卡片密度、Tab动画与预测性返回",
+                            subtitle = "动态取色、自定义调色、DPI密度、图标与手势动画",
                             testTag = "menu_appearance",
                             onClick = onOpenAppearance
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsNavRow(
                             icon = AppIcons.Security,
-                            title = "系统权限与进程保活",
+                            title = "权限管理",
                             subtitle = permissionSummary,
                             testTag = "menu_permissions",
                             onClick = onOpenPermissions

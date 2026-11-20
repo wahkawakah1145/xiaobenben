@@ -159,15 +159,18 @@ class LedgerRepository(
             )
             dao.upsertTransaction(TransactionEntity.fromDomain(tx))
 
-            if (learnRule && ruleKeyword.trim().isNotBlank()) {
-                val cleanKeyword = ruleKeyword.trim().take(200)
+            if (learnRule && (ruleKeyword.trim().isNotBlank() || inquiry.content.isNotBlank())) {
+                val rawSample = "${inquiry.title}\n${inquiry.content}".trim()
+                val templateSig = com.example.parser.ChinaNotificationParser
+                    .buildNotificationTemplateSignature(rawSample, keepMerchantSlotExact = false)
+                val cleanKeyword = ruleKeyword.trim().ifBlank { cleanChannel }.take(200)
                 val cleanName = ruleName.trim().ifBlank { "$cleanMerchant · ${cleanCategoryOrType(category)}" }.take(80)
-                val existingRule = dao.getAllRulesOnce()
-                    .map { it.toDomain() }
-                    .firstOrNull {
-                        it.keywordPattern.equals(cleanKeyword, ignoreCase = true) ||
-                            (it.priority > 0 && it.name.equals(cleanName, ignoreCase = true))
-                    }
+                val existingRules = dao.getAllRulesOnce().map { it.toDomain() }
+                val existingRule = existingRules.firstOrNull {
+                    (templateSig.isNotBlank() && it.templateSignature.equals(templateSig, ignoreCase = true) && !it.isIgnoreRule) ||
+                        (it.keywordPattern.equals(cleanKeyword, ignoreCase = true) && !it.isIgnoreRule) ||
+                        (it.priority > 0 && it.name.equals(cleanName, ignoreCase = true) && !it.isIgnoreRule)
+                }
                 val normalizedRuleType = if (ruleDefaultType.equals("AUTO", ignoreCase = true)) {
                     "AUTO"
                 } else {
@@ -178,12 +181,13 @@ class LedgerRepository(
                     packageFilter = existingRule?.packageFilter
                         ?: inquiry.packageName.takeIf { it.isNotBlank() && it != "manual.bench" } ?: "*",
                     keywordPattern = cleanKeyword,
+                    templateSignature = templateSig.ifBlank { existingRule?.templateSignature ?: "" },
                     channelName = cleanChannel.take(60),
                     defaultCategory = category.trim().ifBlank { "其他" }.take(40),
                     defaultType = normalizedRuleType,
                     merchantOverride = cleanMerchant.take(60),
                     numberFormatPattern = com.example.model.NumberFormatStyle.fromRaw(numberFormatPattern).name,
-                    priority = 20,
+                    priority = maxOf(existingRule?.priority ?: 25, 25),
                     enabled = true,
                     updatedAtMillis = now
                 )
@@ -250,33 +254,169 @@ class LedgerRepository(
         cardLastFour: String?,
         note: String?,
         occurredAtMillis: Long,
-        confirmed: Boolean = true
-    ): Result<Unit> {
+        confirmed: Boolean = true,
+        learnFormatTemplate: Boolean = true
+    ): Result<Boolean> {
         return try {
             require(txId.isNotBlank()) { "账单 ID 不能为空" }
             require(amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万" }
             val existing = dao.getAllTransactionsOnce().firstOrNull { it.id == txId }
                 ?: throw IllegalArgumentException("未找到对应的账单记录")
+            val now = System.currentTimeMillis()
+            val cleanCategory = category.trim().ifBlank { "其他" }.take(40)
+            val cleanMerchant = merchant.trim().ifBlank { "未知商户" }.take(120)
+            val cleanChannel = channel.trim().ifBlank { "未知渠道" }.take(60)
             val updated = existing.copy(
                 amountCents = amountCents,
                 currencyCode = CurrencyCatalog.resolve(currencyCode).code,
                 type = type.name,
-                category = category.trim().ifBlank { "其他" }.take(40),
-                merchant = merchant.trim().ifBlank { "未知商户" }.take(120),
-                channel = channel.trim().ifBlank { "未知渠道" }.take(60),
+                category = cleanCategory,
+                merchant = cleanMerchant,
+                channel = cleanChannel,
                 cardLastFour = cardLastFour?.trim()?.takeIf { it.isNotEmpty() }?.take(8),
                 note = compactText(note, MAX_NOTE_LENGTH),
                 occurredAtMillis = occurredAtMillis.coerceAtLeast(1L),
                 confirmed = confirmed,
-                updatedAtMillis = System.currentTimeMillis()
+                updatedAtMillis = now
             )
             dao.upsertTransaction(updated)
-            Result.success(Unit)
+
+            var templateLearned = false
+            val rawText = existing.rawNotification?.trim().orEmpty()
+            if (learnFormatTemplate && rawText.isNotBlank()) {
+                templateLearned = upsertTemplateFromEditedTransaction(
+                    rawNotification = rawText,
+                    sourceAppRaw = existing.sourceApp,
+                    editedType = type,
+                    editedCategory = cleanCategory,
+                    editedMerchant = cleanMerchant,
+                    editedChannel = cleanChannel,
+                    previousMerchant = existing.merchant,
+                    timestampMillis = now
+                )
+            }
+            Result.success(templateLearned)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun recordIgnoredNotificationRule(
+        packageName: String,
+        title: String,
+        content: String
+    ): Result<CustomParsingRule> {
+        return try {
+            val rawCombined = "$title\n$content".trim()
+            val sig = com.example.parser.ChinaNotificationParser
+                .buildNotificationTemplateSignature(rawCombined, keepMerchantSlotExact = true)
+            val keyword = com.example.parser.ChinaNotificationParser.suggestRuleKeyword(
+                title = title,
+                content = content,
+                merchant = "",
+                channel = ""
+            ).ifBlank { title.ifBlank { content }.take(20) }.take(200)
+            val now = System.currentTimeMillis()
+            val existingRules = dao.getAllRulesOnce().map { it.toDomain() }
+            val existingIgnore = existingRules.firstOrNull { rule ->
+                rule.isIgnoreRule && (
+                    (sig.isNotBlank() && rule.templateSignature.equals(sig, ignoreCase = true)) ||
+                        rule.keywordPattern.equals(keyword, ignoreCase = true)
+                    )
+            }
+            val cleanTitle = title.trim().ifBlank { keyword }.take(22)
+            val stableId = existingIgnore?.id ?: ("ign_" + UUID.nameUUIDFromBytes((sig.ifBlank { keyword }).toByteArray()).toString())
+            val rule = (existingIgnore ?: CustomParsingRule(id = stableId)).copy(
+                name = "忽略非账单 · $cleanTitle".take(80),
+                packageFilter = packageName.takeIf { it.isNotBlank() && it != "manual.bench" } ?: "*",
+                keywordPattern = keyword,
+                templateSignature = sig,
+                channelName = "已忽略",
+                defaultCategory = "非账单",
+                defaultType = "IGNORE",
+                merchantOverride = "",
+                numberFormatPattern = com.example.model.NumberFormatStyle.AUTO.name,
+                priority = 100,
+                enabled = true,
+                createdAtMillis = existingIgnore?.createdAtMillis ?: now,
+                updatedAtMillis = now
+            )
+            dao.upsertRule(ParsingRuleEntity.fromDomain(rule))
+            Result.success(rule)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun upsertTemplateFromEditedTransaction(
+        rawNotification: String,
+        sourceAppRaw: String,
+        editedType: TransactionType,
+        editedCategory: String,
+        editedMerchant: String,
+        editedChannel: String,
+        previousMerchant: String,
+        timestampMillis: Long
+    ): Boolean {
+        val signature = com.example.parser.ChinaNotificationParser
+            .buildNotificationTemplateSignature(rawNotification, keepMerchantSlotExact = false)
+        if (signature.isBlank()) return false
+
+        val keyword = com.example.parser.ChinaNotificationParser.suggestRuleKeyword(
+            title = "",
+            content = rawNotification,
+            merchant = editedMerchant,
+            channel = editedChannel
+        ).ifBlank { editedChannel }.take(200)
+
+        val numberStyle = com.example.parser.ChinaNotificationParser.detectNumberFormatStyle(rawNotification)
+        val hasDynamicMerchantSlot = signature.contains("<MERCHANT>")
+        val merchantChanged = !editedMerchant.equals(previousMerchant, ignoreCase = true)
+        val isPlaceholderMerchant = editedMerchant == "${editedChannel}消费" ||
+            editedMerchant == "${editedChannel}收款" ||
+            editedMerchant == "${editedChannel}转账" ||
+            editedMerchant == "未知商户"
+        val merchantOverride = when {
+            isPlaceholderMerchant -> ""
+            !hasDynamicMerchantSlot || merchantChanged -> editedMerchant.take(60)
+            else -> ""
+        }
+
+        val packageHint = when (com.example.model.SourceApp.fromRaw(sourceAppRaw)) {
+            com.example.model.SourceApp.ALIPAY -> "com.eg.android.AlipayGphone"
+            com.example.model.SourceApp.WECHAT -> "com.tencent.mm"
+            com.example.model.SourceApp.UNIONPAY -> "com.unionpay"
+            else -> "*"
+        }
+
+        val existingRules = dao.getAllRulesOnce().map { it.toDomain() }
+        val existingTemplate = existingRules.firstOrNull {
+            !it.isIgnoreRule && it.templateSignature.equals(signature, ignoreCase = true)
+        }
+        val stableId = existingTemplate?.id
+            ?: ("tpl_" + UUID.nameUUIDFromBytes(signature.toByteArray()).toString())
+
+        val rule = (existingTemplate ?: CustomParsingRule(id = stableId)).copy(
+            name = "格式模版 · $editedChannel ($editedCategory)".take(80),
+            packageFilter = existingTemplate?.packageFilter ?: packageHint,
+            keywordPattern = keyword,
+            templateSignature = signature,
+            channelName = editedChannel.take(60),
+            defaultCategory = editedCategory.take(40),
+            defaultType = editedType.name,
+            merchantOverride = merchantOverride,
+            numberFormatPattern = numberStyle.name,
+            priority = maxOf(existingTemplate?.priority ?: 40, 40),
+            enabled = true,
+            createdAtMillis = existingTemplate?.createdAtMillis ?: timestampMillis,
+            updatedAtMillis = timestampMillis
+        )
+        dao.upsertRule(ParsingRuleEntity.fromDomain(rule))
+        return true
     }
 
     suspend fun confirmTransaction(txId: String): Result<Unit> {
@@ -418,25 +558,27 @@ class LedgerRepository(
         return try {
             val name = rule.name.trim()
             val keyword = rule.keywordPattern.trim()
-            val channel = rule.channelName.trim()
-            require(name.isNotEmpty() && keyword.isNotEmpty() && channel.isNotEmpty()) {
+            val isIgnore = rule.defaultType.equals("IGNORE", ignoreCase = true)
+            val channel = if (isIgnore && rule.channelName.trim().isEmpty()) "已忽略" else rule.channelName.trim()
+            require(name.isNotEmpty() && (keyword.isNotEmpty() || rule.templateSignature.isNotBlank()) && channel.isNotEmpty()) {
                 "规则名称、匹配关键词和渠道不能为空"
             }
             val now = System.currentTimeMillis()
-            val normalizedType = if (rule.defaultType.equals("AUTO", ignoreCase = true)) {
-                "AUTO"
-            } else {
-                TransactionType.fromRaw(rule.defaultType).name
+            val normalizedType = when {
+                isIgnore -> "IGNORE"
+                rule.defaultType.equals("AUTO", ignoreCase = true) -> "AUTO"
+                else -> TransactionType.fromRaw(rule.defaultType).name
             }
             val normalized = rule.copy(
                 id = rule.id.ifBlank { UUID.randomUUID().toString() },
                 name = name.take(80),
                 packageFilter = rule.packageFilter.trim().ifBlank { "*" }.take(120),
-                keywordPattern = keyword.take(200),
+                keywordPattern = keyword.ifBlank { name }.take(200),
+                templateSignature = rule.templateSignature.trim().take(180),
                 channelName = channel.take(60),
-                defaultCategory = rule.defaultCategory.trim().ifBlank { "自动" }.take(40),
+                defaultCategory = if (isIgnore) "非账单" else rule.defaultCategory.trim().ifBlank { "自动" }.take(40),
                 defaultType = normalizedType,
-                merchantOverride = rule.merchantOverride.trim().take(60),
+                merchantOverride = if (isIgnore) "" else rule.merchantOverride.trim().take(60),
                 numberFormatPattern = com.example.model.NumberFormatStyle.fromRaw(rule.numberFormatPattern).name,
                 priority = rule.priority,
                 createdAtMillis = rule.createdAtMillis.takeIf { it > 0L } ?: now,

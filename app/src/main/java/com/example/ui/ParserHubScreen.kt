@@ -580,6 +580,7 @@ private fun CustomRuleCard(
     onDelete: () -> Unit
 ) {
     val typeLabel = when {
+        rule.isIgnoreRule -> "忽略非账单"
         rule.defaultType.equals("AUTO", ignoreCase = true) -> "自动识别"
         else -> TransactionType.fromRaw(rule.defaultType).label
     }
@@ -598,10 +599,44 @@ private fun CustomRuleCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(rule.name, style = MaterialTheme.typography.titleMedium)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(rule.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f, fill = false))
+                    if (rule.isIgnoreRule) {
+                        Surface(
+                            color = ExpenseCoral.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "忽略规则",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ExpenseCoral,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    } else if (rule.isTemplateRule) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "编辑模版",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 Text(
-                    text = "关键词: ${rule.keywordPattern} → ${rule.channelName} · ${rule.defaultCategory} ($typeLabel)",
+                    text = if (rule.isIgnoreRule) {
+                        "屏蔽关键词: ${rule.keywordPattern} → 自动过滤不询问"
+                    } else {
+                        "关键词: ${rule.keywordPattern} → ${rule.channelName} · ${rule.defaultCategory} ($typeLabel)"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -654,7 +689,8 @@ private fun CustomRuleEditorDialog(
         "AUTO" to "自动判断",
         TransactionType.EXPENSE.name to TransactionType.EXPENSE.label,
         TransactionType.INCOME.name to TransactionType.INCOME.label,
-        TransactionType.TRANSFER.name to TransactionType.TRANSFER.label
+        TransactionType.TRANSFER.name to TransactionType.TRANSFER.label,
+        "IGNORE" to "忽略非账单"
     )
     val categoryChoices = listOf("自动") + CategoryCatalog.allCategories
 

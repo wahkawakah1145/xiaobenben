@@ -209,6 +209,62 @@ enum class PredictiveBackStyle(val label: String, val description: String) {
     }
 }
 
+enum class CustomPaletteStyle(val label: String, val description: String) {
+    TONAL_SPOT("Tonal Spot（经典色调）", "柔和平衡的 Material You 主次协调配色"),
+    EXPRESSIVE("Expressive（鲜明表现）", "互补高活力对比配色，视觉张力更强"),
+    NEUTRAL("Neutral（沉稳中性）", "低饱和灰阶质感，专注数据与阅读"),
+    VIBRANT("Vibrant（高饱和）", "高亮纯正色阶，色彩更加饱满"),
+    MONOCHROME("Monochrome（极简黑白）", "纯粹无彩单色调，极简克制");
+
+    companion object {
+        fun fromRaw(raw: String?): CustomPaletteStyle =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: TONAL_SPOT
+    }
+}
+
+enum class AppIconStyle(
+    val id: String,
+    val label: String,
+    val description: String
+) {
+    EMERALD("emerald", "翠绿经典", "经典绿水青山小本本图标"),
+    MINIMAL("minimal", "极简白金", "瑞士扁平几何票据徽章"),
+    INK("ink", "水墨青峦", "宋韵淡彩山水金湾意境"),
+    CYBER("cyber", "棱镜深眸", "深色玻璃拟态全息霓虹"),
+    VINTAGE("vintage", "复古皮本", "暖纸棕革铜扣手账风"),
+    MONET_ADAPTIVE("monet", "莫奈徽标", "随当前主题主色实时染色适配");
+
+    companion object {
+        fun fromId(id: String?): AppIconStyle =
+            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: EMERALD
+    }
+}
+
+enum class IconVisualStyle(
+    val label: String,
+    val description: String
+) {
+    FILLED("柔彩圆底", "柔和纯色圆底搭配核心图标"),
+    OUTLINED("极简线框", "通透细线圆环搭配轻盈图标"),
+    DUOTONE("双色渐变", "双色调微渐变圆角徽章"),
+    SQUIRCLE("方圆印章", "润角方章底纹与高对比色调");
+
+    companion object {
+        fun fromRaw(raw: String?): IconVisualStyle =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: FILLED
+    }
+}
+
+data class CustomLocalModelInfo(
+    val id: String,
+    val displayName: String,
+    val fileName: String,
+    val formatLabel: String,
+    val sizeBytes: Long,
+    val importedAtMillis: Long,
+    val vocabTokenCount: Int = 0
+)
+
 enum class AnalyticsGranularity(val label: String) {
     YEAR("年度"),
     MONTH("月"),
@@ -218,8 +274,11 @@ enum class AnalyticsGranularity(val label: String) {
 
 data class AppearanceSettings(
     val dynamicColor: Boolean = true,
+    val customPrimaryColorArgb: Long = 0xFF0F6B54L,
+    val customPaletteStyle: CustomPaletteStyle = CustomPaletteStyle.TONAL_SPOT,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val latinNumberFont: LatinNumberFont = LatinNumberFont.BUILTIN,
+    val uiDensityScale: Float = 1.0f,
     val cardDensity: CardDensity = CardDensity.STANDARD,
     val homeHeaderOrder: HomeHeaderOrder = HomeHeaderOrder.TIPS_TOP,
     val fabPlacement: FabPlacement = FabPlacement.BOTTOM_END,
@@ -229,7 +288,20 @@ data class AppearanceSettings(
     val customTipsRaw: String = "",
     val tabClickAnimation: TabClickAnimationStyle = TabClickAnimationStyle.SLIDE,
     val predictiveBackEnabled: Boolean = true,
-    val predictiveBackStyle: PredictiveBackStyle = PredictiveBackStyle.SYSTEM_SCALE
+    val predictiveBackStyle: PredictiveBackStyle = PredictiveBackStyle.SYSTEM_SCALE,
+    val homeBrandShowIcon: Boolean = true,
+    val homeBrandShowTitle: Boolean = true,
+    val homeBrandCustomName: String = "",
+    val homeBrandCustomSubtitle: String = "",
+    val homeBrandIconSizeDp: Int = 34,
+    val homeBrandIconCornerDp: Int = 10,
+    val homeBrandIconSpacingDp: Int = 10,
+    val homeBrandTitleSizeSp: Int = 24,
+    val homeBrandTitleBold: Boolean = true,
+    val homeBrandSubtitleSizeSp: Int = 11,
+    val analyticsPieSizeDp: Int = 220,
+    val appIconStyleId: String = AppIconStyle.EMERALD.id,
+    val iconVisualStyle: IconVisualStyle = IconVisualStyle.FILLED
 )
 
 data class StorageFootprintInfo(
@@ -296,6 +368,7 @@ data class CustomParsingRule(
     val name: String = "",
     val packageFilter: String = "*",
     val keywordPattern: String = "",
+    val templateSignature: String = "",
     val channelName: String = "",
     val defaultCategory: String = "自动",
     val defaultType: String = "AUTO",
@@ -305,7 +378,10 @@ data class CustomParsingRule(
     val enabled: Boolean = true,
     val createdAtMillis: Long = System.currentTimeMillis(),
     val updatedAtMillis: Long = System.currentTimeMillis()
-)
+) {
+    val isIgnoreRule: Boolean get() = defaultType.equals("IGNORE", ignoreCase = true)
+    val isTemplateRule: Boolean get() = templateSignature.isNotBlank() && !isIgnoreRule
+}
 
 data class NotificationInquiry(
     val id: String = UUID.randomUUID().toString(),

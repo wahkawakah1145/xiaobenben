@@ -3,17 +3,21 @@ package com.example.data
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.model.AppIconStyle
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CardDensity
 import com.example.model.CurrencyCatalog
+import com.example.model.CustomPaletteStyle
 import com.example.model.ExchangeRateState
 import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
+import com.example.model.IconVisualStyle
 import com.example.model.LatinNumberFont
 import com.example.model.PredictiveBackStyle
 import com.example.model.TabClickAnimationStyle
@@ -50,8 +54,11 @@ class SettingsDataStore(private val context: Context) {
         val WEBDAV_LAST_SYNC_STATUS = stringPreferencesKey("webdav_last_sync_status")
 
         val DYNAMIC_COLOR = booleanPreferencesKey("appearance_dynamic_color")
+        val CUSTOM_PRIMARY_COLOR_ARGB = longPreferencesKey("appearance_custom_primary_color_argb")
+        val CUSTOM_PALETTE_STYLE = stringPreferencesKey("appearance_custom_palette_style")
         val THEME_MODE = stringPreferencesKey("appearance_theme_mode")
         val LATIN_NUMBER_FONT = stringPreferencesKey("appearance_latin_number_font")
+        val UI_DENSITY_SCALE = floatPreferencesKey("appearance_ui_density_scale")
         val CARD_DENSITY = stringPreferencesKey("appearance_card_density")
         val HOME_HEADER_ORDER = stringPreferencesKey("appearance_home_header_order")
         val FAB_PLACEMENT = stringPreferencesKey("appearance_fab_placement")
@@ -62,6 +69,19 @@ class SettingsDataStore(private val context: Context) {
         val TAB_CLICK_ANIMATION = stringPreferencesKey("appearance_tab_click_animation")
         val PREDICTIVE_BACK_ENABLED = booleanPreferencesKey("appearance_predictive_back_enabled")
         val PREDICTIVE_BACK_STYLE = stringPreferencesKey("appearance_predictive_back_style")
+        val HOME_BRAND_SHOW_ICON = booleanPreferencesKey("appearance_home_brand_show_icon")
+        val HOME_BRAND_SHOW_TITLE = booleanPreferencesKey("appearance_home_brand_show_title")
+        val HOME_BRAND_CUSTOM_NAME = stringPreferencesKey("appearance_home_brand_custom_name")
+        val HOME_BRAND_CUSTOM_SUBTITLE = stringPreferencesKey("appearance_home_brand_custom_subtitle")
+        val HOME_BRAND_ICON_SIZE_DP = intPreferencesKey("appearance_home_brand_icon_size_dp")
+        val HOME_BRAND_ICON_CORNER_DP = intPreferencesKey("appearance_home_brand_icon_corner_dp")
+        val HOME_BRAND_ICON_SPACING_DP = intPreferencesKey("appearance_home_brand_icon_spacing_dp")
+        val HOME_BRAND_TITLE_SIZE_SP = intPreferencesKey("appearance_home_brand_title_size_sp")
+        val HOME_BRAND_TITLE_BOLD = booleanPreferencesKey("appearance_home_brand_title_bold")
+        val HOME_BRAND_SUBTITLE_SIZE_SP = intPreferencesKey("appearance_home_brand_subtitle_size_sp")
+        val ANALYTICS_PIE_SIZE_DP = intPreferencesKey("appearance_analytics_pie_size_dp")
+        val APP_ICON_STYLE_ID = stringPreferencesKey("appearance_app_icon_style_id")
+        val ICON_VISUAL_STYLE = stringPreferencesKey("appearance_icon_visual_style")
 
         val EXCHANGE_RATES_JSON = stringPreferencesKey("exchange_rates_json")
         val EXCHANGE_RATES_UPDATED_AT = longPreferencesKey("exchange_rates_updated_at")
@@ -112,8 +132,11 @@ class SettingsDataStore(private val context: Context) {
         val storedTag = prefs[Keys.TIP_TAG_TEXT] ?: ""
         AppearanceSettings(
             dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: true,
+            customPrimaryColorArgb = prefs[Keys.CUSTOM_PRIMARY_COLOR_ARGB] ?: 0xFF0F6B54L,
+            customPaletteStyle = CustomPaletteStyle.fromRaw(prefs[Keys.CUSTOM_PALETTE_STYLE]),
             themeMode = ThemeMode.fromRaw(prefs[Keys.THEME_MODE]),
             latinNumberFont = LatinNumberFont.fromRaw(prefs[Keys.LATIN_NUMBER_FONT]),
+            uiDensityScale = (prefs[Keys.UI_DENSITY_SCALE] ?: 1.0f).coerceIn(0.75f, 1.35f),
             cardDensity = CardDensity.fromRaw(prefs[Keys.CARD_DENSITY]),
             homeHeaderOrder = HomeHeaderOrder.fromRaw(prefs[Keys.HOME_HEADER_ORDER]),
             fabPlacement = FabPlacement.fromRaw(prefs[Keys.FAB_PLACEMENT]),
@@ -123,7 +146,20 @@ class SettingsDataStore(private val context: Context) {
             customTipsRaw = prefs[Keys.CUSTOM_TIPS_RAW] ?: "",
             tabClickAnimation = TabClickAnimationStyle.fromRaw(prefs[Keys.TAB_CLICK_ANIMATION]),
             predictiveBackEnabled = prefs[Keys.PREDICTIVE_BACK_ENABLED] ?: true,
-            predictiveBackStyle = PredictiveBackStyle.fromRaw(prefs[Keys.PREDICTIVE_BACK_STYLE])
+            predictiveBackStyle = PredictiveBackStyle.fromRaw(prefs[Keys.PREDICTIVE_BACK_STYLE]),
+            homeBrandShowIcon = prefs[Keys.HOME_BRAND_SHOW_ICON] ?: true,
+            homeBrandShowTitle = prefs[Keys.HOME_BRAND_SHOW_TITLE] ?: true,
+            homeBrandCustomName = prefs[Keys.HOME_BRAND_CUSTOM_NAME] ?: "",
+            homeBrandCustomSubtitle = prefs[Keys.HOME_BRAND_CUSTOM_SUBTITLE] ?: "",
+            homeBrandIconSizeDp = (prefs[Keys.HOME_BRAND_ICON_SIZE_DP] ?: 34).coerceIn(20, 52),
+            homeBrandIconCornerDp = (prefs[Keys.HOME_BRAND_ICON_CORNER_DP] ?: 10).coerceIn(0, 26),
+            homeBrandIconSpacingDp = (prefs[Keys.HOME_BRAND_ICON_SPACING_DP] ?: 10).coerceIn(4, 24),
+            homeBrandTitleSizeSp = (prefs[Keys.HOME_BRAND_TITLE_SIZE_SP] ?: 24).coerceIn(16, 36),
+            homeBrandTitleBold = prefs[Keys.HOME_BRAND_TITLE_BOLD] ?: true,
+            homeBrandSubtitleSizeSp = (prefs[Keys.HOME_BRAND_SUBTITLE_SIZE_SP] ?: 11).coerceIn(9, 16),
+            analyticsPieSizeDp = (prefs[Keys.ANALYTICS_PIE_SIZE_DP] ?: 220).coerceIn(150, 290),
+            appIconStyleId = AppIconStyle.fromId(prefs[Keys.APP_ICON_STYLE_ID]).id,
+            iconVisualStyle = IconVisualStyle.fromRaw(prefs[Keys.ICON_VISUAL_STYLE])
         )
     }
 
@@ -218,8 +254,11 @@ class SettingsDataStore(private val context: Context) {
     suspend fun saveAppearanceSettings(settings: AppearanceSettings) {
         context.smartLedgerDataStore.edit { prefs ->
             prefs[Keys.DYNAMIC_COLOR] = settings.dynamicColor
+            prefs[Keys.CUSTOM_PRIMARY_COLOR_ARGB] = settings.customPrimaryColorArgb
+            prefs[Keys.CUSTOM_PALETTE_STYLE] = settings.customPaletteStyle.name
             prefs[Keys.THEME_MODE] = settings.themeMode.name
             prefs[Keys.LATIN_NUMBER_FONT] = settings.latinNumberFont.name
+            prefs[Keys.UI_DENSITY_SCALE] = settings.uiDensityScale.coerceIn(0.75f, 1.35f)
             prefs[Keys.CARD_DENSITY] = settings.cardDensity.name
             prefs[Keys.HOME_HEADER_ORDER] = settings.homeHeaderOrder.name
             prefs[Keys.FAB_PLACEMENT] = settings.fabPlacement.name
@@ -230,6 +269,19 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.TAB_CLICK_ANIMATION] = settings.tabClickAnimation.name
             prefs[Keys.PREDICTIVE_BACK_ENABLED] = settings.predictiveBackEnabled
             prefs[Keys.PREDICTIVE_BACK_STYLE] = settings.predictiveBackStyle.name
+            prefs[Keys.HOME_BRAND_SHOW_ICON] = settings.homeBrandShowIcon
+            prefs[Keys.HOME_BRAND_SHOW_TITLE] = settings.homeBrandShowTitle
+            prefs[Keys.HOME_BRAND_CUSTOM_NAME] = settings.homeBrandCustomName.take(24)
+            prefs[Keys.HOME_BRAND_CUSTOM_SUBTITLE] = settings.homeBrandCustomSubtitle.take(36)
+            prefs[Keys.HOME_BRAND_ICON_SIZE_DP] = settings.homeBrandIconSizeDp.coerceIn(20, 52)
+            prefs[Keys.HOME_BRAND_ICON_CORNER_DP] = settings.homeBrandIconCornerDp.coerceIn(0, 26)
+            prefs[Keys.HOME_BRAND_ICON_SPACING_DP] = settings.homeBrandIconSpacingDp.coerceIn(4, 24)
+            prefs[Keys.HOME_BRAND_TITLE_SIZE_SP] = settings.homeBrandTitleSizeSp.coerceIn(16, 36)
+            prefs[Keys.HOME_BRAND_TITLE_BOLD] = settings.homeBrandTitleBold
+            prefs[Keys.HOME_BRAND_SUBTITLE_SIZE_SP] = settings.homeBrandSubtitleSizeSp.coerceIn(9, 16)
+            prefs[Keys.ANALYTICS_PIE_SIZE_DP] = settings.analyticsPieSizeDp.coerceIn(150, 290)
+            prefs[Keys.APP_ICON_STYLE_ID] = AppIconStyle.fromId(settings.appIconStyleId).id
+            prefs[Keys.ICON_VISUAL_STYLE] = settings.iconVisualStyle.name
         }
     }
 

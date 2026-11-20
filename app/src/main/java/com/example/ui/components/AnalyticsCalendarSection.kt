@@ -1,0 +1,765 @@
+package com.example.ui.components
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.data.CurrencyExchangeManager
+import com.example.model.AnalyticsGranularity
+import com.example.model.CurrencyCatalog
+import com.example.model.LedgerTransaction
+import com.example.model.TransactionType
+import com.example.ui.theme.AppIcons
+import com.example.ui.theme.ExpenseCoral
+import com.example.ui.theme.IncomeJade
+import com.example.ui.theme.LocalNumberFontFamily
+import com.example.viewmodel.LedgerViewModel
+import java.util.Calendar
+import java.util.Locale
+
+private val weekDayLabels = listOf("一", "二", "三", "四", "五", "六", "日")
+
+@Composable
+fun AnalyticsCalendarSection(
+    transactions: List<LedgerTransaction>,
+    granularity: AnalyticsGranularity,
+    anchorMillis: Long,
+    baseCurrencyCode: String,
+    ratesToCny: Map<String, Double>,
+    onGranularityAndAnchorChange: (AnalyticsGranularity, Long) -> Unit,
+    onTransactionClick: (LedgerTransaction) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val confirmedTxs = remember(transactions) { transactions.filter { it.confirmed } }
+    var pinchAccumulator by remember { mutableFloatStateOf(1f) }
+    val numberFont = LocalNumberFontFamily.current
+
+    fun toBaseCents(tx: LedgerTransaction): Long = CurrencyExchangeManager.convertCents(
+        amountCents = tx.amountCents,
+        fromCurrency = tx.currencyCode,
+        toCurrency = baseCurrencyCode,
+        ratesToCny = ratesToCny
+    )
+
+    fun zoomIn() {
+        val next = when (granularity) {
+            AnalyticsGranularity.YEAR -> AnalyticsGranularity.MONTH
+            AnalyticsGranularity.MONTH -> AnalyticsGranularity.WEEK
+            AnalyticsGranularity.WEEK -> AnalyticsGranularity.DAY
+            AnalyticsGranularity.DAY -> AnalyticsGranularity.DAY
+        }
+        if (next != granularity) onGranularityAndAnchorChange(next, anchorMillis)
+    }
+
+    fun zoomOut() {
+        val prev = when (granularity) {
+            AnalyticsGranularity.DAY -> AnalyticsGranularity.WEEK
+            AnalyticsGranularity.WEEK -> AnalyticsGranularity.MONTH
+            AnalyticsGranularity.MONTH -> AnalyticsGranularity.YEAR
+            AnalyticsGranularity.YEAR -> AnalyticsGranularity.YEAR
+        }
+        if (prev != granularity) onGranularityAndAnchorChange(prev, anchorMillis)
+    }
+
+    val calendarTitle = when (granularity) {
+        AnalyticsGranularity.YEAR -> "${Calendar.getInstance().apply { timeInMillis = anchorMillis }.get(Calendar.YEAR)} 年收支年历"
+        AnalyticsGranularity.MONTH -> {
+            val c = Calendar.getInstance().apply { timeInMillis = anchorMillis }
+            "${c.get(Calendar.YEAR)}年${c.get(Calendar.MONTH) + 1}月 收支月历"
+        }
+        AnalyticsGranularity.WEEK -> "${LedgerViewModel.formatPeriodTitle(AnalyticsGranularity.WEEK, anchorMillis)} 周历"
+        AnalyticsGranularity.DAY -> "${LedgerViewModel.formatPeriodTitle(AnalyticsGranularity.DAY, anchorMillis)} 日历明细"
+    }
+
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        modifier = modifier
+            .fillMaxWidth()
+            .pointerInput(granularity, anchorMillis) {
+                detectTransformGestures { _, _, zoom, _ ->
+                    if (zoom == 1f) return@detectTransformGestures
+                    pinchAccumulator = (pinchAccumulator * zoom).coerceIn(0.4f, 2.5f)
+                    when {
+                        pinchAccumulator >= 1.28f -> {
+                            pinchAccumulator = 1f
+                            zoomIn()
+                        }
+                        pinchAccumulator <= 0.78f -> {
+                            pinchAccumulator = 1f
+                            zoomOut()
+                        }
+                    }
+                }
+            }
+            .testTag("analytics_calendar_section")
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Header + Zoom +/- Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = AppIcons.CalendarMonth,
+                        contentDescription = "收支日历",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Column {
+                        Text("收支多维日历", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = "双指捏合缩放或点击网格可切换 年历/月历/周历/日历",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    OutlinedButton(
+                        onClick = { zoomOut() },
+                        enabled = granularity != AnalyticsGranularity.YEAR,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("calendar_zoom_out_button")
+                    ) {
+                        Text("缩小", style = MaterialTheme.typography.labelMedium)
+                    }
+                    OutlinedButton(
+                        onClick = { zoomIn() },
+                        enabled = granularity != AnalyticsGranularity.DAY,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("calendar_zoom_in_button")
+                    ) {
+                        Text("放大", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+
+            // Granularity Filter Tabs
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val labels = mapOf(
+                    AnalyticsGranularity.YEAR to "年历",
+                    AnalyticsGranularity.MONTH to "月历",
+                    AnalyticsGranularity.WEEK to "周历",
+                    AnalyticsGranularity.DAY to "日历"
+                )
+                AnalyticsGranularity.entries.forEach { g ->
+                    FilterChip(
+                        selected = granularity == g,
+                        onClick = { onGranularityAndAnchorChange(g, anchorMillis) },
+                        label = { Text(labels[g] ?: g.label) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("calendar_tab_${g.name}")
+                    )
+                }
+            }
+
+            // Period Navigation Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                IconButton(
+                    onClick = {
+                        onGranularityAndAnchorChange(
+                            granularity,
+                            LedgerViewModel.shiftPeriodAnchor(granularity, anchorMillis, -1)
+                        )
+                    },
+                    modifier = Modifier.testTag("calendar_prev_button")
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, contentDescription = "上一周期")
+                }
+                Text(
+                    text = calendarTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = {
+                        onGranularityAndAnchorChange(
+                            granularity,
+                            LedgerViewModel.shiftPeriodAnchor(granularity, anchorMillis, +1)
+                        )
+                    },
+                    modifier = Modifier.testTag("calendar_next_button")
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = "下一周期")
+                }
+            }
+
+            HorizontalDivider()
+
+            when (granularity) {
+                AnalyticsGranularity.YEAR -> {
+                    val cal = Calendar.getInstance().apply { timeInMillis = anchorMillis }
+                    val targetYear = cal.get(Calendar.YEAR)
+                    val todayCal = Calendar.getInstance()
+                    val currentYear = todayCal.get(Calendar.YEAR)
+                    val currentMonth0 = todayCal.get(Calendar.MONTH)
+
+                    val monthlyTotals = remember(confirmedTxs, targetYear, baseCurrencyCode, ratesToCny) {
+                        val map = Array(12) { Triple(0L, 0L, 0) } // expense, income, count
+                        val iterCal = Calendar.getInstance()
+                        confirmedTxs.forEach { tx ->
+                            iterCal.timeInMillis = tx.occurredAtMillis
+                            if (iterCal.get(Calendar.YEAR) == targetYear) {
+                                val m = iterCal.get(Calendar.MONTH)
+                                val baseAmt = toBaseCents(tx)
+                                val prev = map[m]
+                                map[m] = when (tx.txType) {
+                                    TransactionType.EXPENSE -> Triple(prev.first + baseAmt, prev.second, prev.third + 1)
+                                    TransactionType.INCOME -> Triple(prev.first, prev.second + baseAmt, prev.third + 1)
+                                    TransactionType.TRANSFER -> Triple(prev.first, prev.second, prev.third + 1)
+                                }
+                            }
+                        }
+                        map
+                    }
+                    val maxMonthExpense = remember(monthlyTotals) {
+                        monthlyTotals.maxOfOrNull { it.first }?.coerceAtLeast(1L) ?: 1L
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (row in 0 until 4) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                for (col in 0 until 3) {
+                                    val month0 = row * 3 + col
+                                    val (exp, inc, cnt) = monthlyTotals[month0]
+                                    val isNowMonth = targetYear == currentYear && month0 == currentMonth0
+                                    val heatAlpha = (exp.toFloat() / maxMonthExpense.toFloat()).coerceIn(0f, 1f) * 0.16f
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = if (exp > 0L) ExpenseCoral.copy(alpha = 0.05f + heatAlpha)
+                                        else MaterialTheme.colorScheme.surface,
+                                        border = if (isNowMonth) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                                        else BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .clickable {
+                                                val jump = Calendar.getInstance().apply {
+                                                    set(targetYear, month0, 1, 12, 0, 0)
+                                                    set(Calendar.MILLISECOND, 0)
+                                                }
+                                                onGranularityAndAnchorChange(AnalyticsGranularity.MONTH, jump.timeInMillis)
+                                            }
+                                            .testTag("calendar_year_month_${month0 + 1}")
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "${month0 + 1}月",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (isNowMonth) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (cnt > 0) {
+                                                    Text(
+                                                        text = "${cnt}笔",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                            Text(
+                                                text = if (exp > 0L) "-${compactCalendarMoney(exp, baseCurrencyCode)}" else "支 ¥0",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = numberFont),
+                                                color = if (exp > 0L) ExpenseCoral else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            if (inc > 0L) {
+                                                Text(
+                                                    text = "+${compactCalendarMoney(inc, baseCurrencyCode)}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = numberFont),
+                                                    color = IncomeJade,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                AnalyticsGranularity.MONTH -> {
+                    val cal = Calendar.getInstance().apply {
+                        timeInMillis = anchorMillis
+                        set(Calendar.DAY_OF_MONTH, 1)
+                        set(Calendar.HOUR_OF_DAY, 12)
+                        set(Calendar.MINUTE, 0)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                    }
+                    val targetYear = cal.get(Calendar.YEAR)
+                    val targetMonth0 = cal.get(Calendar.MONTH)
+                    val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+                    val firstDayOfWeekMonBased = ((cal.get(Calendar.DAY_OF_WEEK) + 5) % 7) // 0=Mon..6=Sun
+
+                    val todayCal = Calendar.getInstance()
+                    val isThisMonth = todayCal.get(Calendar.YEAR) == targetYear && todayCal.get(Calendar.MONTH) == targetMonth0
+                    val todayDom = todayCal.get(Calendar.DAY_OF_MONTH)
+
+                    val dayTotals = remember(confirmedTxs, targetYear, targetMonth0, baseCurrencyCode, ratesToCny) {
+                        val map = Array(daysInMonth + 1) { Triple(0L, 0L, 0) }
+                        val iterCal = Calendar.getInstance()
+                        confirmedTxs.forEach { tx ->
+                            iterCal.timeInMillis = tx.occurredAtMillis
+                            if (iterCal.get(Calendar.YEAR) == targetYear && iterCal.get(Calendar.MONTH) == targetMonth0) {
+                                val dom = iterCal.get(Calendar.DAY_OF_MONTH)
+                                if (dom in 1..daysInMonth) {
+                                    val amt = toBaseCents(tx)
+                                    val prev = map[dom]
+                                    map[dom] = when (tx.txType) {
+                                        TransactionType.EXPENSE -> Triple(prev.first + amt, prev.second, prev.third + 1)
+                                        TransactionType.INCOME -> Triple(prev.first, prev.second + amt, prev.third + 1)
+                                        TransactionType.TRANSFER -> Triple(prev.first, prev.second, prev.third + 1)
+                                    }
+                                }
+                            }
+                        }
+                        map
+                    }
+                    val maxDayExpense = remember(dayTotals) {
+                        dayTotals.maxOfOrNull { it.first }?.coerceAtLeast(1L) ?: 1L
+                    }
+
+                    val totalCells = firstDayOfWeekMonBased + daysInMonth
+                    val numRows = (totalCells + 6) / 7
+
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        // Weekday Headers + Week Jump Column
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "周",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.width(24.dp)
+                            )
+                            weekDayLabels.forEach { dayLbl ->
+                                Text(
+                                    text = dayLbl,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        for (r in 0 until numRows) {
+                            val firstValidDomInRow = (0..6)
+                                .map { c -> r * 7 + c - firstDayOfWeekMonBased + 1 }
+                                .firstOrNull { it in 1..daysInMonth } ?: 1
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Clickable Week shortcut to zoom cleanly into Week view for this row
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                    modifier = Modifier
+                                        .width(24.dp)
+                                        .height(54.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            val jump = Calendar.getInstance().apply {
+                                                set(targetYear, targetMonth0, firstValidDomInRow, 12, 0, 0)
+                                            }
+                                            onGranularityAndAnchorChange(AnalyticsGranularity.WEEK, jump.timeInMillis)
+                                        }
+                                        .testTag("calendar_month_week_${r + 1}")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = "W${r + 1}",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+
+                                for (c in 0 until 7) {
+                                    val dom = r * 7 + c - firstDayOfWeekMonBased + 1
+                                    if (dom !in 1..daysInMonth) {
+                                        Spacer(modifier = Modifier.weight(1f).height(54.dp))
+                                    } else {
+                                        val (exp, inc, cnt) = dayTotals[dom]
+                                        val isToday = isThisMonth && dom == todayDom
+                                        val heat = (exp.toFloat() / maxDayExpense.toFloat()).coerceIn(0f, 1f) * 0.22f
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = when {
+                                                exp > 0L -> ExpenseCoral.copy(alpha = 0.06f + heat)
+                                                inc > 0L -> IncomeJade.copy(alpha = 0.12f)
+                                                else -> MaterialTheme.colorScheme.surface
+                                            },
+                                            border = if (isToday) {
+                                                BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                                            } else null,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(54.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .clickable {
+                                                    val jump = Calendar.getInstance().apply {
+                                                        set(targetYear, targetMonth0, dom, 12, 0, 0)
+                                                    }
+                                                    onGranularityAndAnchorChange(AnalyticsGranularity.DAY, jump.timeInMillis)
+                                                }
+                                                .testTag("calendar_month_day_$dom")
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(horizontal = 2.dp, vertical = 4.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(
+                                                    text = dom.toString(),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = if (isToday || cnt > 0) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (exp > 0L) {
+                                                    Text(
+                                                        text = "-${compactCalendarShort(exp)}",
+                                                        fontSize = 9.sp,
+                                                        lineHeight = 10.sp,
+                                                        color = ExpenseCoral,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Clip
+                                                    )
+                                                } else if (inc > 0L) {
+                                                    Text(
+                                                        text = "+${compactCalendarShort(inc)}",
+                                                        fontSize = 9.sp,
+                                                        lineHeight = 10.sp,
+                                                        color = IncomeJade,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Clip
+                                                    )
+                                                } else {
+                                                    Text(
+                                                        text = "",
+                                                        fontSize = 9.sp,
+                                                        lineHeight = 10.sp
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                AnalyticsGranularity.WEEK -> {
+                    val (weekStart, _) = remember(anchorMillis) { LedgerViewModel.weekRangeMillis(anchorMillis) }
+                    val daysList = remember(confirmedTxs, weekStart, baseCurrencyCode, ratesToCny) {
+                        val dayCal = Calendar.getInstance().apply { timeInMillis = weekStart }
+                        (0 until 7).map { offset ->
+                            val start = dayCal.timeInMillis
+                            val labelDate = "${dayCal.get(Calendar.MONTH) + 1}月${dayCal.get(Calendar.DAY_OF_MONTH)}日"
+                            val weekLabel = "周${weekDayLabels[offset]}"
+                            val y = dayCal.get(Calendar.YEAR)
+                            val doy = dayCal.get(Calendar.DAY_OF_YEAR)
+                            val iterCal = Calendar.getInstance()
+                            val dayTxs = confirmedTxs.filter { tx ->
+                                iterCal.timeInMillis = tx.occurredAtMillis
+                                iterCal.get(Calendar.YEAR) == y && iterCal.get(Calendar.DAY_OF_YEAR) == doy
+                            }
+                            val exp = dayTxs.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBaseCents(it) }
+                            val inc = dayTxs.filter { it.txType == TransactionType.INCOME }.sumOf { toBaseCents(it) }
+                            dayCal.add(Calendar.DAY_OF_YEAR, 1)
+                            WeekDaySummary(
+                                dayAnchorMillis = start + 12L * 3_600_000L,
+                                weekLabel = weekLabel,
+                                dateLabel = labelDate,
+                                expenseCents = exp,
+                                incomeCents = inc,
+                                count = dayTxs.size
+                            )
+                        }
+                    }
+                    val maxWeekDayExp = remember(daysList) {
+                        daysList.maxOfOrNull { it.expenseCents }?.coerceAtLeast(1L) ?: 1L
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        daysList.forEachIndexed { idx, day ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        onGranularityAndAnchorChange(AnalyticsGranularity.DAY, day.dayAnchorMillis)
+                                    }
+                                    .testTag("calendar_week_day_$idx")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${day.weekLabel} · ${day.dateLabel} (${day.count} 笔)",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            if (day.incomeCents > 0L) {
+                                                Text(
+                                                    text = "+${formatCurrency(day.incomeCents, baseCurrencyCode)}",
+                                                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = numberFont),
+                                                    color = IncomeJade,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            }
+                                            Text(
+                                                text = "-${formatCurrency(day.expenseCents, baseCurrencyCode)}",
+                                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = numberFont),
+                                                color = if (day.expenseCents > 0L) ExpenseCoral else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                    LinearProgressIndicator(
+                                        progress = { (day.expenseCents.toFloat() / maxWeekDayExp.toFloat()).coerceIn(0f, 1f) },
+                                        color = ExpenseCoral,
+                                        trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(6.dp)
+                                            .clip(RoundedCornerShape(3.dp))
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                AnalyticsGranularity.DAY -> {
+                    val dayTxs = remember(confirmedTxs, anchorMillis) {
+                        LedgerViewModel.filterByDay(confirmedTxs, anchorMillis)
+                            .sortedByDescending { it.occurredAtMillis }
+                    }
+                    val dayExpense = remember(dayTxs, baseCurrencyCode, ratesToCny) {
+                        dayTxs.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBaseCents(it) }
+                    }
+                    val dayIncome = remember(dayTxs, baseCurrencyCode, ratesToCny) {
+                        dayTxs.filter { it.txType == TransactionType.INCOME }.sumOf { toBaseCents(it) }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "共 ${dayTxs.size} 笔",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                Text(
+                                    text = "支出 ${formatCurrency(dayExpense, baseCurrencyCode)} · 收入 ${formatCurrency(dayIncome, baseCurrencyCode)}",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontFamily = numberFont),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+
+                        if (dayTxs.isEmpty()) {
+                            Text(
+                                text = "当日暂无账单记录，可点击左上角「缩小」回到周历或月历查看。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            dayTxs.forEach { tx ->
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { onTransactionClick(tx) }
+                                        .testTag("calendar_day_tx_${tx.id}")
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Text(
+                                            text = formatTimeShort(tx.occurredAtMillis),
+                                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = numberFont),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = tx.merchant,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "${tx.category} · ${tx.channel}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Text(
+                                            text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
+                                            style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                            color = transactionTypeColor(tx.txType),
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(
+                    onClick = { onGranularityAndAnchorChange(granularity, System.currentTimeMillis()) }
+                ) {
+                    Text("定位到今天")
+                }
+            }
+        }
+    }
+}
+
+private data class WeekDaySummary(
+    val dayAnchorMillis: Long,
+    val weekLabel: String,
+    val dateLabel: String,
+    val expenseCents: Long,
+    val incomeCents: Long,
+    val count: Int
+)
+
+private fun compactCalendarMoney(cents: Long, currencyCode: String): String {
+    val sym = CurrencyCatalog.resolve(currencyCode).symbol
+    val valNum = cents / 100.0
+    return if (valNum >= 10_000.0) {
+        "$sym%.1f万".format(Locale.US, valNum / 10_000.0)
+    } else if (cents % 100L == 0L) {
+        "$sym${(cents / 100L)}"
+    } else {
+        "$sym%.1f".format(Locale.US, valNum)
+    }
+}
+
+private fun compactCalendarShort(cents: Long): String {
+    val valNum = cents / 100.0
+    return when {
+        valNum >= 10_000.0 -> "%.1fw".format(Locale.US, valNum / 10_000.0)
+        valNum >= 100.0 || cents % 100L == 0L -> "${(cents / 100L)}"
+        else -> "%.0f".format(Locale.US, valNum)
+    }
+}

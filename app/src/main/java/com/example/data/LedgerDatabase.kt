@@ -90,6 +90,7 @@ data class ParsingRuleEntity(
     val name: String,
     val packageFilter: String,
     val keywordPattern: String,
+    val templateSignature: String = "",
     val channelName: String,
     val defaultCategory: String,
     val defaultType: String,
@@ -105,6 +106,7 @@ data class ParsingRuleEntity(
         name = name,
         packageFilter = packageFilter,
         keywordPattern = keywordPattern,
+        templateSignature = templateSignature,
         channelName = channelName,
         defaultCategory = defaultCategory,
         defaultType = defaultType,
@@ -122,6 +124,7 @@ data class ParsingRuleEntity(
             name = rule.name,
             packageFilter = rule.packageFilter,
             keywordPattern = rule.keywordPattern,
+            templateSignature = rule.templateSignature,
             channelName = rule.channelName,
             defaultCategory = rule.defaultCategory,
             defaultType = rule.defaultType,
@@ -266,7 +269,7 @@ interface LedgerDao {
 
 @Database(
     entities = [TransactionEntity::class, ParsingRuleEntity::class, NotificationInquiryEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -325,6 +328,12 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE parsing_rules ADD COLUMN templateSignature TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getInstance(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -332,7 +341,7 @@ abstract class LedgerDatabase : RoomDatabase() {
                     LedgerDatabase::class.java,
                     "smart_ledger.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .addCallback(object : Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)

@@ -248,4 +248,174 @@ class ExampleRobolectricTest {
     assertEquals("老店面", oldAfter.merchant)
     org.junit.Assert.assertNotNull(recentAfter.rawNotification)
   }
+
+  @Test
+  fun `ignore rule suppresses future matching notifications and edited transaction overwrites template rule`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+
+    val ignoreRule = repository.recordIgnoredNotificationRule(
+      packageName = "com.tencent.mm",
+      title = "积分到期提醒",
+      content = "【微信商城】您的880积分将于本月底到期，消费满50元可用"
+    ).getOrThrow()
+    org.junit.Assert.assertTrue(ignoreRule.isIgnoreRule)
+
+    val rulesAfterIgnore = repository.getRulesOnce()
+    val matchedIgnore = com.example.parser.ChinaNotificationParser.matchesIgnoreRule(
+      packageName = "com.tencent.mm",
+      title = "积分到期提醒",
+      content = "【微信商城】您的1200积分将于本月底到期，消费满100元可用",
+      customRules = rulesAfterIgnore
+    )
+    org.junit.Assert.assertNotNull(matchedIgnore)
+    val parsedIgnored = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "com.tencent.mm",
+      title = "积分到期提醒",
+      content = "【微信商城】您的1200积分将于本月底到期，消费满100元可用",
+      customRules = rulesAfterIgnore,
+      enableLocalSemanticPass = false
+    )
+    assertEquals(false, parsedIgnored?.isFinancialTransaction)
+
+    val rawBill = "【招商银行】您尾号8812储蓄卡于11月19日在瑞幸咖啡快捷支付人民币28.00元。"
+    val tx = com.example.model.LedgerTransaction(
+      id = "tpl-test-tx",
+      amountCents = 2800L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "其他",
+      merchant = "瑞幸咖啡",
+      channel = "招商银行",
+      sourceApp = com.example.model.SourceApp.BANK_SMS.name,
+      rawNotification = rawBill,
+      confirmed = true
+    )
+    repository.addTransaction(tx).getOrThrow()
+
+    val learnedFirst = repository.updateTransaction(
+      txId = "tpl-test-tx",
+      amountCents = 2800L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE,
+      category = "餐饮美食",
+      merchant = "瑞幸咖啡",
+      channel = "招商银行",
+      cardLastFour = "8812",
+      note = null,
+      occurredAtMillis = tx.occurredAtMillis,
+      learnFormatTemplate = true
+    ).getOrThrow()
+    org.junit.Assert.assertTrue(learnedFirst)
+
+    // Edit the same format again: latest edit must overwrite template category/channel
+    repository.updateTransaction(
+      txId = "tpl-test-tx",
+      amountCents = 2800L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE,
+      category = "居家生活",
+      merchant = "楼下精品咖啡",
+      channel = "招行主卡",
+      cardLastFour = "8812",
+      note = null,
+      occurredAtMillis = tx.occurredAtMillis,
+      learnFormatTemplate = true
+    ).getOrThrow()
+
+    val rulesAfterEdit = repository.getRulesOnce()
+    val tplRules = rulesAfterEdit.filter { it.isTemplateRule }
+    org.junit.Assert.assertEquals(1, tplRules.size)
+
+    val parsedNext = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "com.android.mms",
+      title = "95555",
+      content = "【招商银行】您尾号8812储蓄卡于11月20日在星巴克快捷支付人民币36.00元。",
+      customRules = rulesAfterEdit,
+      enableLocalSemanticPass = false
+    )
+    assertEquals("居家生活", parsedNext?.category)
+    assertEquals("招行主卡", parsedNext?.channel)
+  }
+
+  @Test
+  fun `custom AI weight import blocks executables and accepts gguf and vocab json`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val aiManager = com.example.data.AiUnderstandingManager()
+
+    val blockedFile = java.io.File(context.cacheDir, "malicious.dex").apply {
+      writeText("dummy dex bytes")
+    }
+    val blockedResult = aiManager.importCustomModelWeight(
+      context = context,
+      uri = android.net.Uri.fromFile(blockedFile),
+      explicitFileName = "malicious.dex"
+    )
+    org.junit.Assert.assertTrue(blockedResult.isFailure)
+
+    val validFile = java.io.File(context.cacheDir, "qwen_finance_mini.gguf").apply {
+      writeBytes("GGUF\u0003\u0000\u0000\u0000外卖餐饮咖啡地铁工资退款".toByteArray(Charsets.UTF_8))
+    }
+    val imported = aiManager.importCustomModelWeight(
+      context = context,
+      uri = android.net.Uri.fromFile(validFile),
+      explicitFileName = "qwen_finance_mini.gguf"
+    ).getOrThrow()
+    org.junit.Assert.assertTrue(imported.id.startsWith(com.example.data.LocalModelCatalog.CUSTOM_PREFIX))
+    assertEquals("GGUF 量化权重", imported.formatLabel)
+    org.junit.Assert.assertTrue(aiManager.listCustomImportedModels(context).any { it.id == imported.id })
+  }
+
+  @Test
+  fun `expanded appearance settings dpi color style icons and delete undo restore work end to end`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+
+    val saved = com.example.model.AppearanceSettings(
+      dynamicColor = false,
+      customPrimaryColorArgb = 0xFF7C3AEDL,
+      customPaletteStyle = com.example.model.CustomPaletteStyle.EXPRESSIVE,
+      uiDensityScale = 1.15f,
+      analyticsPieSizeDp = 260,
+      appIconStyleId = com.example.model.AppIconStyle.INK.id,
+      iconVisualStyle = com.example.model.IconVisualStyle.DUOTONE,
+      homeBrandCustomName = "私人金库",
+      homeBrandTitleSizeSp = 28
+    )
+    repository.saveAppearanceSettings(saved).getOrThrow()
+    val loaded = repository.observeAppearanceSettings().first()
+    assertEquals(false, loaded.dynamicColor)
+    assertEquals(0xFF7C3AEDL, loaded.customPrimaryColorArgb)
+    assertEquals(com.example.model.CustomPaletteStyle.EXPRESSIVE, loaded.customPaletteStyle)
+    assertEquals(1.15f, loaded.uiDensityScale, 0.001f)
+    assertEquals(260, loaded.analyticsPieSizeDp)
+    assertEquals(com.example.model.AppIconStyle.INK.id, loaded.appIconStyleId)
+    assertEquals(com.example.model.IconVisualStyle.DUOTONE, loaded.iconVisualStyle)
+    assertEquals("私人金库", loaded.homeBrandCustomName)
+    assertEquals(28, loaded.homeBrandTitleSizeSp)
+
+    val customScheme = com.example.ui.theme.buildCustomColorScheme(
+      seedColor = androidx.compose.ui.graphics.Color(0xFF7C3AED),
+      style = com.example.model.CustomPaletteStyle.MONOCHROME,
+      darkTheme = false
+    )
+    org.junit.Assert.assertNotEquals(customScheme.primary, customScheme.onPrimary)
+
+    val deletedTx = com.example.model.LedgerTransaction(
+      id = "undo-restore-tx",
+      amountCents = 4200L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "撤销测试餐厅",
+      channel = "支付宝"
+    )
+    repository.addTransaction(deletedTx).getOrThrow()
+    repository.deleteTransactions(listOf("undo-restore-tx")).getOrThrow()
+    org.junit.Assert.assertFalse(repository.getAllTransactionsOnce().any { it.id == "undo-restore-tx" })
+
+    val restored = repository.importTransactions(listOf(deletedTx)).getOrThrow()
+    assertEquals(1, restored)
+    org.junit.Assert.assertTrue(repository.getAllTransactionsOnce().any { it.id == "undo-restore-tx" })
+  }
 }

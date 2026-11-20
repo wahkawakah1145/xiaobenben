@@ -94,6 +94,111 @@ object ChinaNotificationParser {
         }
     }
 
+    fun buildNotificationTemplateSignature(
+        rawText: String,
+        keepMerchantSlotExact: Boolean = false
+    ): String {
+        var normalized = rawText
+            .replace("\r\n", " ")
+            .replace('\n', ' ')
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        if (normalized.isEmpty()) return ""
+
+        // Normalize variable slots so recurring bank/payment templates share one signature
+        normalized = normalized
+            .replace(Regex("""\d{4}\s*[-/年.]\s*\d{1,2}\s*[-/月.]\s*\d{1,2}日?"""), "<DATE>")
+            .replace(Regex("""(?<!\d)\d{1,2}\s*[月/-]\s*\d{1,2}日?"""), "<DATE>")
+            .replace(Regex("""(?<!\d)\d{1,2}[:时]\d{2}(?:[:分]\d{2})?"""), "<TIME>")
+            .replace(Regex("""(尾号|账户|卡号)\s*[（(]?\d{4}[）)]?"""), "$1<TAIL>")
+            .replace(Regex("""[¥￥$€£₩]\s*[+\-]?\s*[0-9,.\s]+"""), "<AMT>")
+            .replace(Regex("""[+\-]?\s*[0-9]{1,3}(?:[,\s.][0-9]{3})*(?:[.,][0-9]{1,2})?\s*(?:元|美元|港币|港元|日元|欧元|英镑|新币|韩元|澳元|加元|澳门元|新台币|人民币|USD|HKD|EUR|JPY|GBP)""", RegexOption.IGNORE_CASE), "<AMT>")
+            .replace(Regex("""\d{4,}"""), "<NUM>")
+            .replace(Regex("""[+\-]?\d+(?:[.,]\d{1,2})?"""), "<AMT>")
+
+        if (!keepMerchantSlotExact) {
+            normalized = normalized
+                .replace(Regex("""(在\s*)[^，。,\n\s]{2,24}?(\s*(?:刷卡|快捷|扫码|线上)?(?:消费|支出|付款|支付))"""), "$1<MERCHANT>$2")
+                .replace(Regex("""((?:向|给)\s*)[「"“]?[^「」"”\n，。,\s]{2,24}[」"”]?(\s*(?:付款|转账|支付))"""), "$1<MERCHANT>$2")
+                .replace(Regex("""((?:商户|交易商户|收款方|付款方|对方)[:：]\s*)[^，。,\n]{2,24}"""), "$1<MERCHANT>")
+        }
+
+        return normalized.replace(Regex("""\s+"""), " ").trim().take(180)
+    }
+
+    fun matchesIgnoreRule(
+        packageName: String,
+        title: String,
+        content: String,
+        customRules: List<CustomParsingRule>
+    ): CustomParsingRule? {
+        val combined = "$title\n$content".trim()
+        if (combined.isBlank()) return null
+        val matched = findMatchingCustomRule(
+            packageName = packageName,
+            combined = combined,
+            rules = customRules.filter { it.enabled && it.isIgnoreRule },
+            contentOnly = content.trim()
+        )
+        return matched
+    }
+
+    fun findMatchingCustomRule(
+        packageName: String,
+        combined: String,
+        rules: List<CustomParsingRule>,
+        contentOnly: String = ""
+    ): CustomParsingRule? {
+        val eligible = rules.filter { rule ->
+            rule.enabled &&
+                (rule.packageFilter == "*" || rule.packageFilter.isBlank() || rule.packageFilter == packageName)
+        }
+        if (eligible.isEmpty()) return null
+
+        val candidateTexts = listOfNotNull(
+            combined.takeIf { it.isNotBlank() },
+            contentOnly.takeIf { it.isNotBlank() && it != combined }
+        )
+        val incomingSigs = candidateTexts.flatMap { text ->
+            listOf(
+                buildNotificationTemplateSignature(text, keepMerchantSlotExact = false),
+                buildNotificationTemplateSignature(text, keepMerchantSlotExact = true)
+            )
+        }.filter { it.isNotBlank() }.distinct()
+
+        // 1) Exact / suffix-aligned template signature match has highest precedence; latest updated template wins!
+        val templateMatch = eligible
+            .filter { rule ->
+                val sig = rule.templateSignature.trim()
+                sig.isNotEmpty() && incomingSigs.any { inc ->
+                    sig.equals(inc, ignoreCase = true) ||
+                        (minOf(sig.length, inc.length) >= 12 &&
+                            (sig.endsWith(inc, ignoreCase = true) || inc.endsWith(sig, ignoreCase = true)))
+                }
+            }
+            .sortedWith(
+                compareByDescending<CustomParsingRule> { it.isIgnoreRule }
+                    .thenByDescending { it.updatedAtMillis }
+                    .thenByDescending { it.priority }
+            )
+            .firstOrNull()
+        if (templateMatch != null) return templateMatch
+
+        // 2) Keyword / regex rules sorted by IGNORE first (if matched), priority DESC, updatedAtMillis DESC, keyword length DESC
+        return eligible
+            .filter { it.keywordPattern.isNotBlank() }
+            .sortedWith(
+                compareByDescending<CustomParsingRule> { it.isIgnoreRule }
+                    .thenByDescending { it.priority }
+                    .thenByDescending { it.updatedAtMillis }
+                    .thenByDescending { it.keywordPattern.length }
+            )
+            .firstOrNull { rule ->
+                runCatching { Regex(rule.keywordPattern, RegexOption.IGNORE_CASE).containsMatchIn(combined) }
+                    .getOrElse { combined.contains(rule.keywordPattern, ignoreCase = true) }
+            }
+    }
+
     fun parse(
         packageName: String,
         title: String,
@@ -104,20 +209,33 @@ object ChinaNotificationParser {
     ): ParsedNotificationResult? {
         val combined = "$title\n$content".trim()
         if (combined.isBlank()) return null
-        if (noiseKeywords.any { combined.contains(it) }) return null
 
-        val matchedCustomRule = customRules
-            .filter { it.enabled }
-            .sortedWith(
-                compareByDescending<CustomParsingRule> { it.priority }
-                    .thenByDescending { it.keywordPattern.length }
+        val matchedCustomRule = findMatchingCustomRule(
+            packageName = packageName,
+            combined = combined,
+            rules = customRules,
+            contentOnly = content.trim()
+        )
+        if (matchedCustomRule?.isIgnoreRule == true) {
+            return ParsedNotificationResult(
+                isFinancialTransaction = false,
+                amountCents = 0L,
+                currencyCode = "CNY",
+                type = TransactionType.EXPENSE,
+                category = "已忽略",
+                merchant = "",
+                channel = matchedCustomRule.channelName.ifBlank { "忽略规则" },
+                cardLastFour = null,
+                sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined),
+                parseMethod = ParseMethod.RULE_ENGINE,
+                confidence = 1f,
+                reasoning = "命中忽略规则「${matchedCustomRule.name}」，已跳过为非账单通知",
+                needsInquiry = false,
+                inquiryReason = ""
             )
-            .firstOrNull { rule ->
-                (rule.packageFilter == "*" || rule.packageFilter.isBlank() || rule.packageFilter == packageName) &&
-                    rule.keywordPattern.isNotBlank() &&
-                    runCatching { Regex(rule.keywordPattern, RegexOption.IGNORE_CASE).containsMatchIn(combined) }
-                        .getOrElse { combined.contains(rule.keywordPattern, ignoreCase = true) }
-            }
+        }
+
+        if (noiseKeywords.any { combined.contains(it) }) return null
 
         val ruleNumberStyle = NumberFormatStyle.fromRaw(matchedCustomRule?.numberFormatPattern)
         val allowLoose = matchedCustomRule != null && matchedCustomRule.priority > 0
@@ -131,7 +249,10 @@ object ChinaNotificationParser {
         val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
         val channel = matchedCustomRule?.channelName?.takeIf { it.isNotBlank() }
             ?: detectChannel(packageName, combined)
-        val type = if (matchedCustomRule != null && !matchedCustomRule.defaultType.equals("AUTO", ignoreCase = true)) {
+        val type = if (matchedCustomRule != null &&
+            !matchedCustomRule.defaultType.equals("AUTO", ignoreCase = true) &&
+            !matchedCustomRule.isIgnoreRule
+        ) {
             TransactionType.fromRaw(matchedCustomRule.defaultType)
         } else {
             detectTransactionType(combined)
@@ -152,7 +273,7 @@ object ChinaNotificationParser {
         }
 
         val isHighPriorityCustomMatch = matchedCustomRule != null &&
-            (matchedCustomRule.priority > 0 || hasExplicitRuleCategory)
+            (matchedCustomRule.priority > 0 || matchedCustomRule.isTemplateRule || hasExplicitRuleCategory)
 
         val usedSemanticHeuristics = enableLocalSemanticPass &&
             !isHighPriorityCustomMatch &&
@@ -199,7 +320,11 @@ object ChinaNotificationParser {
             parseMethod = parseMethod,
             confidence = confidence,
             reasoning = if (matchedCustomRule != null) {
-                "命中规则「${matchedCustomRule.name}」"
+                if (matchedCustomRule.isTemplateRule) {
+                    "命中格式模版「${matchedCustomRule.name}」"
+                } else {
+                    "命中规则「${matchedCustomRule.name}」"
+                }
             } else {
                 "识别渠道「$channel」· 分类「$category」· 币种 $currencyCode"
             },

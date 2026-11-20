@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +54,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,10 +76,12 @@ import androidx.compose.ui.unit.sp
 import com.example.data.CurrencyExchangeManager
 import com.example.model.AnalyticsChartStyle
 import com.example.model.AnalyticsGranularity
+import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.ExchangeRateState
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionType
+import com.example.ui.components.AnalyticsCalendarSection
 import com.example.ui.components.ChannelBadge
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
@@ -91,6 +96,8 @@ import com.example.ui.theme.IncomeJade
 import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 private data class ChartDatum(
     val label: String,
@@ -103,12 +110,16 @@ private data class ChartDatum(
 fun AnalyticsScreen(
     transactionsState: UiState<List<LedgerTransaction>>,
     settings: BudgetSettings,
+    appearance: AppearanceSettings = AppearanceSettings(),
     exchangeRates: ExchangeRateState,
     viewModel: LedgerViewModel,
     modifier: Modifier = Modifier
 ) {
     var selectedGranularity by remember { mutableStateOf(AnalyticsGranularity.MONTH) }
     var anchorMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val pieSizeDp = appearance.analyticsPieSizeDp.coerceIn(150, 290)
 
     var categoryChartStyle by remember { mutableStateOf(AnalyticsChartStyle.PIE) }
     var channelChartStyle by remember { mutableStateOf(AnalyticsChartStyle.BAR) }
@@ -207,6 +218,7 @@ fun AnalyticsScreen(
         contentAlignment = Alignment.TopCenter
     ) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -274,15 +286,36 @@ fun AnalyticsScreen(
                                     textAlign = TextAlign.Center,
                                     maxLines = 2
                                 )
-                                AssistChip(
-                                    onClick = {
-                                        selectedCategoryFilter = null
-                                        selectedChannelFilter = null
-                                        anchorMillis = System.currentTimeMillis()
-                                    },
-                                    label = { Text("回到今天") },
-                                    modifier = Modifier.testTag("analytics_today_chip")
-                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AssistChip(
+                                        onClick = {
+                                            selectedCategoryFilter = null
+                                            selectedChannelFilter = null
+                                            anchorMillis = System.currentTimeMillis()
+                                        },
+                                        label = { Text("回到今天") },
+                                        modifier = Modifier.testTag("analytics_today_chip")
+                                    )
+                                    AssistChip(
+                                        onClick = {
+                                            scope.launch {
+                                                listState.animateScrollToItem(5)
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = AppIcons.CalendarMonth,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        },
+                                        label = { Text("收支日历") },
+                                        modifier = Modifier.testTag("analytics_scroll_calendar_chip")
+                                    )
+                                }
                             }
 
                             IconButton(
@@ -385,13 +418,15 @@ fun AnalyticsScreen(
                             )
                         } else {
                             if (categoryChartStyle == AnalyticsChartStyle.PIE) {
-                                Row(
+                                Column(
                                     modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     Box(
-                                        modifier = Modifier.size(154.dp),
+                                        modifier = Modifier
+                                            .size(pieSizeDp.dp)
+                                            .testTag("category_pie_chart_box"),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         DonutPieChart(
@@ -402,11 +437,11 @@ fun AnalyticsScreen(
                                         )
                                         Column(
                                             horizontalAlignment = Alignment.CenterHorizontally,
-                                            modifier = Modifier.padding(horizontal = 24.dp)
+                                            modifier = Modifier.padding(horizontal = 28.dp)
                                         ) {
                                             CompactFullText(
                                                 text = selectedCategoryFilter ?: "共支出",
-                                                style = MaterialTheme.typography.labelSmall,
+                                                style = MaterialTheme.typography.labelMedium,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 textAlign = TextAlign.Center,
                                                 maxLines = 2
@@ -416,7 +451,7 @@ fun AnalyticsScreen(
                                             } ?: totalExpense
                                             CompactFullText(
                                                 text = formatCurrency(centerCents, baseCurrency),
-                                                style = MaterialTheme.typography.labelLarge.copy(
+                                                style = MaterialTheme.typography.titleMedium.copy(
                                                     fontFamily = numberFont,
                                                     fontWeight = FontWeight.Bold
                                                 ),
@@ -426,8 +461,33 @@ fun AnalyticsScreen(
                                         }
                                     }
 
+                                    // Pie size adjustment slider
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "饼图大小 (${pieSizeDp}dp)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Slider(
+                                            value = pieSizeDp.toFloat(),
+                                            onValueChange = { next ->
+                                                viewModel.saveAppearanceSettings(
+                                                    appearance.copy(analyticsPieSizeDp = next.roundToInt())
+                                                )
+                                            },
+                                            valueRange = 150f..290f,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("analytics_pie_size_slider")
+                                        )
+                                    }
+
                                     Column(
-                                        modifier = Modifier.weight(1f),
+                                        modifier = Modifier.fillMaxWidth(),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         categoryData.forEach { datum ->
@@ -531,13 +591,13 @@ fun AnalyticsScreen(
                             )
                         } else {
                             if (channelChartStyle == AnalyticsChartStyle.PIE) {
-                                Row(
+                                Column(
                                     modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     Box(
-                                        modifier = Modifier.size(154.dp),
+                                        modifier = Modifier.size(pieSizeDp.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         DonutPieChart(
@@ -548,11 +608,11 @@ fun AnalyticsScreen(
                                         )
                                         Column(
                                             horizontalAlignment = Alignment.CenterHorizontally,
-                                            modifier = Modifier.padding(horizontal = 24.dp)
+                                            modifier = Modifier.padding(horizontal = 28.dp)
                                         ) {
                                             CompactFullText(
                                                 text = selectedChannelFilter ?: "渠道汇总",
-                                                style = MaterialTheme.typography.labelSmall,
+                                                style = MaterialTheme.typography.labelMedium,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 textAlign = TextAlign.Center,
                                                 maxLines = 2
@@ -562,7 +622,7 @@ fun AnalyticsScreen(
                                             } ?: totalExpense
                                             CompactFullText(
                                                 text = formatCurrency(centerCents, baseCurrency),
-                                                style = MaterialTheme.typography.labelLarge.copy(
+                                                style = MaterialTheme.typography.titleMedium.copy(
                                                     fontFamily = numberFont,
                                                     fontWeight = FontWeight.Bold
                                                 ),
@@ -573,7 +633,7 @@ fun AnalyticsScreen(
                                     }
 
                                     Column(
-                                        modifier = Modifier.weight(1f),
+                                        modifier = Modifier.fillMaxWidth(),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         channelData.forEach { datum ->
@@ -675,6 +735,23 @@ fun AnalyticsScreen(
                         }
                     }
                 }
+            }
+
+            item(key = "analytics_calendar") {
+                AnalyticsCalendarSection(
+                    transactions = allTransactions,
+                    granularity = selectedGranularity,
+                    anchorMillis = anchorMillis,
+                    baseCurrencyCode = baseCurrency,
+                    ratesToCny = exchangeRates.ratesToCny,
+                    onGranularityAndAnchorChange = { nextGran, nextAnchor ->
+                        selectedGranularity = nextGran
+                        anchorMillis = nextAnchor
+                        selectedCategoryFilter = null
+                        selectedChannelFilter = null
+                    },
+                    onTransactionClick = { inspectingTransaction = it }
+                )
             }
         }
     }

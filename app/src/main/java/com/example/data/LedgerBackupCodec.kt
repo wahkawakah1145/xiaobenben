@@ -78,6 +78,7 @@ object LedgerBackupCodec {
                         put("name", rule.name)
                         if (rule.packageFilter != "*") put("packageFilter", rule.packageFilter)
                         put("keywordPattern", rule.keywordPattern)
+                        if (rule.templateSignature.isNotBlank()) put("templateSignature", rule.templateSignature)
                         put("channelName", rule.channelName)
                         put("defaultCategory", rule.defaultCategory)
                         put("defaultType", rule.defaultType)
@@ -140,6 +141,7 @@ object LedgerBackupCodec {
                         name = o.optString("name", "导入规则"),
                         packageFilter = o.optString("packageFilter", "*"),
                         keywordPattern = o.optString("keywordPattern", ""),
+                        templateSignature = o.optString("templateSignature", ""),
                         channelName = o.optString("channelName", "其他"),
                         defaultCategory = o.optString("defaultCategory", "其他"),
                         defaultType = o.optString("defaultType", "EXPENSE"),

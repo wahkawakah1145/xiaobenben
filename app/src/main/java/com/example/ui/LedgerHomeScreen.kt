@@ -1,7 +1,12 @@
 package com.example.ui
 
+import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -9,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,8 +42,10 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import com.example.ui.components.CategoryIconAvatar
 import com.example.ui.components.formatDateTimeFull
 import com.example.ui.components.parseDateTimeInputMillis
 import com.example.ui.theme.AppIcons
@@ -58,6 +66,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -86,6 +95,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -100,6 +110,7 @@ import com.example.model.CurrencyCatalog
 import com.example.model.ExchangeRateState
 import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
+import com.example.model.IconVisualStyle
 import com.example.model.LedgerTransaction
 import com.example.model.NotificationInquiry
 import com.example.model.NumberFormatStyle
@@ -113,7 +124,6 @@ import com.example.ui.components.ChannelBadge
 import com.example.ui.components.ParseMethodBadge
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
-import com.example.ui.components.categoryIcon
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatDateHeader
 import com.example.ui.components.formatTimeShort
@@ -147,6 +157,7 @@ fun LedgerHomeScreen(
     var editingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
     var resolvingInquiry by remember { mutableStateOf<NotificationInquiry?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var fabExpanded by remember { mutableStateOf(false) }
     var showEasterEggDialog by remember { mutableStateOf(false) }
     var bannerTapCount by remember { mutableIntStateOf(0) }
     var lastBannerTapMillis by remember { mutableLongStateOf(0L) }
@@ -192,6 +203,10 @@ fun LedgerHomeScreen(
                 selectedIds = pruned
             }
         }
+    }
+
+    BackHandler(enabled = fabExpanded) {
+        fabExpanded = false
     }
 
     BackHandler(enabled = selectedIds.isNotEmpty()) {
@@ -308,7 +323,7 @@ fun LedgerHomeScreen(
                     NotificationInquirySectionCard(
                         inquiries = inquiries,
                         onResolve = { resolvingInquiry = it },
-                        onDismiss = { viewModel.dismissInquiry(it.id) }
+                        onDismiss = { viewModel.dismissInquiryAsNonBill(it) }
                     )
                 }
             }
@@ -353,16 +368,6 @@ fun LedgerHomeScreen(
                         tagText = tipTagText,
                         tipText = currentTipText,
                         onNextTip = onTipBannerTapped
-                    )
-                }
-            }
-
-            if (isListenerEnabled) {
-                item(key = "listener_banner_compact") {
-                    ListenerStatusBanner(
-                        isEnabled = true,
-                        onOpenSettings = { NotificationBridge.openNotificationListenerSettings(context) },
-                        onOpenTestBench = onNavigateToParser
                     )
                 }
             }
@@ -532,6 +537,7 @@ fun LedgerHomeScreen(
                                     verticalPadding = rowVerticalPadding,
                                     showChannelBadge = appearance.showChannelBadge,
                                     showParseBadge = appearance.showParseBadge,
+                                    iconVisualStyle = appearance.iconVisualStyle,
                                     isSelectionMode = isSelectionMode,
                                     isSelected = isSelected,
                                     onClick = {
@@ -546,6 +552,7 @@ fun LedgerHomeScreen(
                                         if (isSelectionMode) {
                                             toggleItemSelection(tx.id)
                                         } else if (tx.id.isNotBlank()) {
+                                            fabExpanded = false
                                             selectedIds = setOf(tx.id)
                                         }
                                     }
@@ -555,6 +562,18 @@ fun LedgerHomeScreen(
                     }
                 }
             }
+        }
+
+        if (fabExpanded && !isSelectionMode) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.24f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { fabExpanded = false }
+            )
         }
 
         if (isSelectionMode) {
@@ -574,19 +593,134 @@ fun LedgerHomeScreen(
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
         } else {
-            FloatingActionButton(
-                onClick = { showCreateDialog = true },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+            val fabHorizontalAlign = if (appearance.fabPlacement == FabPlacement.BOTTOM_START) {
+                Alignment.Start
+            } else {
+                Alignment.End
+            }
+            Column(
                 modifier = Modifier
                     .align(fabAlignment)
-                    .padding(20.dp)
-                    .testTag("add_transaction_fab")
+                    .padding(20.dp),
+                horizontalAlignment = fabHorizontalAlign,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Add,
-                    contentDescription = stringResource(R.string.add_transaction_cd)
-                )
+                AnimatedVisibility(
+                    visible = fabExpanded,
+                    enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+                    exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom)
+                ) {
+                    Column(
+                        horizontalAlignment = fabHorizontalAlign,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (appearance.fabPlacement != FabPlacement.BOTTOM_START) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shadowElevation = 3.dp
+                                ) {
+                                    Text(
+                                        text = "识别规则",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                            SmallFloatingActionButton(
+                                onClick = {
+                                    fabExpanded = false
+                                    onNavigateToParser()
+                                },
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("fab_action_parser_rules")
+                            ) {
+                                Icon(AppIcons.Rule, contentDescription = "识别规则")
+                            }
+                            if (appearance.fabPlacement == FabPlacement.BOTTOM_START) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shadowElevation = 3.dp
+                                ) {
+                                    Text(
+                                        text = "识别规则",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (appearance.fabPlacement != FabPlacement.BOTTOM_START) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shadowElevation = 3.dp
+                                ) {
+                                    Text(
+                                        text = "记一笔",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                            SmallFloatingActionButton(
+                                onClick = {
+                                    fabExpanded = false
+                                    showCreateDialog = true
+                                },
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("fab_action_add_tx")
+                            ) {
+                                Icon(Icons.Rounded.Edit, contentDescription = "记一笔")
+                            }
+                            if (appearance.fabPlacement == FabPlacement.BOTTOM_START) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shadowElevation = 3.dp
+                                ) {
+                                    Text(
+                                        text = "记一笔",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                FloatingActionButton(
+                    onClick = { fabExpanded = !fabExpanded },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.testTag("add_transaction_fab")
+                ) {
+                    Icon(
+                        imageVector = if (fabExpanded) Icons.Rounded.Close else Icons.Rounded.Add,
+                        contentDescription = if (fabExpanded) "收起快捷菜单" else stringResource(R.string.add_transaction_cd)
+                    )
+                }
             }
         }
     }
@@ -670,7 +804,7 @@ fun LedgerHomeScreen(
             defaultCurrencyCode = baseCurrency,
             onDismiss = { resolvingInquiry = null },
             onIgnore = {
-                viewModel.dismissInquiry(inquiry.id)
+                viewModel.dismissInquiryAsNonBill(inquiry)
                 resolvingInquiry = null
             },
             onConfirm = { amountCents, currencyCode, type, category, merchant, channel, learnRule, ruleKeyword, ruleName, numberFormatPattern, ruleDefaultType, occurredAtMillis ->
@@ -718,7 +852,7 @@ fun LedgerHomeScreen(
         AlertDialog(
             onDismissRequest = { showBatchDeleteConfirm = false },
             title = { Text("确认批量删除") },
-            text = { Text("确定要删除所选的 ${selectedIds.size} 笔账单记录吗？删除后无法撤销。") },
+            text = { Text("确定要删除所选的 ${selectedIds.size} 笔账单记录吗？删除后可在底部提示栏点击撤销。") },
             dismissButton = {
                 TextButton(onClick = { showBatchDeleteConfirm = false }) {
                     Text("取消")
@@ -747,19 +881,37 @@ fun LedgerHomeScreen(
                 dismissOnBackPress = false,
                 dismissOnClickOutside = false
             ),
-            title = { Text("彩蛋发现") },
+            title = null,
             text = {
                 Text(
                     text = "老实赚钱，很枯燥吧？！",
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                        .testTag("easter_egg_message_text")
                 )
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showEasterEggDialog = false
+                        (context as? Activity)?.finish()
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = ExpenseCoral),
+                    modifier = Modifier.testTag("easter_egg_exit_button")
+                ) {
+                    Text("残忍退出")
+                }
             },
             confirmButton = {
                 Button(
                     onClick = { showEasterEggDialog = false },
                     modifier = Modifier.testTag("easter_egg_close_button")
                 ) {
-                    Text("继续搬砖")
+                    Text("开心收下")
                 }
             }
         )
@@ -919,7 +1071,7 @@ private fun NotificationInquirySectionCard(
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 TextButton(onClick = { onDismiss(inquiry) }) {
-                                    Text("忽略")
+                                    Text("非账单")
                                 }
                                 Button(
                                     onClick = { onResolve(inquiry) },
@@ -1638,6 +1790,7 @@ private fun TransactionRowCard(
     verticalPadding: Dp,
     showChannelBadge: Boolean,
     showParseBadge: Boolean,
+    iconVisualStyle: IconVisualStyle,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit,
@@ -1683,20 +1836,12 @@ private fun TransactionRowCard(
                 )
             }
 
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(typeColor.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = categoryIcon(transaction.category),
-                    contentDescription = transaction.category,
-                    tint = typeColor,
-                    modifier = Modifier.size(21.dp)
-                )
-            }
+            CategoryIconAvatar(
+                category = transaction.category,
+                tintColor = typeColor,
+                visualStyle = iconVisualStyle,
+                size = 42.dp
+            )
 
             Column(
                 modifier = Modifier.weight(1f),

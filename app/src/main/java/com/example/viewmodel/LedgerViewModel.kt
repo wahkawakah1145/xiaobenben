@@ -16,6 +16,7 @@ import com.example.model.AnalyticsGranularity
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CurrencyCatalog
+import com.example.model.CustomLocalModelInfo
 import com.example.model.CustomParsingRule
 import com.example.model.ExchangeRateAutoUpdateFrequency
 import com.example.model.ExchangeRateState
@@ -104,6 +105,12 @@ sealed interface AiTestState {
     data class Success(val result: ParsedNotificationResult) : AiTestState
     data class Error(val message: String) : AiTestState
 }
+
+data class DeleteUndoBanner(
+    val id: Long = System.nanoTime(),
+    val message: String,
+    val deletedItems: List<LedgerTransaction>
+)
 
 class LedgerViewModel(
     private val repository: LedgerRepository,
@@ -246,11 +253,35 @@ class LedgerViewModel(
     private val _storageOptimizing = MutableStateFlow(false)
     val storageOptimizing: StateFlow<Boolean> = _storageOptimizing.asStateFlow()
 
+    private val _customModelsState = MutableStateFlow<List<CustomLocalModelInfo>>(emptyList())
+    val customModelsState: StateFlow<List<CustomLocalModelInfo>> = _customModelsState.asStateFlow()
+
+    private val _deleteUndoBanner = MutableStateFlow<DeleteUndoBanner?>(null)
+    val deleteUndoBanner: StateFlow<DeleteUndoBanner?> = _deleteUndoBanner.asStateFlow()
+
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
 
     fun clearActionMessage() {
         _actionMessage.value = null
+    }
+
+    fun dismissDeleteUndoBanner() {
+        _deleteUndoBanner.value = null
+    }
+
+    fun undoLastDelete() {
+        val banner = _deleteUndoBanner.value ?: return
+        _deleteUndoBanner.value = null
+        viewModelScope.launch {
+            runCatching {
+                repository.mergeTransactionsFromBackup(banner.deletedItems)
+            }.onSuccess {
+                _actionMessage.value = "已撤销删除，恢复 ${banner.deletedItems.size} 笔账单"
+            }.onFailure { err ->
+                _actionMessage.value = "撤销失败：${err.localizedMessage ?: "请重试"}"
+            }
+        }
     }
 
     fun refreshStorageFootprint(context: android.content.Context) {
@@ -340,7 +371,8 @@ class LedgerViewModel(
         cardLastFour: String?,
         note: String?,
         occurredAtMillis: Long,
-        confirmed: Boolean = true
+        confirmed: Boolean = true,
+        learnFormatTemplate: Boolean = true
     ) {
         viewModelScope.launch {
             repository.updateTransaction(
@@ -354,8 +386,14 @@ class LedgerViewModel(
                 cardLastFour = cardLastFour,
                 note = note,
                 occurredAtMillis = occurredAtMillis,
-                confirmed = confirmed
+                confirmed = confirmed,
+                learnFormatTemplate = learnFormatTemplate
             )
+                .onSuccess { templateUpdated ->
+                    if (templateUpdated) {
+                        _actionMessage.value = "已保存修改，并更新该通知格式模版"
+                    }
+                }
                 .onFailure { _actionMessage.value = "更新失败：${it.localizedMessage ?: "请重试"}" }
         }
     }
@@ -376,16 +414,40 @@ class LedgerViewModel(
 
     fun deleteTransaction(txId: String) {
         viewModelScope.launch {
+            val snapshot = repository.getAllTransactionsOnce().filter { it.id == txId }
             repository.deleteTransaction(txId)
+                .onSuccess {
+                    if (snapshot.isNotEmpty()) {
+                        _deleteUndoBanner.value = DeleteUndoBanner(
+                            id = System.nanoTime(),
+                            message = "已删除「${snapshot.first().merchant}」",
+                            deletedItems = snapshot
+                        )
+                    }
+                }
                 .onFailure { _actionMessage.value = "删除失败：${it.localizedMessage ?: "请重试"}" }
         }
     }
 
     fun deleteTransactions(txIds: Collection<String>) {
         viewModelScope.launch {
-            repository.deleteTransactions(txIds)
+            val idSet = txIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            if (idSet.isEmpty()) return@launch
+            val snapshot = repository.getAllTransactionsOnce().filter { it.id in idSet }
+            repository.deleteTransactions(idSet)
                 .onSuccess { count ->
-                    if (count > 0) _actionMessage.value = "已删除 $count 笔账单"
+                    if (count > 0 && snapshot.isNotEmpty()) {
+                        val label = if (snapshot.size == 1) {
+                            "已删除「${snapshot.first().merchant}」"
+                        } else {
+                            "已删除 ${snapshot.size} 笔账单"
+                        }
+                        _deleteUndoBanner.value = DeleteUndoBanner(
+                            id = System.nanoTime(),
+                            message = label,
+                            deletedItems = snapshot
+                        )
+                    }
                 }
                 .onFailure { _actionMessage.value = "批量删除失败：${it.localizedMessage ?: "请重试"}" }
         }
@@ -455,6 +517,18 @@ class LedgerViewModel(
     fun dismissInquiry(inquiryId: String) {
         viewModelScope.launch {
             repository.dismissInquiry(inquiryId)
+        }
+    }
+
+    fun dismissInquiryAsNonBill(inquiry: NotificationInquiry) {
+        viewModelScope.launch {
+            repository.recordIgnoredNotificationRule(
+                packageName = inquiry.packageName,
+                title = inquiry.title,
+                content = inquiry.content
+            )
+            repository.dismissInquiry(inquiry.id)
+            _actionMessage.value = "已标记为非账单并记住忽略规则"
         }
     }
 
@@ -720,8 +794,60 @@ class LedgerViewModel(
 
     fun deleteLocalAiModel(context: android.content.Context, modelId: String) {
         aiManager.deleteLocalModel(context, modelId)
+        _customModelsState.value = aiManager.listCustomImportedModels(context)
         _aiModelDownloadState.value = AiModelDownloadState.Idle
         _actionMessage.value = "已清理本地模型缓存"
+    }
+
+    fun refreshCustomModels(context: android.content.Context) {
+        _customModelsState.value = aiManager.listCustomImportedModels(context)
+    }
+
+    fun importLocalAiWeight(
+        context: android.content.Context,
+        uri: android.net.Uri,
+        explicitFileName: String? = null
+    ) {
+        viewModelScope.launch {
+            _aiModelDownloadState.value = AiModelDownloadState.Downloading(
+                modelId = "custom_import",
+                progress = 0.45f,
+                statusText = "正在校验并导入本地模型权重..."
+            )
+            aiManager.importCustomModelWeight(context, uri, explicitFileName)
+                .onSuccess { info ->
+                    _customModelsState.value = aiManager.listCustomImportedModels(context)
+                    _aiModelDownloadState.value = AiModelDownloadState.Success(
+                        modelId = info.id,
+                        message = "已导入「${info.displayName}」(${info.formatLabel} · ${info.sizeBytes / 1024} KB)"
+                    )
+                    val cur = repository.getAiConfigOnce()
+                    repository.saveAiConfig(
+                        cur.copy(
+                            providerMode = AiProviderMode.LOCAL_SMALL_MODEL,
+                            localModelId = info.id
+                        )
+                    )
+                }
+                .onFailure { err ->
+                    _aiModelDownloadState.value = AiModelDownloadState.Error(err.message ?: "导入模型权重失败")
+                }
+        }
+    }
+
+    fun deleteCustomImportedModel(context: android.content.Context, customId: String) {
+        aiManager.deleteLocalModel(context, customId)
+        val remaining = aiManager.listCustomImportedModels(context)
+        _customModelsState.value = remaining
+        viewModelScope.launch {
+            val cur = repository.getAiConfigOnce()
+            if (cur.localModelId == customId) {
+                repository.saveAiConfig(
+                    cur.copy(localModelId = remaining.firstOrNull()?.id ?: LocalModelCatalog.presets.first().id)
+                )
+            }
+            _actionMessage.value = "已移除自导入模型权重"
+        }
     }
 
     fun testAiUnderstanding(

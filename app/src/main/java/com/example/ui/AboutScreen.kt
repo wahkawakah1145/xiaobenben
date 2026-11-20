@@ -55,6 +55,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.BuildConfig
 import com.example.R
+import com.example.model.AppIconStyle
+import com.example.ui.components.AppBrandIconAvatar
 
 private const val GITHUB_REPO_URL = "https://github.com/wahkawakah1145/test"
 private const val AI_STUDIO_TOOL_URL = "https://aistudio.google.com/"
@@ -62,6 +64,7 @@ private const val AI_STUDIO_TOOL_URL = "https://aistudio.google.com/"
 @Composable
 fun AboutScreen(
     onShowMessage: (String) -> Unit,
+    appIconStyleId: String = AppIconStyle.EMERALD.id,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -102,21 +105,12 @@ fun AboutScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Surface(
-                                shape = RoundedCornerShape(22.dp),
-                                shadowElevation = 6.dp,
-                                modifier = Modifier.size(84.dp)
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.app_icon_ledger),
-                                    contentDescription = "小本本应用图标",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .clip(RoundedCornerShape(22.dp))
-                                        .testTag("about_app_icon")
-                                )
-                            }
+                            AppBrandIconAvatar(
+                                styleId = appIconStyleId,
+                                size = 84.dp,
+                                cornerDp = 22.dp,
+                                modifier = Modifier.testTag("about_app_icon")
+                            )
 
                             Text(
                                 text = stringResource(id = R.string.app_name),

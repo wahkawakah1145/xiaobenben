@@ -95,7 +95,7 @@ fun PermissionsKeepAliveScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Icon(AppIcons.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text("系统权限与进程保活", style = MaterialTheme.typography.titleMedium)
+                            Text("权限管理", style = MaterialTheme.typography.titleMedium)
                         }
 
                         Row(

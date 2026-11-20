@@ -3,7 +3,7 @@ package com.example.ui
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
-import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
@@ -14,23 +14,38 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -45,6 +60,9 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -54,8 +72,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -66,7 +87,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -84,13 +109,17 @@ import com.example.data.LedgerRepository
 import com.example.model.PredictiveBackStyle
 import com.example.model.TabClickAnimationStyle
 import com.example.service.NotificationBridge
+import com.example.ui.components.AppBrandIconAvatar
 import com.example.ui.theme.AppIcons
 import com.example.ui.theme.SmartLedgerTheme
+import com.example.viewmodel.DeleteUndoBanner
 import com.example.viewmodel.LedgerViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 const val ROUTE_MAIN_TABS = "main_tabs"
 const val ROUTE_LEDGER = "ledger"
@@ -197,6 +226,7 @@ fun AppNavigation(
             val aiConfig by viewModel.aiConfigState.collectAsStateWithLifecycle()
             val storageFootprint by viewModel.storageFootprintState.collectAsStateWithLifecycle()
             val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
+            val deleteUndoBanner by viewModel.deleteUndoBanner.collectAsStateWithLifecycle()
 
             LaunchedEffect(settings.exchangeRateUpdateFrequency) {
                 viewModel.checkExchangeRateAutoUpdateIfDue()
@@ -273,11 +303,13 @@ fun AppNavigation(
                 }
             }
 
+            val previousRoute = navController.previousBackStackEntry?.destination?.route
+
             val currentTitle = when (currentRoute) {
                 ROUTE_MAIN_TABS -> when (pagerState.currentPage) {
                     1 -> "收支分析"
                     2 -> "设置"
-                    else -> stringResource(R.string.app_name)
+                    else -> appearance.homeBrandCustomName.ifBlank { stringResource(R.string.app_name) }
                 }
                 ROUTE_SETTINGS_LEDGER_MGMT -> "账单工具"
                 ROUTE_SETTINGS_BILL_BEHAVIOR -> "记账与预算"
@@ -286,9 +318,9 @@ fun AppNavigation(
                 ROUTE_SETTINGS_STORAGE_OPT -> "数据空间与存储优化"
                 ROUTE_SETTINGS_PARSER -> "通知识别与规则"
                 ROUTE_SETTINGS_AI -> "AI理解"
-                ROUTE_SETTINGS_DATA_HUB, ROUTE_SETTINGS_LOCAL_BACKUP -> "导入与备份中心"
+                ROUTE_SETTINGS_DATA_HUB, ROUTE_SETTINGS_LOCAL_BACKUP -> "备份与恢复"
                 ROUTE_SETTINGS_APPEARANCE -> "外观与布局"
-                ROUTE_SETTINGS_PERMISSIONS -> "系统权限与进程保活"
+                ROUTE_SETTINGS_PERMISSIONS -> "权限管理"
                 ROUTE_SETTINGS_ABOUT -> "关于"
                 else -> stringResource(R.string.app_name)
             }
@@ -306,34 +338,179 @@ fun AppNavigation(
                 navController.navigateUp()
             }
 
+            @Composable
+            fun DestinationContent(route: String) {
+                when (route) {
+                    ROUTE_MAIN_TABS -> when (pagerState.currentPage) {
+                        0 -> LedgerHomeScreen(
+                            transactionsState = transactionsState,
+                            inquiries = inquiries,
+                            settings = settings,
+                            appearance = appearance,
+                            exchangeRates = exchangeRates,
+                            isListenerEnabled = isListenerEnabled,
+                            viewModel = viewModel,
+                            onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) }
+                        )
+                        1 -> AnalyticsScreen(
+                            transactionsState = transactionsState,
+                            settings = settings,
+                            appearance = appearance,
+                            exchangeRates = exchangeRates,
+                            viewModel = viewModel
+                        )
+                        else -> SettingsScreen(
+                            settings = settings,
+                            aiConfig = aiConfig,
+                            isListenerEnabled = isListenerEnabled,
+                            isAccessibilityEnabled = isAccessibilityEnabled,
+                            isIgnoringBattery = isIgnoringBattery,
+                            onOpenLedgerManagement = { navController.navigate(ROUTE_SETTINGS_LEDGER_MGMT) },
+                            onOpenParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                            onOpenAiSettings = { navController.navigate(ROUTE_SETTINGS_AI) },
+                            onOpenDataHub = { navController.navigate(ROUTE_SETTINGS_DATA_HUB) },
+                            onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) },
+                            onOpenPermissions = { navController.navigate(ROUTE_SETTINGS_PERMISSIONS) },
+                            onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) }
+                        )
+                    }
+                    ROUTE_SETTINGS_LEDGER_MGMT -> BillToolsMenuScreen(
+                        settings = settings,
+                        transactionsState = transactionsState,
+                        storageFootprint = storageFootprint,
+                        onOpenBehaviorBudget = { navController.navigate(ROUTE_SETTINGS_BILL_BEHAVIOR) },
+                        onOpenCurrencyRates = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
+                        onOpenSmartDedup = { navController.navigate(ROUTE_SETTINGS_DEDUP) },
+                        onOpenStorageOpt = { navController.navigate(ROUTE_SETTINGS_STORAGE_OPT) },
+                        onRefreshFootprint = { viewModel.refreshStorageFootprint(context) }
+                    )
+                    ROUTE_SETTINGS_BILL_BEHAVIOR -> BookkeepingBehaviorScreen(
+                        settings = settings,
+                        viewModel = viewModel,
+                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                    )
+                    ROUTE_SETTINGS_CURRENCY -> CurrencySettingsScreen(
+                        settings = settings,
+                        exchangeRates = exchangeRates,
+                        viewModel = viewModel
+                    )
+                    ROUTE_SETTINGS_DEDUP -> SmartDeduplicationScreen(
+                        transactionsState = transactionsState,
+                        viewModel = viewModel
+                    )
+                    ROUTE_SETTINGS_STORAGE_OPT -> StorageOptimizationScreen(viewModel = viewModel)
+                    ROUTE_SETTINGS_PARSER -> ParserHubScreen(
+                        viewModel = viewModel,
+                        isListenerEnabled = isListenerEnabled,
+                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                    )
+                    ROUTE_SETTINGS_AI -> AiSettingsScreen(
+                        viewModel = viewModel,
+                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                    )
+                    ROUTE_SETTINGS_DATA_HUB -> DataHubScreen(
+                        settings = settings,
+                        viewModel = viewModel,
+                        initialTab = DataHubTab.IMPORT,
+                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                    )
+                    ROUTE_SETTINGS_LOCAL_BACKUP -> DataHubScreen(
+                        settings = settings,
+                        viewModel = viewModel,
+                        initialTab = DataHubTab.LOCAL_BACKUP,
+                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                    )
+                    ROUTE_SETTINGS_APPEARANCE -> AppearanceSettingsScreen(
+                        appearance = appearance,
+                        viewModel = viewModel
+                    )
+                    ROUTE_SETTINGS_PERMISSIONS -> PermissionsKeepAliveScreen(
+                        settings = settings,
+                        isListenerEnabled = isListenerEnabled,
+                        isAccessibilityEnabled = isAccessibilityEnabled,
+                        isIgnoringBattery = isIgnoringBattery,
+                        viewModel = viewModel,
+                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                    )
+                    ROUTE_SETTINGS_ABOUT -> AboutScreen(
+                        appIconStyleId = appearance.appIconStyleId,
+                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                    )
+                }
+            }
+
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val useNavigationRail = maxWidth >= 600.dp
+                val isHomeBrandTopBar = isTopLevelRoute && pagerState.currentPage == 0
 
+                Box(modifier = Modifier.fillMaxSize()) {
                 Scaffold(
                     contentWindowInsets = WindowInsets.safeDrawing,
                     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                     topBar = {
-                        CenterAlignedTopAppBar(
-                            title = {
-                                Text(
-                                    text = currentTitle,
-                                    style = MaterialTheme.typography.titleLarge
-                                )
-                            },
-                            navigationIcon = {
-                                if (!isTopLevelRoute) {
-                                    IconButton(
-                                        onClick = popWithStyle,
-                                        modifier = Modifier.testTag("top_bar_back_button")
+                        if (isHomeBrandTopBar) {
+                            TopAppBar(
+                                title = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.testTag("home_brand_top_bar")
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                                            contentDescription = "返回"
-                                        )
+                                        if (appearance.homeBrandShowIcon) {
+                                            AppBrandIconAvatar(
+                                                styleId = appearance.appIconStyleId,
+                                                size = appearance.homeBrandIconSizeDp.dp,
+                                                cornerDp = appearance.homeBrandIconCornerDp.dp
+                                            )
+                                            if (appearance.homeBrandShowTitle) {
+                                                Spacer(modifier = Modifier.width(appearance.homeBrandIconSpacingDp.dp))
+                                            }
+                                        }
+                                        if (appearance.homeBrandShowTitle) {
+                                            Column {
+                                                Text(
+                                                    text = appearance.homeBrandCustomName.ifBlank { stringResource(R.string.app_name) },
+                                                    fontSize = appearance.homeBrandTitleSizeSp.sp,
+                                                    fontWeight = if (appearance.homeBrandTitleBold) FontWeight.Bold else FontWeight.Medium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                if (appearance.homeBrandCustomSubtitle.isNotBlank()) {
+                                                    Text(
+                                                        text = appearance.homeBrandCustomSubtitle,
+                                                        fontSize = appearance.homeBrandSubtitleSizeSp.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                            }
-                        )
+                            )
+                        } else {
+                            CenterAlignedTopAppBar(
+                                title = {
+                                    Text(
+                                        text = currentTitle,
+                                        style = MaterialTheme.typography.titleLarge
+                                    )
+                                },
+                                navigationIcon = {
+                                    if (!isTopLevelRoute) {
+                                        IconButton(
+                                            onClick = popWithStyle,
+                                            modifier = Modifier.testTag("top_bar_back_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                                contentDescription = "返回"
+                                            )
+                                        }
+                                    }
+                                }
+                            )
+                        }
                     },
                     bottomBar = {
                         if (!useNavigationRail && isTopLevelRoute) {
@@ -382,10 +559,18 @@ fun AppNavigation(
                             }
                         }
 
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background)
+                        ) {
                         NavHost(
                             navController = navController,
                             startDestination = ROUTE_MAIN_TABS,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background),
                             enterTransition = {
                                 slideInHorizontally(tween(240)) { (it * 0.25f).toInt() } + fadeIn(tween(200))
                             },
@@ -426,251 +611,140 @@ fun AppNavigation(
                                     PredictiveBackStyle.SYSTEM_SCALE -> 1f - 0.08f * pagerBackProgress
                                     else -> 1f
                                 }
-                                HorizontalPager(
-                                    state = pagerState,
-                                    beyondViewportPageCount = 1,
+                                Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .graphicsLayer {
-                                            alpha = (tabFadeAlpha.value * (1f - 0.2f * pagerBackProgress)).coerceIn(0f, 1f)
-                                            scaleX = backScale
-                                            scaleY = backScale
-                                            if (appearance.predictiveBackStyle == PredictiveBackStyle.SLIDE_RIGHT) {
-                                                translationX = pagerBackProgress * size.width * 0.25f
+                                        .background(MaterialTheme.colorScheme.background)
+                                ) {
+                                    if (pagerBackProgress > 0.001f && pagerState.currentPage != 0) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.background,
+                                            modifier = Modifier.fillMaxSize()
+                                        ) {
+                                            LedgerHomeScreen(
+                                                transactionsState = transactionsState,
+                                                inquiries = inquiries,
+                                                settings = settings,
+                                                appearance = appearance,
+                                                exchangeRates = exchangeRates,
+                                                isListenerEnabled = isListenerEnabled,
+                                                viewModel = viewModel,
+                                                onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) }
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.background,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .graphicsLayer {
+                                                alpha = (tabFadeAlpha.value * (1f - 0.16f * pagerBackProgress)).coerceIn(0f, 1f)
+                                                scaleX = backScale
+                                                scaleY = backScale
+                                                if (appearance.predictiveBackStyle == PredictiveBackStyle.SLIDE_RIGHT) {
+                                                    translationX = pagerBackProgress * size.width * 0.35f
+                                                }
+                                            }
+                                    ) {
+                                        HorizontalPager(
+                                            state = pagerState,
+                                            beyondViewportPageCount = 1,
+                                            modifier = Modifier.fillMaxSize()
+                                        ) { page ->
+                                            when (page) {
+                                                0 -> LedgerHomeScreen(
+                                                    transactionsState = transactionsState,
+                                                    inquiries = inquiries,
+                                                    settings = settings,
+                                                    appearance = appearance,
+                                                    exchangeRates = exchangeRates,
+                                                    isListenerEnabled = isListenerEnabled,
+                                                    viewModel = viewModel,
+                                                    onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) }
+                                                )
+                                                1 -> AnalyticsScreen(
+                                                    transactionsState = transactionsState,
+                                                    settings = settings,
+                                                    appearance = appearance,
+                                                    exchangeRates = exchangeRates,
+                                                    viewModel = viewModel
+                                                )
+                                                2 -> SettingsScreen(
+                                                    settings = settings,
+                                                    aiConfig = aiConfig,
+                                                    isListenerEnabled = isListenerEnabled,
+                                                    isAccessibilityEnabled = isAccessibilityEnabled,
+                                                    isIgnoringBattery = isIgnoringBattery,
+                                                    onOpenLedgerManagement = { navController.navigate(ROUTE_SETTINGS_LEDGER_MGMT) },
+                                                    onOpenParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                                                    onOpenAiSettings = { navController.navigate(ROUTE_SETTINGS_AI) },
+                                                    onOpenDataHub = { navController.navigate(ROUTE_SETTINGS_DATA_HUB) },
+                                                    onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) },
+                                                    onOpenPermissions = { navController.navigate(ROUTE_SETTINGS_PERMISSIONS) },
+                                                    onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) }
+                                                )
                                             }
                                         }
-                                ) { page ->
-                                    when (page) {
-                                        0 -> LedgerHomeScreen(
-                                            transactionsState = transactionsState,
-                                            inquiries = inquiries,
-                                            settings = settings,
-                                            appearance = appearance,
-                                            exchangeRates = exchangeRates,
-                                            isListenerEnabled = isListenerEnabled,
-                                            viewModel = viewModel,
-                                            onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) }
-                                        )
-                                        1 -> AnalyticsScreen(
-                                            transactionsState = transactionsState,
-                                            settings = settings,
-                                            exchangeRates = exchangeRates,
-                                            viewModel = viewModel
-                                        )
-                                        2 -> SettingsScreen(
-                                            settings = settings,
-                                            aiConfig = aiConfig,
-                                            isListenerEnabled = isListenerEnabled,
-                                            isAccessibilityEnabled = isAccessibilityEnabled,
-                                            isIgnoringBattery = isIgnoringBattery,
-                                            onOpenLedgerManagement = { navController.navigate(ROUTE_SETTINGS_LEDGER_MGMT) },
-                                            onOpenParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
-                                            onOpenAiSettings = { navController.navigate(ROUTE_SETTINGS_AI) },
-                                            onOpenDataHub = { navController.navigate(ROUTE_SETTINGS_DATA_HUB) },
-                                            onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) },
-                                            onOpenPermissions = { navController.navigate(ROUTE_SETTINGS_PERMISSIONS) },
-                                            onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) }
-                                        )
                                     }
                                 }
                             }
 
-                            composable(ROUTE_SETTINGS_LEDGER_MGMT) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_LEDGER_MGMT,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    BillToolsMenuScreen(
-                                        settings = settings,
-                                        transactionsState = transactionsState,
-                                        storageFootprint = storageFootprint,
-                                        onOpenBehaviorBudget = { navController.navigate(ROUTE_SETTINGS_BILL_BEHAVIOR) },
-                                        onOpenCurrencyRates = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
-                                        onOpenSmartDedup = { navController.navigate(ROUTE_SETTINGS_DEDUP) },
-                                        onOpenStorageOpt = { navController.navigate(ROUTE_SETTINGS_STORAGE_OPT) },
-                                        onRefreshFootprint = { viewModel.refreshStorageFootprint(context) }
-                                    )
-                                }
+                            val prevComposable: (@Composable () -> Unit)? = previousRoute?.let { prev ->
+                                { DestinationContent(prev) }
                             }
 
-                            composable(ROUTE_SETTINGS_BILL_BEHAVIOR) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_BILL_BEHAVIOR,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    BookkeepingBehaviorScreen(
-                                        settings = settings,
-                                        viewModel = viewModel,
-                                        onShowMessage = { msg ->
-                                            scope.launch { snackbarHostState.showSnackbar(msg) }
-                                        }
-                                    )
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_CURRENCY) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_CURRENCY,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    CurrencySettingsScreen(
-                                        settings = settings,
-                                        exchangeRates = exchangeRates,
-                                        viewModel = viewModel
-                                    )
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_DEDUP) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_DEDUP,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    SmartDeduplicationScreen(
-                                        transactionsState = transactionsState,
-                                        viewModel = viewModel
-                                    )
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_STORAGE_OPT) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_STORAGE_OPT,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    StorageOptimizationScreen(viewModel = viewModel)
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_PARSER) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_PARSER,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    ParserHubScreen(
-                                        viewModel = viewModel,
-                                        isListenerEnabled = isListenerEnabled,
-                                        onShowMessage = { msg ->
-                                            scope.launch { snackbarHostState.showSnackbar(msg) }
-                                        }
-                                    )
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_AI) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_AI,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    AiSettingsScreen(
-                                        viewModel = viewModel,
-                                        onShowMessage = { msg ->
-                                            scope.launch { snackbarHostState.showSnackbar(msg) }
-                                        }
-                                    )
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_DATA_HUB) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_DATA_HUB,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    DataHubScreen(
-                                        settings = settings,
-                                        viewModel = viewModel,
-                                        initialTab = DataHubTab.IMPORT,
-                                        onShowMessage = { msg ->
-                                            scope.launch { snackbarHostState.showSnackbar(msg) }
-                                        }
-                                    )
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_LOCAL_BACKUP) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_LOCAL_BACKUP,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    DataHubScreen(
-                                        settings = settings,
-                                        viewModel = viewModel,
-                                        initialTab = DataHubTab.LOCAL_BACKUP,
-                                        onShowMessage = { msg ->
-                                            scope.launch { snackbarHostState.showSnackbar(msg) }
-                                        }
-                                    )
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_APPEARANCE) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_APPEARANCE,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    AppearanceSettingsScreen(
-                                        appearance = appearance,
-                                        viewModel = viewModel
-                                    )
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_PERMISSIONS) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_PERMISSIONS,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    PermissionsKeepAliveScreen(
-                                        settings = settings,
-                                        isListenerEnabled = isListenerEnabled,
-                                        isAccessibilityEnabled = isAccessibilityEnabled,
-                                        isIgnoringBattery = isIgnoringBattery,
-                                        viewModel = viewModel,
-                                        onShowMessage = { msg ->
-                                            scope.launch { snackbarHostState.showSnackbar(msg) }
-                                        }
-                                    )
-                                }
-                            }
-
-                            composable(ROUTE_SETTINGS_ABOUT) {
-                                SwipeBackContainer(
-                                    active = currentRoute == ROUTE_SETTINGS_ABOUT,
-                                    predictiveBackEnabled = appearance.predictiveBackEnabled,
-                                    style = appearance.predictiveBackStyle,
-                                    onNavigateUp = popWithStyle
-                                ) {
-                                    AboutScreen(
-                                        onShowMessage = { msg ->
-                                            scope.launch { snackbarHostState.showSnackbar(msg) }
-                                        }
-                                    )
+                            listOf(
+                                ROUTE_SETTINGS_LEDGER_MGMT,
+                                ROUTE_SETTINGS_BILL_BEHAVIOR,
+                                ROUTE_SETTINGS_CURRENCY,
+                                ROUTE_SETTINGS_DEDUP,
+                                ROUTE_SETTINGS_STORAGE_OPT,
+                                ROUTE_SETTINGS_PARSER,
+                                ROUTE_SETTINGS_AI,
+                                ROUTE_SETTINGS_DATA_HUB,
+                                ROUTE_SETTINGS_LOCAL_BACKUP,
+                                ROUTE_SETTINGS_APPEARANCE,
+                                ROUTE_SETTINGS_PERMISSIONS,
+                                ROUTE_SETTINGS_ABOUT
+                            ).forEach { subRoute ->
+                                composable(subRoute) {
+                                    SwipeBackContainer(
+                                        active = currentRoute == subRoute,
+                                        predictiveBackEnabled = appearance.predictiveBackEnabled,
+                                        style = appearance.predictiveBackStyle,
+                                        onNavigateUp = popWithStyle,
+                                        previousContent = prevComposable
+                                    ) {
+                                        DestinationContent(subRoute)
+                                    }
                                 }
                             }
                         }
+                        }
                     }
+                }
+
+                AnimatedVisibility(
+                    visible = deleteUndoBanner != null,
+                    enter = slideInVertically(tween(220)) { it / 2 } + fadeIn(tween(180)),
+                    exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(150)),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(
+                            start = 16.dp,
+                            end = 16.dp,
+                            bottom = if (!useNavigationRail && isTopLevelRoute) 86.dp else 20.dp
+                        )
+                ) {
+                    deleteUndoBanner?.let { banner ->
+                        DeleteUndoFloatingBar(
+                            banner = banner,
+                            onUndo = { viewModel.undoLastDelete() },
+                            onDismiss = { viewModel.dismissDeleteUndoBanner() }
+                        )
+                    }
+                }
                 }
             }
         }
@@ -680,7 +754,7 @@ fun AppNavigation(
 /**
  * Multi-level sub-screen wrapper supporting:
  * 1) Horizontal rightward swipe gesture anywhere inside the screen (respecting child horizontal scrollers)
- *    to return smoothly to the parent menu level.
+ *    to return smoothly to the parent menu level, revealing a live opaque underlay instead of black.
  * 2) Android system predictive back gesture preview matching [PredictiveBackStyle].
  */
 @Composable
@@ -689,6 +763,7 @@ private fun SwipeBackContainer(
     predictiveBackEnabled: Boolean,
     style: PredictiveBackStyle,
     onNavigateUp: () -> Unit,
+    previousContent: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     val density = LocalDensity.current
@@ -727,21 +802,22 @@ private fun SwipeBackContainer(
     }
     val translationXVal = when {
         dragOffset.value > 0f && style != PredictiveBackStyle.FADE ->
-            if (style == PredictiveBackStyle.SYSTEM_SCALE) dragOffset.value * 0.45f else dragOffset.value
+            if (style == PredictiveBackStyle.SYSTEM_SCALE) dragOffset.value * 0.48f else dragOffset.value
         systemBackProgress > 0f && style == PredictiveBackStyle.SLIDE_RIGHT ->
             systemBackProgress * widthPx * 0.45f
         systemBackProgress > 0f && style == PredictiveBackStyle.SYSTEM_SCALE ->
-            systemBackProgress * widthPx * 0.12f
+            systemBackProgress * widthPx * 0.14f
         else -> progress * widthPx * 0.15f
     }
     val alphaVal = when (style) {
         PredictiveBackStyle.FADE -> 1f - 0.50f * progress
-        else -> 1f - 0.16f * progress
+        else -> 1f - 0.08f * progress
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .onSizeChanged { size ->
                 if (size.width > 0) widthPx = size.width.toFloat()
             }
@@ -804,16 +880,156 @@ private fun SwipeBackContainer(
                     }
                 }
             }
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                translationX = translationXVal
-                alpha = alphaVal.coerceIn(0f, 1f)
-            }
-            .then(
-                if (progress > 0.01f) Modifier.clip(RoundedCornerShape(cornerDp)) else Modifier
-            )
     ) {
-        content()
+        if (progress > 0.001f && previousContent != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.background,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val underlayScale = 0.96f + 0.04f * progress
+                        scaleX = underlayScale
+                        scaleY = underlayScale
+                        translationX = -widthPx * 0.08f * (1f - progress)
+                    }
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    previousContent()
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = (0.14f * (1f - progress)).coerceIn(0f, 0.14f)))
+                    )
+                }
+            }
+        }
+
+        Surface(
+            color = MaterialTheme.colorScheme.background,
+            shape = if (progress > 0.01f) RoundedCornerShape(cornerDp) else RectangleShape,
+            shadowElevation = if (progress > 0.01f) 10.dp else 0.dp,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = translationXVal
+                    alpha = alphaVal.coerceIn(0f, 1f)
+                }
+                .then(
+                    if (progress > 0.01f) Modifier.clip(RoundedCornerShape(cornerDp)) else Modifier
+                )
+        ) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun DeleteUndoFloatingBar(
+    banner: DeleteUndoBanner,
+    onUndo: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val offsetX = remember(banner.id) { Animatable(0f) }
+    var barWidthPx by remember { mutableFloatStateOf(720f) }
+
+    LaunchedEffect(banner.id) {
+        delay(8500L)
+        onDismiss()
+    }
+
+    val dismissProgress = (abs(offsetX.value) / barWidthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.inverseSurface,
+        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+        shadowElevation = 6.dp,
+        modifier = Modifier
+            .widthIn(max = 560.dp)
+            .fillMaxWidth()
+            .onSizeChanged { size ->
+                if (size.width > 0) barWidthPx = size.width.toFloat()
+            }
+            .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+            .graphicsLayer {
+                alpha = (1f - dismissProgress * 0.75f).coerceIn(0.15f, 1f)
+            }
+            .pointerInput(banner.id) {
+                detectHorizontalDragGestures(
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        scope.launch {
+                            offsetX.snapTo(offsetX.value + dragAmount)
+                        }
+                    },
+                    onDragEnd = {
+                        val threshold = barWidthPx * 0.28f
+                        if (abs(offsetX.value) >= threshold) {
+                            val target = if (offsetX.value >= 0f) barWidthPx else -barWidthPx
+                            scope.launch {
+                                offsetX.animateTo(target, tween(160))
+                                onDismiss()
+                            }
+                        } else {
+                            scope.launch {
+                                offsetX.animateTo(0f, tween(180))
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        scope.launch { offsetX.animateTo(0f, tween(180)) }
+                    }
+                )
+            }
+            .testTag("delete_undo_banner")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = banner.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "左右滑动此横栏可关闭",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.68f)
+                )
+            }
+            TextButton(
+                onClick = onUndo,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.inversePrimary
+                ),
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("undo_delete_button")
+            ) {
+                Text("撤销", fontWeight = FontWeight.Bold)
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("dismiss_delete_undo_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "关闭提示",
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
     }
 }

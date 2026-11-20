@@ -21,12 +21,26 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import android.net.Uri
+import android.provider.OpenableColumns
+import com.example.model.CustomLocalModelInfo
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToLong
 
 object LocalModelCatalog {
+    const val CUSTOM_PREFIX = "custom_"
+
+    val allowedWeightExtensions = setOf(
+        "gguf", "onnx", "tflite", "safetensors", "bin", "pt", "pth", "vocab", "txt", "json", "model"
+    )
+    private val blockedExecutableExtensions = setOf(
+        "dex", "jar", "so", "apk", "aab", "exe", "dll", "sh", "bat", "elf"
+    )
+
     val presets: List<LocalModelPreset> = listOf(
         LocalModelPreset(
             id = "bge-small-zh-v15",
@@ -54,6 +68,31 @@ object LocalModelCatalog {
             )
         ),
         LocalModelPreset(
+            id = "m3e-small-zh",
+            name = "M3E-Small (中文双语向量核)",
+            repoId = "moka-ai/m3e-small",
+            license = "MIT License",
+            sizeHint = "约 610 KB（双语词表 + 分词器）",
+            summary = "Moka 开源中英双语文本理解核，擅长跨境外币账单、PayPal/Amazon 等中英混合商户识别。",
+            files = listOf(
+                LocalModelFileSpec("config.json", "resolve/main/config.json"),
+                LocalModelFileSpec("vocab.txt", "resolve/main/vocab.txt"),
+                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
+            )
+        ),
+        LocalModelPreset(
+            id = "bge-micro-v2",
+            name = "BGE-Micro-v2 (微核极省空间)",
+            repoId = "TaylorAI/bge-micro-v2",
+            license = "MIT License",
+            sizeHint = "约 470 KB（高精度微核配置）",
+            summary = "极致压缩的多场景语义微核，适合低内存设备长期驻留并在前台秒级启动离线理解。",
+            files = listOf(
+                LocalModelFileSpec("config.json", "resolve/main/config.json"),
+                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
+            )
+        ),
+        LocalModelPreset(
             id = "qwen25-0.5b-instruct",
             name = "Qwen2.5-0.5B-Instruct (通义轻量词表核)",
             repoId = "Qwen/Qwen2.5-0.5B-Instruct",
@@ -65,11 +104,45 @@ object LocalModelCatalog {
                 LocalModelFileSpec("tokenizer_config.json", "resolve/main/tokenizer_config.json"),
                 LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
             )
+        ),
+        LocalModelPreset(
+            id = "qwen25-1.5b-instruct",
+            name = "Qwen2.5-1.5B-Instruct (通义增强词表核)",
+            repoId = "Qwen/Qwen2.5-1.5B-Instruct",
+            license = "Apache-2.0",
+            sizeHint = "约 7.2 MB（增强配置 + BPE 词表）",
+            summary = "千问 1.5B 开源模型词表与架构定义，提供更丰富的长尾商户及消费类别特征锚点。",
+            files = listOf(
+                LocalModelFileSpec("config.json", "resolve/main/config.json"),
+                LocalModelFileSpec("tokenizer_config.json", "resolve/main/tokenizer_config.json"),
+                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
+            )
+        ),
+        LocalModelPreset(
+            id = "smollm2-360m-instruct",
+            name = "SmolLM2-360M-Instruct (端侧英文/跨境小模型)",
+            repoId = "HuggingFaceTB/SmolLM2-360M-Instruct",
+            license = "Apache-2.0",
+            sizeHint = "约 2.1 MB（端侧分词核）",
+            summary = "HuggingFace 官方端侧紧凑指令模型配置与分词表，擅长海外订阅扣款与美元/欧元流水解析。",
+            files = listOf(
+                LocalModelFileSpec("config.json", "resolve/main/config.json"),
+                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
+            )
         )
     )
 
     fun resolve(modelId: String?): LocalModelPreset =
         presets.firstOrNull { it.id == modelId } ?: presets.first()
+
+    fun isCustomModelId(modelId: String?): Boolean =
+        !modelId.isNullOrBlank() && modelId.startsWith(CUSTOM_PREFIX)
+
+    fun isBlockedExecutableExtension(ext: String): Boolean =
+        ext.lowercase(Locale.ROOT) in blockedExecutableExtensions
+
+    fun isSupportedWeightExtension(ext: String): Boolean =
+        ext.lowercase(Locale.ROOT) in allowedWeightExtensions
 }
 
 data class LocalModelInstallStatus(
@@ -93,7 +166,184 @@ class AiUnderstandingManager {
         return File(root, modelId)
     }
 
+    fun getCustomModelInfo(context: Context, modelId: String): CustomLocalModelInfo? {
+        if (!LocalModelCatalog.isCustomModelId(modelId)) return null
+        val dir = modelDirectory(context, modelId)
+        val metaFile = File(dir, "custom_meta.json")
+        if (!metaFile.exists()) return null
+        return runCatching {
+            val obj = JSONObject(metaFile.readText(Charsets.UTF_8))
+            val weightFile = File(dir, obj.optString("fileName"))
+            if (!weightFile.exists() || weightFile.length() <= 0L) return null
+            CustomLocalModelInfo(
+                id = modelId,
+                displayName = obj.optString("displayName", modelId),
+                fileName = obj.optString("fileName", weightFile.name),
+                formatLabel = obj.optString("formatLabel", "自定义权重"),
+                sizeBytes = weightFile.length(),
+                importedAtMillis = obj.optLong("importedAtMillis", weightFile.lastModified()),
+                vocabTokenCount = obj.optInt("vocabTokenCount", 0)
+            )
+        }.getOrNull()
+    }
+
+    fun listCustomImportedModels(context: Context): List<CustomLocalModelInfo> {
+        val root = File(context.filesDir, "local_ai_models")
+        if (!root.exists() || !root.isDirectory) return emptyList()
+        return root.listFiles()
+            ?.filter { it.isDirectory && LocalModelCatalog.isCustomModelId(it.name) }
+            ?.mapNotNull { getCustomModelInfo(context, it.name) }
+            ?.sortedByDescending { it.importedAtMillis }
+            .orEmpty()
+    }
+
+    fun resolveModelDisplayName(context: Context, modelId: String?): String {
+        if (LocalModelCatalog.isCustomModelId(modelId)) {
+            return getCustomModelInfo(context, modelId!!)?.displayName ?: "已导入自定义模型"
+        }
+        return LocalModelCatalog.resolve(modelId).name
+    }
+
+    suspend fun importCustomModelWeight(
+        context: Context,
+        uri: Uri,
+        explicitFileName: String? = null
+    ): Result<CustomLocalModelInfo> = withContext(Dispatchers.IO) {
+        try {
+            val rawName = (explicitFileName ?: resolveDisplayNameFromUri(context, uri) ?: "imported_model.onnx")
+                .replace(Regex("""[^\w.\-\u4e00-\u9fa5]"""), "_")
+                .trim('_')
+                .ifBlank { "imported_model.onnx" }
+
+            val ext = rawName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            if (LocalModelCatalog.isBlockedExecutableExtension(ext)) {
+                return@withContext Result.failure(
+                    SecurityException("出于系统与上架安全策略，禁止导入可执行二进制文件 (.$ext)，仅支持静态模型权重与词表文件。")
+                )
+            }
+            if (ext.isBlank() || !LocalModelCatalog.isSupportedWeightExtension(ext)) {
+                return@withContext Result.failure(
+                    IllegalArgumentException(
+                        "不支持的文件扩展名「${ext.ifBlank { "无扩展名" }}」，请导入 .gguf / .onnx / .tflite / .safetensors / .bin / .json / .txt 权重或词表文件。"
+                    )
+                )
+            }
+
+            val customId = "${LocalModelCatalog.CUSTOM_PREFIX}${UUID.randomUUID().toString().take(8)}"
+            val dir = modelDirectory(context, customId)
+            if (!dir.exists()) dir.mkdirs()
+
+            val targetFile = File(dir, rawName)
+            var totalBytes = 0L
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(targetFile).use { output ->
+                    val buffer = ByteArray(16 * 1024)
+                    var n: Int
+                    while (input.read(buffer).also { n = it } != -1) {
+                        output.write(buffer, 0, n)
+                        totalBytes += n
+                    }
+                    output.flush()
+                }
+            } ?: return@withContext Result.failure(IllegalStateException("无法读取所选文件流"))
+
+            if (!targetFile.exists() || totalBytes < 16L) {
+                dir.deleteRecursively()
+                return@withContext Result.failure(IllegalArgumentException("导入的模型文件过小或为空"))
+            }
+
+            val detectedFormat = inspectWeightFormat(targetFile, ext)
+            val vocabCount = extractPrintableChineseVocabCount(targetFile, ext)
+            val now = System.currentTimeMillis()
+            val displayName = rawName.substringBeforeLast('.').take(36).ifBlank { rawName }
+
+            val metaJson = JSONObject().apply {
+                put("id", customId)
+                put("displayName", displayName)
+                put("fileName", rawName)
+                put("formatLabel", detectedFormat)
+                put("sizeBytes", totalBytes)
+                put("importedAtMillis", now)
+                put("vocabTokenCount", vocabCount)
+            }
+            File(dir, "custom_meta.json").writeText(metaJson.toString(), Charsets.UTF_8)
+
+            Result.success(
+                CustomLocalModelInfo(
+                    id = customId,
+                    displayName = displayName,
+                    fileName = rawName,
+                    formatLabel = detectedFormat,
+                    sizeBytes = totalBytes,
+                    importedAtMillis = now,
+                    vocabTokenCount = vocabCount
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(IllegalStateException("导入模型权重失败：${e.localizedMessage ?: "未知错误"}", e))
+        }
+    }
+
+    private fun resolveDisplayNameFromUri(context: Context, uri: Uri): String? {
+        runCatching {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && cursor.moveToFirst()) {
+                    return cursor.getString(idx)
+                }
+            }
+        }
+        return uri.lastPathSegment?.substringAfterLast('/')
+    }
+
+    private fun inspectWeightFormat(file: File, ext: String): String {
+        val header = ByteArray(16)
+        val readCount = runCatching {
+            file.inputStream().use { it.read(header) }
+        }.getOrDefault(0)
+        val magic = if (readCount >= 4) String(header, 0, 4, Charsets.US_ASCII) else ""
+        return when {
+            magic == "GGUF" -> "GGUF 量化权重"
+            ext == "gguf" -> "GGUF 模型文件"
+            ext == "onnx" -> "ONNX 推理图"
+            ext == "tflite" -> "LiteRT / TFLite 权重"
+            ext == "safetensors" -> "SafeTensors 安全权重"
+            ext == "txt" || ext == "vocab" -> "开源中文词表"
+            ext == "json" -> "Tokenizer 分词器配置"
+            else -> "${ext.uppercase(Locale.ROOT)} 权重"
+        }
+    }
+
+    private fun extractPrintableChineseVocabCount(file: File, ext: String): Int {
+        if (ext == "txt" || ext == "vocab") {
+            return runCatching { file.useLines { it.count() } }.getOrDefault(0)
+        }
+        if (ext == "json") {
+            return runCatching {
+                val obj = JSONObject(file.readText(Charsets.UTF_8))
+                obj.optJSONObject("model")?.optJSONObject("vocab")?.length() ?: 0
+            }.getOrDefault(0)
+        }
+        return 0
+    }
+
     fun getInstallStatus(context: Context, modelId: String): LocalModelInstallStatus {
+        if (LocalModelCatalog.isCustomModelId(modelId)) {
+            val info = getCustomModelInfo(context, modelId)
+            return if (info != null) {
+                LocalModelInstallStatus(
+                    modelId = info.id,
+                    installed = true,
+                    totalBytes = info.sizeBytes,
+                    vocabCountEstimate = info.vocabTokenCount.coerceAtLeast(32_000)
+                )
+            } else {
+                LocalModelInstallStatus(modelId, installed = false, totalBytes = 0L, vocabCountEstimate = 0)
+            }
+        }
+
         val preset = LocalModelCatalog.resolve(modelId)
         val dir = modelDirectory(context, preset.id)
         if (!dir.exists()) {
@@ -117,7 +367,12 @@ class AiUnderstandingManager {
     }
 
     fun deleteLocalModel(context: Context, modelId: String): Boolean {
-        val dir = modelDirectory(context, LocalModelCatalog.resolve(modelId).id)
+        val targetId = if (LocalModelCatalog.isCustomModelId(modelId)) {
+            modelId
+        } else {
+            LocalModelCatalog.resolve(modelId).id
+        }
+        val dir = modelDirectory(context, targetId)
         return if (dir.exists()) dir.deleteRecursively() else true
     }
 
@@ -240,11 +495,13 @@ class AiUnderstandingManager {
         title: String,
         content: String
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.Default) {
-        val preset = LocalModelCatalog.resolve(modelId)
-        val status = getInstallStatus(context, preset.id)
+        val isCustom = LocalModelCatalog.isCustomModelId(modelId)
+        val resolvedId = if (isCustom) modelId else LocalModelCatalog.resolve(modelId).id
+        val status = getInstallStatus(context, resolvedId)
         if (!status.installed) {
+            val missingName = if (isCustom) "导入的模型权重" else LocalModelCatalog.resolve(resolvedId).name
             return@withContext Result.failure(
-                IllegalStateException("本地模型「${preset.name}」尚未下载，请先在「AI理解」中按需下载")
+                IllegalStateException("本地模型「$missingName」尚未就绪，请先在「AI理解」中下载或导入")
             )
         }
 
@@ -253,7 +510,7 @@ class AiUnderstandingManager {
             return@withContext Result.failure(IllegalArgumentException("通知内容为空"))
         }
 
-        val dir = modelDirectory(context, preset.id)
+        val dir = modelDirectory(context, resolvedId)
         val vocabTokens = loadVocabTokens(dir)
         val amountCents = ChinaNotificationParser.extractAmountCents(
             text = combined,
@@ -277,8 +534,14 @@ class AiUnderstandingManager {
             ?: extractEntityFromVocabTokens(combined, matchedVocabHits, channel, type)
         val category = inferCategoryScored(merchant, combined, type)
 
-        val confidence = if (matchedVocabHits.isNotEmpty() && channel != "未知渠道") 0.90f else 0.84f
-        val modelTag = preset.name.substringBefore(" ")
+        val confidence = if ((matchedVocabHits.isNotEmpty() || isCustom) && channel != "未知渠道") 0.90f else 0.84f
+        val modelTag = resolveModelDisplayName(context, resolvedId).substringBefore(" ")
+        val customInfo = if (isCustom) getCustomModelInfo(context, resolvedId) else null
+        val modelDesc = if (customInfo != null) {
+            "本地自导权重 [$modelTag · ${customInfo.formatLabel}] 离线理解"
+        } else {
+            "本地模型 [$modelTag · ${vocabTokens.size} 词表] 离线理解"
+        }
         val occurredAt = ChinaNotificationParser.extractOccurredAtMillis(combined)
         Result.success(
             ParsedNotificationResult(
@@ -293,7 +556,7 @@ class AiUnderstandingManager {
                 sourceApp = sourceApp,
                 parseMethod = ParseMethod.LOCAL_NLP,
                 confidence = confidence,
-                reasoning = "本地模型 [$modelTag · ${vocabTokens.size} 词表] 离线理解",
+                reasoning = modelDesc,
                 needsInquiry = false,
                 inquiryReason = "",
                 occurredAtMillis = occurredAt
@@ -472,6 +735,36 @@ class AiUnderstandingManager {
                 val obj = JSONObject(tokenizerJson.readText(Charsets.UTF_8))
                 val vocabObj = obj.optJSONObject("model")?.optJSONObject("vocab")
                 val tokens = HashSet<String>(32000)
+                vocabObj?.keys()?.forEachRemaining { k ->
+                    if (k.isNotBlank()) tokens.add(k)
+                }
+                tokens
+            }.getOrDefault(emptySet())
+        }
+        // Fallback: if custom weight file has .txt / .vocab / .json directly inside modelDir
+        val anyVocabTxt = modelDir.listFiles()?.firstOrNull {
+            it.isFile && (it.name.endsWith(".txt", true) || it.name.endsWith(".vocab", true))
+        }
+        if (anyVocabTxt != null) {
+            val tokens = HashSet<String>(16000)
+            runCatching {
+                anyVocabTxt.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    lines.forEach { line ->
+                        val t = line.trim()
+                        if (t.isNotEmpty() && !t.startsWith("[")) tokens.add(t)
+                    }
+                }
+            }
+            return tokens
+        }
+        val anyTokenizerJson = modelDir.listFiles()?.firstOrNull {
+            it.isFile && it.name.endsWith(".json", true) && it.name != "custom_meta.json"
+        }
+        if (anyTokenizerJson != null) {
+            return runCatching {
+                val obj = JSONObject(anyTokenizerJson.readText(Charsets.UTF_8))
+                val vocabObj = obj.optJSONObject("model")?.optJSONObject("vocab")
+                val tokens = HashSet<String>(24000)
                 vocabObj?.keys()?.forEachRemaining { k ->
                     if (k.isNotBlank()) tokens.add(k)
                 }
