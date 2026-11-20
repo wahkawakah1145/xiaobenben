@@ -25,7 +25,9 @@ object LocalBackupManager {
             val transactions = repository.getAllTransactionsOnce()
             val rules = repository.getRulesOnce()
             val settings = repository.getSettingsOnce()
-            val json = LedgerBackupCodec.encodeBackupJson(transactions, rules, settings)
+            val books = repository.getAllBooksOnce()
+            val bookLinks = repository.getAllBookLinksOnce()
+            val json = LedgerBackupCodec.encodeBackupJson(transactions, rules, settings, books, bookLinks)
 
             context.contentResolver.openOutputStream(uri)?.use { out ->
                 out.write(json.toByteArray(Charsets.UTF_8))
@@ -65,6 +67,7 @@ object LocalBackupManager {
 
             repository.mergeTransactionsFromBackup(payload.transactions)
             repository.mergeRulesFromBackup(payload.parsingRules)
+            repository.mergeBooksFromBackup(payload.books, payload.bookLinks)
             payload.settings?.let { restored ->
                 repository.saveSettings(
                     restored.copy(

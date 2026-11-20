@@ -4,8 +4,9 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Minimalist ledger notebook with ¥ symbol inside 66dp safe zone for Monet themed icons -->
+    <!-- Minimalist ledger notebook with evenOdd ¥ cutout inside 66dp safe zone for Monet themed icons -->
     <path
         android:fillColor="#FF000000"
+        android:fillType="evenOdd"
         android:pathData="M34,26 C30.69,26 28,28.69 28,32 L28,76 C28,79.31 30.69,82 34,82 L74,82 C77.31,82 80,79.31 80,76 L80,32 C80,28.69 77.31,26 74,26 Z M34,34 L40,34 L40,40 L34,40 Z M34,51 L40,51 L40,57 L34,57 Z M34,68 L40,68 L40,74 L34,74 Z M47,36 L55,48 L63,36 L68.5,36 L58.5,51.5 L66,51.5 L66,56 L58,56 L58,60 L66,60 L66,64.5 L58,64.5 L58,72 L52,72 L52,64.5 L44,64.5 L44,60 L52,60 L52,56 L44,56 L44,51.5 L51.5,51.5 L41.5,36 Z" />
 </vector>

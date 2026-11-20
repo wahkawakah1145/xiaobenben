@@ -58,6 +58,8 @@ fun BatchSelectionActionBar(
     onClearSelection: () -> Unit,
     onBatchEdit: () -> Unit,
     onBatchDelete: () -> Unit,
+    onQuickAnalyze: () -> Unit = {},
+    onAddToBooks: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -122,11 +124,50 @@ fun BatchSelectionActionBar(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilledTonalButton(
+                    onClick = onQuickAnalyze,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .testTag("batch_quick_analyze_button")
+                ) {
+                    Icon(
+                        imageVector = AppIcons.Insights,
+                        contentDescription = null,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text("快速分析", maxLines = 1)
+                }
+
+                FilledTonalButton(
+                    onClick = onAddToBooks,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .testTag("batch_add_to_books_button")
+                ) {
+                    Icon(
+                        imageVector = AppIcons.LibraryAdd,
+                        contentDescription = null,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text("加入账本", maxLines = 1)
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedButton(
                     onClick = onBatchDelete,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                     modifier = Modifier
                         .weight(1f)
                         .minimumInteractiveComponentSize()
@@ -136,27 +177,27 @@ fun BatchSelectionActionBar(
                         imageVector = AppIcons.DeleteOutline,
                         contentDescription = null,
                         tint = ExpenseCoral,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(17.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("删除所选", color = ExpenseCoral)
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text("删除所选", color = ExpenseCoral, maxLines = 1)
                 }
 
                 Button(
                     onClick = onBatchEdit,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                     modifier = Modifier
-                        .weight(1.4f)
+                        .weight(1.2f)
                         .minimumInteractiveComponentSize()
                         .testTag("batch_edit_button")
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Edit,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(17.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("批量编辑字段")
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text("批量编辑", maxLines = 1)
                 }
             }
         }

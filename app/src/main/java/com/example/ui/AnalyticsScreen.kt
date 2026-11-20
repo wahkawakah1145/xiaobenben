@@ -51,6 +51,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -100,7 +101,9 @@ import com.example.model.AnalyticsGranularity
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.ExchangeRateState
+import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
+import com.example.model.TransactionBookLink
 import com.example.model.TransactionType
 import com.example.ui.components.AnalyticsCalendarSection
 import com.example.ui.components.ChannelBadge
@@ -133,6 +136,10 @@ fun AnalyticsScreen(
     appearance: AppearanceSettings = AppearanceSettings(),
     exchangeRates: ExchangeRateState,
     viewModel: LedgerViewModel,
+    books: List<LedgerBook> = emptyList(),
+    bookLinks: List<TransactionBookLink> = emptyList(),
+    selectedBookId: String? = null,
+    onSelectBookId: (String?) -> Unit = {},
     isCalendarFullScreen: Boolean = false,
     onCalendarFullScreenChange: (Boolean) -> Unit = {},
     listState: LazyListState = rememberLazyListState(),
@@ -203,7 +210,21 @@ fun AnalyticsScreen(
 
     val numberFont = LocalNumberFontFamily.current
     val baseCurrency = settings.baseCurrencyCode
-    val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
+    val rawTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
+    val activeBook = remember(books, selectedBookId) {
+        selectedBookId?.let { id -> books.firstOrNull { it.id == id } }
+    }
+    val allTransactions = remember(rawTransactions, activeBook, bookLinks) {
+        if (activeBook == null) {
+            rawTransactions
+        } else {
+            val allowedIds = bookLinks.asSequence()
+                .filter { it.bookId == activeBook.id }
+                .map { it.transactionId }
+                .toHashSet()
+            rawTransactions.filter { it.id in allowedIds }
+        }
+    }
 
     val periodTitle = remember(selectedGranularity, anchorMillis) {
         LedgerViewModel.formatPeriodTitle(selectedGranularity, anchorMillis)
@@ -268,8 +289,13 @@ fun AnalyticsScreen(
         } ?: emptyList()
     }
 
-    val summaryText = remember(periodTransactions, selectedGranularity, anchorMillis, exchangeRates.ratesToCny, baseCurrency) {
-        viewModel.buildPeriodInsight(selectedGranularity, anchorMillis)
+    val summaryText = remember(periodTransactions, selectedGranularity, anchorMillis, exchangeRates.ratesToCny, baseCurrency, activeBook) {
+        viewModel.buildPeriodInsight(
+            granularity = selectedGranularity,
+            anchorMillis = anchorMillis,
+            scopedTransactions = allTransactions,
+            bookNamePrefix = activeBook?.name
+        )
     }
 
     val summaryCardTitle = when (selectedGranularity) {
@@ -337,6 +363,49 @@ fun AnalyticsScreen(
                     }
                 }
             }
+            if (books.isNotEmpty()) {
+                item(key = "analytics_book_selector") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilterChip(
+                            selected = activeBook == null,
+                            onClick = {
+                                onSelectBookId(null)
+                                selectedCategoryFilter = null
+                                selectedChannelFilter = null
+                            },
+                            label = { Text("全部账单") },
+                            modifier = Modifier.testTag("analytics_book_chip_all")
+                        )
+                        books.forEach { book ->
+                            val isSelected = activeBook?.id == book.id
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    onSelectBookId(if (isSelected) null else book.id)
+                                    selectedCategoryFilter = null
+                                    selectedChannelFilter = null
+                                },
+                                leadingIcon = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(book.colorArgb.toInt()))
+                                    )
+                                },
+                                label = { Text(book.name) },
+                                modifier = Modifier.testTag("analytics_book_chip_${book.id}")
+                            )
+                        }
+                    }
+                }
+            }
             item(key = "period_switcher") {
                 Card(
                     shape = RoundedCornerShape(18.dp),
@@ -397,7 +466,7 @@ fun AnalyticsScreen(
                                 verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 CompactFullText(
-                                    text = "$periodTitle 收支分析 ($baseCurrency)",
+                                    text = (activeBook?.let { "「${it.name}」" } ?: "") + "$periodTitle 收支分析 ($baseCurrency)",
                                     style = MaterialTheme.typography.titleMedium,
                                     textAlign = TextAlign.Center,
                                     maxLines = 2

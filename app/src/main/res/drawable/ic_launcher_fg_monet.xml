@@ -4,8 +4,9 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Pure minimalist Monet wallet emblem -->
+    <!-- Pure minimalist Monet wallet emblem with evenOdd cutouts and dynamic Material You tint -->
     <path
-        android:fillColor="#FFFFFF"
+        android:fillColor="@color/monet_icon_fg"
+        android:fillType="evenOdd"
         android:pathData="M34,34 C30.69,34 28,36.69 28,40 L28,68 C28,71.31 30.69,74 34,74 L74,74 C77.31,74 80,71.31 80,68 L80,40 C80,36.69 77.31,34 74,34 Z M64,49 C66.76,49 69,51.24 69,54 C69,56.76 66.76,59 64,59 C61.24,59 59,56.76 59,54 C59,51.24 61.24,49 64,49 Z M37,43 L52,43 L52,46.5 L37,46.5 Z" />
 </vector>

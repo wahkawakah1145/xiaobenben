@@ -65,6 +65,8 @@ fun BillToolsMenuScreen(
     settings: BudgetSettings,
     transactionsState: UiState<List<LedgerTransaction>>,
     storageFootprint: StorageFootprintInfo,
+    booksCount: Int = 0,
+    onOpenBooks: () -> Unit = {},
     onOpenBehaviorBudget: () -> Unit,
     onOpenCurrencyRates: () -> Unit,
     onOpenSmartDedup: () -> Unit,
@@ -107,6 +109,14 @@ fun BillToolsMenuScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                        BillToolMenuRow(
+                            icon = AppIcons.MenuBook,
+                            title = "账本管理与分析",
+                            subtitle = if (booksCount > 0) "已创建 $booksCount 个账本 · 支持多账本归类与分账本图表分析" else "新建多维度账本，支持隐藏底部账本 Tab 后仍在此使用",
+                            testTag = "bill_tool_books",
+                            onClick = onOpenBooks
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         BillToolMenuRow(
                             icon = AppIcons.Tune,
                             title = "记账与预算",

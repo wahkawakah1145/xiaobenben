@@ -111,4 +111,90 @@ object LocalSpendingAnalyzer {
             }
         }.trim()
     }
+
+    fun generateQuickSelectionSummary(
+        transactions: List<LedgerTransaction>,
+        baseCurrencyCode: String = "CNY",
+        ratesToCny: Map<String, Double> = CurrencyCatalog.defaultRatesToCny,
+        scopeTitle: String = "选中账单快速分析"
+    ): String {
+        if (transactions.isEmpty()) {
+            return "当前未选中任何账单记录。"
+        }
+        val symbol = CurrencyCatalog.resolve(baseCurrencyCode).symbol
+        fun toBase(tx: LedgerTransaction): Long =
+            CurrencyExchangeManager.convertCents(tx.amountCents, tx.currencyCode, baseCurrencyCode, ratesToCny)
+
+        val expenses = transactions.filter { it.txType == TransactionType.EXPENSE }
+        val incomes = transactions.filter { it.txType == TransactionType.INCOME }
+        val transfers = transactions.filter { it.txType == TransactionType.TRANSFER }
+
+        val totalExpense = expenses.sumOf { toBase(it) }
+        val totalIncome = incomes.sumOf { toBase(it) }
+        val totalTransfer = transfers.sumOf { toBase(it) }
+        val net = totalIncome - totalExpense
+
+        val sortedTimes = transactions.map { it.occurredAtMillis }.sorted()
+        val dateFmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA)
+        val firstDate = dateFmt.format(java.util.Date(sortedTimes.first()))
+        val lastDate = dateFmt.format(java.util.Date(sortedTimes.last()))
+        val dateRange = if (firstDate == lastDate) firstDate else "$firstDate 至 $lastDate"
+
+        val foreignCount = transactions.count { !it.currencyCode.equals(baseCurrencyCode, ignoreCase = true) }
+
+        val topCategories = expenses
+            .groupBy { it.category }
+            .map { (cat, list) -> Triple(cat, list.sumOf { toBase(it) }, list.size) }
+            .sortedByDescending { it.second }
+
+        val topChannels = expenses
+            .groupBy { it.channel }
+            .map { (ch, list) -> Triple(ch, list.sumOf { toBase(it) }, list.size) }
+            .sortedByDescending { it.second }
+
+        val largestExpense = expenses.maxByOrNull { toBase(it) }
+        val largestIncome = incomes.maxByOrNull { toBase(it) }
+
+        return buildString {
+            appendLine("【$scopeTitle】")
+            appendLine("统计范围：$dateRange · 共 ${transactions.size} 笔（支出 ${expenses.size} / 收入 ${incomes.size}${if (transfers.isNotEmpty()) " / 转账 ${transfers.size}" else ""}）")
+            if (foreignCount > 0) {
+                appendLine("币种折算：含 $foreignCount 笔外币记录，已统一折合 $baseCurrencyCode")
+            }
+            appendLine()
+            appendLine("• 支出合计：$symbol%.2f".format(totalExpense / 100.0))
+            appendLine("• 收入合计：$symbol%.2f".format(totalIncome / 100.0))
+            if (totalTransfer > 0L) {
+                appendLine("• 转账合计：$symbol%.2f".format(totalTransfer / 100.0))
+            }
+            val netPrefix = if (net >= 0L) "+" else "-"
+            appendLine("• 净收支：$netPrefix$symbol%.2f".format(kotlin.math.abs(net) / 100.0))
+            if (expenses.isNotEmpty()) {
+                val avgExpense = totalExpense / 100.0 / expenses.size.toDouble()
+                appendLine("• 笔均支出：$symbol%.2f".format(avgExpense))
+            }
+            largestExpense?.let { tx ->
+                appendLine("• 单笔最高支出：${tx.merchant}（$symbol%.2f · ${dateFmt.format(java.util.Date(tx.occurredAtMillis))}）".format(toBase(tx) / 100.0))
+            }
+            largestIncome?.let { tx ->
+                appendLine("• 单笔最高收入：${tx.merchant}（$symbol%.2f · ${dateFmt.format(java.util.Date(tx.occurredAtMillis))}）".format(toBase(tx) / 100.0))
+            }
+            if (topCategories.isNotEmpty() && totalExpense > 0L) {
+                appendLine()
+                appendLine("分类支出分布：")
+                topCategories.take(6).forEachIndexed { idx, (cat, cents, count) ->
+                    val pct = cents * 100.0 / totalExpense.toDouble()
+                    appendLine("  ${idx + 1}. $cat：$symbol%.2f（%.1f%% · ${count}笔）".format(cents / 100.0, pct))
+                }
+            }
+            if (topChannels.isNotEmpty() && totalExpense > 0L) {
+                appendLine()
+                appendLine("渠道支出分布：")
+                topChannels.take(5).forEachIndexed { idx, (ch, cents, count) ->
+                    val pct = cents * 100.0 / totalExpense.toDouble()
+                    appendLine("  ${idx + 1}. $ch：$symbol%.2f（%.1f%% · ${count}笔）".format(cents / 100.0, pct))
+                }
+            }
+        }.trim()
+    }
 }

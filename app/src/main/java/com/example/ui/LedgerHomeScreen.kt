@@ -120,7 +120,9 @@ import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
 import com.example.model.HomeStatsDimension
 import com.example.model.IconVisualStyle
+import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
+import com.example.model.TransactionBookLink
 import com.example.model.NotificationInquiry
 import com.example.model.NumberFormatStyle
 import com.example.model.TransactionType
@@ -159,6 +161,8 @@ fun LedgerHomeScreen(
     isListenerEnabled: Boolean,
     viewModel: LedgerViewModel,
     onNavigateToParser: () -> Unit,
+    books: List<LedgerBook> = emptyList(),
+    bookLinks: List<TransactionBookLink> = emptyList(),
     listState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier
 ) {
@@ -196,6 +200,8 @@ fun LedgerHomeScreen(
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showBatchEditDialog by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    var quickAnalysisDialogContent by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var showAddToBooksDialog by remember { mutableStateOf(false) }
 
     val filterOptions = listOf("全部", "支出", "收入", "外币", "支付宝", "微信支付", "银行卡", "云闪付")
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
@@ -566,22 +572,42 @@ fun LedgerHomeScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "筛选结果共 ${filteredTransactions.size} 笔（长按任意条目可多选）",
+                                text = "筛选结果 ${filteredTransactions.size} 笔（长按可多选）",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
                             )
-                            TextButton(
-                                onClick = {
-                                    selectedIds = if (allVisibleSelected) {
-                                        selectedIds - visibleFilteredIds
-                                    } else {
-                                        selectedIds + visibleFilteredIds
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                modifier = Modifier.testTag("search_batch_select_button")
-                            ) {
-                                Text(if (allVisibleSelected) "取消选中结果" else "多选全部结果")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = {
+                                        val selectedInFiltered = filteredTransactions.filter { it.id in selectedIds }
+                                        val targetList = if (selectedInFiltered.isNotEmpty()) selectedInFiltered else filteredTransactions
+                                        val title = if (selectedInFiltered.isNotEmpty()) {
+                                            "已选搜索结果快速分析 (${targetList.size} 笔)"
+                                        } else {
+                                            "当前筛选结果快速分析 (${targetList.size} 笔)"
+                                        }
+                                        val text = viewModel.buildQuickSelectionSummary(targetList, title)
+                                        quickAnalysisDialogContent = "快速分析" to text
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("search_quick_analyze_button")
+                                ) {
+                                    Text("快速分析")
+                                }
+                                TextButton(
+                                    onClick = {
+                                        selectedIds = if (allVisibleSelected) {
+                                            selectedIds - visibleFilteredIds
+                                        } else {
+                                            selectedIds + visibleFilteredIds
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("search_batch_select_button")
+                                ) {
+                                    Text(if (allVisibleSelected) "取消全选" else "全选结果")
+                                }
                             }
                         }
                     }
@@ -737,6 +763,15 @@ fun LedgerHomeScreen(
                 onClearSelection = { selectedIds = emptySet() },
                 onBatchEdit = { showBatchEditDialog = true },
                 onBatchDelete = { showBatchDeleteConfirm = true },
+                onQuickAnalyze = {
+                    val selectedItems = confirmedTransactions.filter { it.id in selectedIds }
+                    val summary = viewModel.buildQuickSelectionSummary(
+                        transactions = selectedItems,
+                        scopeTitle = "已选账单快速分析 (${selectedItems.size} 笔)"
+                    )
+                    quickAnalysisDialogContent = "快速分析" to summary
+                },
+                onAddToBooks = { showAddToBooksDialog = true },
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
         } else {
@@ -990,6 +1025,35 @@ fun LedgerHomeScreen(
                     note = note
                 )
                 showBatchEditDialog = false
+                selectedIds = emptySet()
+            }
+        )
+    }
+
+    quickAnalysisDialogContent?.let { (dlgTitle, dlgBody) ->
+        QuickAnalysisTextDialog(
+            title = dlgTitle,
+            summaryText = dlgBody,
+            onDismiss = { quickAnalysisDialogContent = null }
+        )
+    }
+
+    if (showAddToBooksDialog && selectedIds.isNotEmpty()) {
+        val commonBookIds = remember(selectedIds, bookLinks) {
+            val byBook = bookLinks.groupBy({ it.bookId }, { it.transactionId }).mapValues { it.value.toSet() }
+            byBook.filterValues { ids -> selectedIds.all { it in ids } }.keys
+        }
+        AddToBooksMultiSelectDialog(
+            selectedTxCount = selectedIds.size,
+            books = books,
+            preselectedBookIds = commonBookIds,
+            onCreateBookQuick = { newName, onCreated ->
+                viewModel.saveBook(name = newName, onSaved = onCreated)
+            },
+            onDismiss = { showAddToBooksDialog = false },
+            onConfirm = { chosenBooks ->
+                viewModel.addTransactionsToBooks(selectedIds.toList(), chosenBooks)
+                showAddToBooksDialog = false
                 selectedIds = emptySet()
             }
         )

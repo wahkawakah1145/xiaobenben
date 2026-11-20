@@ -65,6 +65,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -111,7 +113,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.R
 import com.example.data.LedgerRepository
+import com.example.model.MainBottomTab
 import com.example.model.PredictiveBackStyle
+import com.example.model.ThemeMode
 import com.example.model.TabClickAnimationStyle
 import com.example.service.NotificationBridge
 import com.example.ui.components.AppBrandIconAvatar
@@ -128,10 +132,13 @@ import kotlin.math.roundToInt
 
 const val ROUTE_MAIN_TABS = "main_tabs"
 const val ROUTE_LEDGER = "ledger"
+const val ROUTE_BOOKS = "books"
 const val ROUTE_ANALYTICS = "analytics"
 const val ROUTE_SETTINGS = "settings"
 
 const val ROUTE_SETTINGS_LEDGER_MGMT = "settings/ledger_mgmt"
+const val ROUTE_SETTINGS_BOOKS = "settings/books"
+const val ROUTE_BOOK_ANALYTICS = "books/analytics"
 const val ROUTE_SETTINGS_BILL_BEHAVIOR = "settings/bill_behavior"
 const val ROUTE_SETTINGS_PARSER = "settings/parser"
 const val ROUTE_SETTINGS_AI = "settings/ai"
@@ -145,6 +152,7 @@ const val ROUTE_SETTINGS_PERMISSIONS = "settings/permissions"
 const val ROUTE_SETTINGS_ABOUT = "settings/about"
 
 private data class TopDestination(
+    val tab: MainBottomTab,
     val route: String,
     val labelRes: Int,
     val selectedIcon: ImageVector,
@@ -152,29 +160,40 @@ private data class TopDestination(
     val testTag: String
 )
 
-private val topDestinations = listOf(
-    TopDestination(
+private fun destinationForTab(tab: MainBottomTab): TopDestination = when (tab) {
+    MainBottomTab.LEDGER -> TopDestination(
+        tab = MainBottomTab.LEDGER,
         route = ROUTE_LEDGER,
         labelRes = R.string.nav_ledger,
         selectedIcon = AppIcons.ReceiptLong,
         unselectedIcon = AppIcons.ReceiptLongOutlined,
         testTag = "nav_ledger_tab"
-    ),
-    TopDestination(
+    )
+    MainBottomTab.BOOKS -> TopDestination(
+        tab = MainBottomTab.BOOKS,
+        route = ROUTE_BOOKS,
+        labelRes = R.string.nav_books,
+        selectedIcon = AppIcons.MenuBook,
+        unselectedIcon = AppIcons.MenuBookOutlined,
+        testTag = "nav_books_tab"
+    )
+    MainBottomTab.ANALYTICS -> TopDestination(
+        tab = MainBottomTab.ANALYTICS,
         route = ROUTE_ANALYTICS,
         labelRes = R.string.nav_analytics,
         selectedIcon = AppIcons.PieChart,
         unselectedIcon = AppIcons.PieChartOutlined,
         testTag = "nav_analytics_tab"
-    ),
-    TopDestination(
+    )
+    MainBottomTab.SETTINGS -> TopDestination(
+        tab = MainBottomTab.SETTINGS,
         route = ROUTE_SETTINGS,
         labelRes = R.string.nav_settings,
         selectedIcon = Icons.Rounded.Settings,
         unselectedIcon = Icons.Outlined.Settings,
         testTag = "nav_settings_tab"
     )
-)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -225,6 +244,9 @@ fun AppNavigation(
             }
 
             val transactionsState by viewModel.transactionsState.collectAsStateWithLifecycle()
+            val books by viewModel.booksState.collectAsStateWithLifecycle()
+            val bookLinks by viewModel.bookLinksState.collectAsStateWithLifecycle()
+            val selectedAnalyticsBookId by viewModel.selectedAnalyticsBookId.collectAsStateWithLifecycle()
             val inquiries by viewModel.inquiriesState.collectAsStateWithLifecycle()
             val settings by viewModel.settingsState.collectAsStateWithLifecycle()
             val exchangeRates by viewModel.exchangeRateState.collectAsStateWithLifecycle()
@@ -260,75 +282,110 @@ fun AppNavigation(
             val currentRoute = navBackStackEntry?.destination?.route ?: ROUTE_MAIN_TABS
             val isTopLevelRoute = currentRoute == ROUTE_MAIN_TABS
 
-            val pagerState = rememberPagerState(initialPage = 0, pageCount = { topDestinations.size })
+            val visibleTabs = remember(appearance.bottomTabOrder, appearance.showBooksTab) {
+                appearance.visibleBottomTabs()
+            }
+            val visibleDestinations = remember(visibleTabs) {
+                visibleTabs.map { destinationForTab(it) }
+            }
+            val ledgerPageIndex = remember(visibleTabs) {
+                visibleTabs.indexOf(MainBottomTab.LEDGER).coerceAtLeast(0)
+            }
+            val pagerState = rememberPagerState(
+                initialPage = ledgerPageIndex,
+                pageCount = { visibleDestinations.size }
+            )
+            var lastTrackedTab by remember { mutableStateOf(MainBottomTab.LEDGER) }
+
+            LaunchedEffect(visibleTabs) {
+                val targetIdx = visibleTabs.indexOf(lastTrackedTab)
+                    .takeIf { it >= 0 }
+                    ?: visibleTabs.indexOf(MainBottomTab.LEDGER).coerceAtLeast(0)
+                val safeIdx = targetIdx.coerceIn(0, (visibleTabs.size - 1).coerceAtLeast(0))
+                if (pagerState.currentPage != safeIdx) {
+                    pagerState.scrollToPage(safeIdx)
+                }
+            }
+
+            val currentTab = visibleTabs.getOrElse(pagerState.currentPage) { MainBottomTab.LEDGER }
+
+            LaunchedEffect(currentTab) {
+                lastTrackedTab = currentTab
+            }
+
             val tabFadeAlpha = remember { Animatable(1f) }
             var pagerBackProgress by remember { mutableFloatStateOf(0f) }
             var isAnalyticsCalendarOpen by remember { mutableStateOf(false) }
 
             val homeListState = rememberLazyListState()
+            val booksListState = rememberLazyListState()
             val analyticsListState = rememberLazyListState()
             val settingsListState = rememberLazyListState()
             var lastTabTapPage by remember { mutableIntStateOf(-1) }
             var lastTabTapMillis by remember { mutableLongStateOf(0L) }
 
-            LaunchedEffect(pagerState.currentPage) {
-                if (pagerState.currentPage != 1 && isAnalyticsCalendarOpen) {
+            LaunchedEffect(currentTab) {
+                if (currentTab != MainBottomTab.ANALYTICS && isAnalyticsCalendarOpen) {
                     isAnalyticsCalendarOpen = false
                 }
             }
 
             val navigateTab: (Int) -> Unit = { targetPage ->
+                val safePage = targetPage.coerceIn(0, (visibleDestinations.size - 1).coerceAtLeast(0))
                 val now = SystemClock.uptimeMillis()
                 if (isAnalyticsCalendarOpen) {
                     isAnalyticsCalendarOpen = false
                 }
-                if (pagerState.currentPage != targetPage) {
-                    lastTabTapPage = targetPage
+                if (pagerState.currentPage != safePage) {
+                    lastTabTapPage = safePage
                     lastTabTapMillis = now
                     scope.launch {
                         when (appearance.tabClickAnimation) {
                             TabClickAnimationStyle.SLIDE -> {
                                 pagerState.animateScrollToPage(
-                                    page = targetPage,
+                                    page = safePage,
                                     animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing)
                                 )
                             }
                             TabClickAnimationStyle.FADE -> {
                                 tabFadeAlpha.animateTo(0.35f, tween(90))
-                                pagerState.scrollToPage(targetPage)
+                                pagerState.scrollToPage(safePage)
                                 tabFadeAlpha.animateTo(1f, tween(170))
                             }
                             TabClickAnimationStyle.NONE -> {
-                                pagerState.scrollToPage(targetPage)
+                                pagerState.scrollToPage(safePage)
                             }
                         }
                     }
                 } else {
-                    val isDoubleTap = lastTabTapPage == targetPage && (now - lastTabTapMillis) <= 450L
-                    lastTabTapPage = targetPage
+                    val isDoubleTap = lastTabTapPage == safePage && (now - lastTabTapMillis) <= 450L
+                    lastTabTapPage = safePage
                     lastTabTapMillis = now
                     if (isDoubleTap) {
                         lastTabTapMillis = 0L
+                        val tappedTab = visibleTabs.getOrNull(safePage)
                         scope.launch {
-                            when (targetPage) {
-                                0 -> homeListState.animateScrollToItem(0)
-                                1 -> analyticsListState.animateScrollToItem(0)
-                                2 -> settingsListState.animateScrollToItem(0)
+                            when (tappedTab) {
+                                MainBottomTab.LEDGER -> homeListState.animateScrollToItem(0)
+                                MainBottomTab.BOOKS -> booksListState.animateScrollToItem(0)
+                                MainBottomTab.ANALYTICS -> analyticsListState.animateScrollToItem(0)
+                                MainBottomTab.SETTINGS -> settingsListState.animateScrollToItem(0)
+                                null -> Unit
                             }
                         }
                     }
                 }
             }
 
-            // On non-home main tab: system back / predictive back returns to tab 0 (Ledger)
-            if (isTopLevelRoute && pagerState.currentPage != 0 && !isAnalyticsCalendarOpen) {
+            // On non-home main tab: system back / predictive back returns to Ledger tab
+            if (isTopLevelRoute && currentTab != MainBottomTab.LEDGER && !isAnalyticsCalendarOpen) {
                 if (appearance.predictiveBackEnabled) {
                     PredictiveBackHandler(enabled = true) { progress: Flow<BackEventCompat> ->
                         try {
                             progress.collect { event ->
                                 pagerBackProgress = event.progress.coerceIn(0f, 1f)
                             }
-                            pagerState.scrollToPage(0)
+                            pagerState.scrollToPage(ledgerPageIndex)
                             pagerBackProgress = 0f
                         } catch (_: CancellationException) {
                             pagerBackProgress = 0f
@@ -336,7 +393,7 @@ fun AppNavigation(
                     }
                 } else {
                     BackHandler(enabled = true) {
-                        scope.launch { pagerState.scrollToPage(0) }
+                        scope.launch { pagerState.scrollToPage(ledgerPageIndex) }
                     }
                 }
             }
@@ -344,12 +401,18 @@ fun AppNavigation(
             val previousRoute = navController.previousBackStackEntry?.destination?.route
 
             val currentTitle = when (currentRoute) {
-                ROUTE_MAIN_TABS -> when (pagerState.currentPage) {
-                    1 -> "收支分析"
-                    2 -> "设置"
-                    else -> appearance.homeBrandCustomName.ifBlank { stringResource(R.string.app_name) }
+                ROUTE_MAIN_TABS -> when (currentTab) {
+                    MainBottomTab.BOOKS -> "账本"
+                    MainBottomTab.ANALYTICS -> "收支分析"
+                    MainBottomTab.SETTINGS -> "设置"
+                    MainBottomTab.LEDGER -> appearance.homeBrandCustomName.ifBlank { stringResource(R.string.app_name) }
                 }
                 ROUTE_SETTINGS_LEDGER_MGMT -> "账单工具"
+                ROUTE_SETTINGS_BOOKS -> "账本管理"
+                ROUTE_BOOK_ANALYTICS -> {
+                    val bName = selectedAnalyticsBookId?.let { id -> books.firstOrNull { it.id == id }?.name }
+                    if (bName != null) "账本分析 · $bName" else "账本分析"
+                }
                 ROUTE_SETTINGS_BILL_BEHAVIOR -> "记账与预算"
                 ROUTE_SETTINGS_CURRENCY -> "币种与汇率"
                 ROUTE_SETTINGS_DEDUP -> "智能去重"
@@ -394,8 +457,8 @@ fun AppNavigation(
             @Composable
             fun DestinationContent(route: String) {
                 when (route) {
-                    ROUTE_MAIN_TABS -> when (pagerState.currentPage) {
-                        0 -> LedgerHomeScreen(
+                    ROUTE_MAIN_TABS -> when (currentTab) {
+                        MainBottomTab.LEDGER -> LedgerHomeScreen(
                             transactionsState = transactionsState,
                             inquiries = inquiries,
                             settings = settings,
@@ -404,19 +467,43 @@ fun AppNavigation(
                             isListenerEnabled = isListenerEnabled,
                             viewModel = viewModel,
                             onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                            books = books,
+                            bookLinks = bookLinks,
                             listState = homeListState
                         )
-                        1 -> AnalyticsScreen(
+                        MainBottomTab.BOOKS -> LedgerBooksScreen(
+                            books = books,
+                            bookLinks = bookLinks,
+                            transactionsState = transactionsState,
+                            settings = settings,
+                            exchangeRates = exchangeRates,
+                            viewModel = viewModel,
+                            onAnalyzeBook = { bookId ->
+                                viewModel.selectAnalyticsBook(bookId)
+                                val analyticsIdx = visibleTabs.indexOf(MainBottomTab.ANALYTICS)
+                                if (analyticsIdx >= 0) {
+                                    navigateTab(analyticsIdx)
+                                } else {
+                                    navController.navigate(ROUTE_BOOK_ANALYTICS)
+                                }
+                            },
+                            listState = booksListState
+                        )
+                        MainBottomTab.ANALYTICS -> AnalyticsScreen(
                             transactionsState = transactionsState,
                             settings = settings,
                             appearance = appearance,
                             exchangeRates = exchangeRates,
                             viewModel = viewModel,
+                            books = books,
+                            bookLinks = bookLinks,
+                            selectedBookId = selectedAnalyticsBookId,
+                            onSelectBookId = { viewModel.selectAnalyticsBook(it) },
                             isCalendarFullScreen = isAnalyticsCalendarOpen,
                             onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it },
                             listState = analyticsListState
                         )
-                        else -> SettingsScreen(
+                        MainBottomTab.SETTINGS -> SettingsScreen(
                             settings = settings,
                             aiConfig = aiConfig,
                             isListenerEnabled = isListenerEnabled,
@@ -436,11 +523,40 @@ fun AppNavigation(
                         settings = settings,
                         transactionsState = transactionsState,
                         storageFootprint = storageFootprint,
+                        booksCount = books.size,
+                        onOpenBooks = { navController.navigate(ROUTE_SETTINGS_BOOKS) },
                         onOpenBehaviorBudget = { navController.navigate(ROUTE_SETTINGS_BILL_BEHAVIOR) },
                         onOpenCurrencyRates = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
                         onOpenSmartDedup = { navController.navigate(ROUTE_SETTINGS_DEDUP) },
                         onOpenStorageOpt = { navController.navigate(ROUTE_SETTINGS_STORAGE_OPT) },
                         onRefreshFootprint = { viewModel.refreshStorageFootprint(context) }
+                    )
+                    ROUTE_SETTINGS_BOOKS -> LedgerBooksScreen(
+                        books = books,
+                        bookLinks = bookLinks,
+                        transactionsState = transactionsState,
+                        settings = settings,
+                        exchangeRates = exchangeRates,
+                        viewModel = viewModel,
+                        onAnalyzeBook = { bookId ->
+                            viewModel.selectAnalyticsBook(bookId)
+                            navController.navigate(ROUTE_BOOK_ANALYTICS)
+                        },
+                        listState = booksListState
+                    )
+                    ROUTE_BOOK_ANALYTICS -> AnalyticsScreen(
+                        transactionsState = transactionsState,
+                        settings = settings,
+                        appearance = appearance,
+                        exchangeRates = exchangeRates,
+                        viewModel = viewModel,
+                        books = books,
+                        bookLinks = bookLinks,
+                        selectedBookId = selectedAnalyticsBookId,
+                        onSelectBookId = { viewModel.selectAnalyticsBook(it) },
+                        isCalendarFullScreen = isAnalyticsCalendarOpen,
+                        onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it },
+                        listState = analyticsListState
                     )
                     ROUTE_SETTINGS_BILL_BEHAVIOR -> BookkeepingBehaviorScreen(
                         settings = settings,
@@ -497,17 +613,35 @@ fun AppNavigation(
                 }
             }
 
+            val isSystemDark = isSystemInDarkTheme()
+            val isDarkEffective = when (appearance.themeMode) {
+                ThemeMode.SYSTEM -> isSystemDark
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+            }
+            val isOledBlackActive = isDarkEffective && appearance.oledPureBlack
+            val topBarColors = if (isOledBlackActive) {
+                TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Black,
+                    scrolledContainerColor = Color.Black
+                )
+            } else {
+                TopAppBarDefaults.topAppBarColors()
+            }
+
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val useNavigationRail = maxWidth >= 600.dp
-                val isHomeBrandTopBar = isTopLevelRoute && pagerState.currentPage == 0
+                val isHomeBrandTopBar = isTopLevelRoute && currentTab == MainBottomTab.LEDGER
 
                 Box(modifier = Modifier.fillMaxSize()) {
                 Scaffold(
+                    containerColor = MaterialTheme.colorScheme.background,
                     contentWindowInsets = WindowInsets.safeDrawing,
                     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                     topBar = {
                         if (isHomeBrandTopBar) {
                             TopAppBar(
+                                colors = topBarColors,
                                 title = {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -548,6 +682,7 @@ fun AppNavigation(
                             )
                         } else {
                             CenterAlignedTopAppBar(
+                                colors = if (isOledBlackActive) TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.Black, scrolledContainerColor = Color.Black) else TopAppBarDefaults.centerAlignedTopAppBarColors(),
                                 title = {
                                     Text(
                                         text = currentTitle,
@@ -572,8 +707,10 @@ fun AppNavigation(
                     },
                     bottomBar = {
                         if (!useNavigationRail && isTopLevelRoute) {
-                            NavigationBar {
-                                topDestinations.forEachIndexed { index, dest ->
+                            NavigationBar(
+                                containerColor = if (isOledBlackActive) Color.Black else MaterialTheme.colorScheme.surfaceContainer
+                            ) {
+                                visibleDestinations.forEachIndexed { index, dest ->
                                     val selected = pagerState.currentPage == index
                                     NavigationBarItem(
                                         selected = selected,
@@ -598,8 +735,10 @@ fun AppNavigation(
                             .padding(innerPadding)
                     ) {
                         if (useNavigationRail && isTopLevelRoute) {
-                            NavigationRail {
-                                topDestinations.forEachIndexed { index, dest ->
+                            NavigationRail(
+                                containerColor = if (isOledBlackActive) Color.Black else MaterialTheme.colorScheme.surface
+                            ) {
+                                visibleDestinations.forEachIndexed { index, dest ->
                                     val selected = pagerState.currentPage == index
                                     NavigationRailItem(
                                         selected = selected,
@@ -674,7 +813,7 @@ fun AppNavigation(
                                         .fillMaxSize()
                                         .background(MaterialTheme.colorScheme.background)
                                 ) {
-                                    if (pagerBackProgress > 0.001f && pagerState.currentPage != 0) {
+                                    if (pagerBackProgress > 0.001f && currentTab != MainBottomTab.LEDGER) {
                                         Surface(
                                             color = MaterialTheme.colorScheme.background,
                                             modifier = Modifier.fillMaxSize()
@@ -688,6 +827,8 @@ fun AppNavigation(
                                                 isListenerEnabled = isListenerEnabled,
                                                 viewModel = viewModel,
                                                 onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                                                books = books,
+                                                bookLinks = bookLinks,
                                                 listState = homeListState
                                             )
                                         }
@@ -710,8 +851,8 @@ fun AppNavigation(
                                             beyondViewportPageCount = 1,
                                             modifier = Modifier.fillMaxSize()
                                         ) { page ->
-                                            when (page) {
-                                                0 -> LedgerHomeScreen(
+                                            when (visibleTabs.getOrNull(page)) {
+                                                MainBottomTab.LEDGER -> LedgerHomeScreen(
                                                     transactionsState = transactionsState,
                                                     inquiries = inquiries,
                                                     settings = settings,
@@ -720,19 +861,43 @@ fun AppNavigation(
                                                     isListenerEnabled = isListenerEnabled,
                                                     viewModel = viewModel,
                                                     onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                                                    books = books,
+                                                    bookLinks = bookLinks,
                                                     listState = homeListState
                                                 )
-                                                1 -> AnalyticsScreen(
+                                                MainBottomTab.BOOKS -> LedgerBooksScreen(
+                                                    books = books,
+                                                    bookLinks = bookLinks,
+                                                    transactionsState = transactionsState,
+                                                    settings = settings,
+                                                    exchangeRates = exchangeRates,
+                                                    viewModel = viewModel,
+                                                    onAnalyzeBook = { bookId ->
+                                                        viewModel.selectAnalyticsBook(bookId)
+                                                        val analyticsIdx = visibleTabs.indexOf(MainBottomTab.ANALYTICS)
+                                                        if (analyticsIdx >= 0) {
+                                                            navigateTab(analyticsIdx)
+                                                        } else {
+                                                            navController.navigate(ROUTE_BOOK_ANALYTICS)
+                                                        }
+                                                    },
+                                                    listState = booksListState
+                                                )
+                                                MainBottomTab.ANALYTICS -> AnalyticsScreen(
                                                     transactionsState = transactionsState,
                                                     settings = settings,
                                                     appearance = appearance,
                                                     exchangeRates = exchangeRates,
                                                     viewModel = viewModel,
+                                                    books = books,
+                                                    bookLinks = bookLinks,
+                                                    selectedBookId = selectedAnalyticsBookId,
+                                                    onSelectBookId = { viewModel.selectAnalyticsBook(it) },
                                                     isCalendarFullScreen = isAnalyticsCalendarOpen,
                                                     onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it },
                                                     listState = analyticsListState
                                                 )
-                                                2 -> SettingsScreen(
+                                                MainBottomTab.SETTINGS -> SettingsScreen(
                                                     settings = settings,
                                                     aiConfig = aiConfig,
                                                     isListenerEnabled = isListenerEnabled,
@@ -747,6 +912,7 @@ fun AppNavigation(
                                                     onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) },
                                                     listState = settingsListState
                                                 )
+                                                null -> Unit
                                             }
                                         }
                                     }
@@ -759,6 +925,8 @@ fun AppNavigation(
 
                             listOf(
                                 ROUTE_SETTINGS_LEDGER_MGMT,
+                                ROUTE_SETTINGS_BOOKS,
+                                ROUTE_BOOK_ANALYTICS,
                                 ROUTE_SETTINGS_BILL_BEHAVIOR,
                                 ROUTE_SETTINGS_CURRENCY,
                                 ROUTE_SETTINGS_DEDUP,

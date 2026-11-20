@@ -6,7 +6,9 @@ import com.example.model.BudgetSettings
 import com.example.model.CurrencyCatalog
 import com.example.model.CustomParsingRule
 import com.example.model.ExchangeRateState
+import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
+import com.example.model.TransactionBookLink
 import com.example.model.NotificationInquiry
 import com.example.model.ParseMethod
 import com.example.model.StorageFootprintInfo
@@ -35,6 +37,12 @@ class LedgerRepository(
     fun observeTransactions(): Flow<List<LedgerTransaction>> =
         dao.observeAllTransactions().map { list -> list.map { it.toDomain() } }
 
+    fun observeBooks(): Flow<List<LedgerBook>> =
+        dao.observeAllBooks().map { list -> list.map { it.toDomain() } }
+
+    fun observeBookLinks(): Flow<List<TransactionBookLink>> =
+        dao.observeAllBookRefs().map { list -> list.map { it.toDomain() } }
+
     fun observeInquiries(): Flow<List<com.example.model.NotificationInquiry>> =
         dao.observeInquiries().map { list -> list.map { it.toDomain() } }
 
@@ -62,6 +70,12 @@ class LedgerRepository(
 
     suspend fun getAllTransactionsOnce(): List<LedgerTransaction> =
         dao.getAllTransactionsOnce().map { it.toDomain() }
+
+    suspend fun getAllBooksOnce(): List<LedgerBook> =
+        dao.getAllBooksOnce().map { it.toDomain() }
+
+    suspend fun getAllBookLinksOnce(): List<TransactionBookLink> =
+        dao.getAllBookRefsOnce().map { it.toDomain() }
 
     suspend fun ensureDefaultRulesSeeded() {
         val count = dao.getRuleCount()
@@ -445,6 +459,7 @@ class LedgerRepository(
     suspend fun deleteTransaction(txId: String): Result<Unit> {
         return try {
             require(txId.isNotBlank()) { "账单 ID 不能为空" }
+            dao.deleteRefsByTransactionId(txId)
             dao.deleteTransactionById(txId)
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -459,6 +474,7 @@ class LedgerRepository(
             val cleanIds = txIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
             if (cleanIds.isEmpty()) return Result.success(0)
             cleanIds.chunked(400).forEach { chunk ->
+                dao.deleteRefsByTransactionIds(chunk)
                 dao.deleteTransactionsByIds(chunk)
             }
             Result.success(cleanIds.size)
@@ -590,6 +606,125 @@ class LedgerRepository(
             throw e
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+
+    suspend fun saveBook(book: LedgerBook): Result<LedgerBook> {
+        return try {
+            val cleanName = book.name.trim()
+            require(cleanName.isNotEmpty()) { "账本名称不能为空" }
+            val now = System.currentTimeMillis()
+            val normalized = book.copy(
+                id = book.id.ifBlank { UUID.randomUUID().toString() },
+                name = cleanName.take(40),
+                description = book.description.trim().take(120),
+                createdAtMillis = book.createdAtMillis.takeIf { it > 0L } ?: now,
+                updatedAtMillis = now
+            )
+            dao.upsertBook(LedgerBookEntity.fromDomain(normalized))
+            Result.success(normalized)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteBook(bookId: String): Result<Unit> {
+        return try {
+            require(bookId.isNotBlank()) { "账本 ID 不能为空" }
+            dao.deleteRefsByBookId(bookId)
+            dao.deleteBookById(bookId)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun addTransactionsToBooks(
+        txIds: Collection<String>,
+        bookIds: Collection<String>
+    ): Result<Int> {
+        return try {
+            val cleanTx = txIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            val cleanBooks = bookIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (cleanTx.isEmpty() || cleanBooks.isEmpty()) return Result.success(0)
+            val now = System.currentTimeMillis()
+            val refs = buildList(cleanTx.size * cleanBooks.size) {
+                cleanTx.forEach { txId ->
+                    cleanBooks.forEach { bookId ->
+                        add(TransactionBookCrossRefEntity(txId, bookId, now))
+                    }
+                }
+            }
+            refs.chunked(400).forEach { chunk ->
+                dao.insertBookRefs(chunk)
+            }
+            Result.success(refs.size)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun removeTransactionsFromBook(
+        txIds: Collection<String>,
+        bookId: String
+    ): Result<Int> {
+        return try {
+            val cleanTx = txIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (cleanTx.isEmpty() || bookId.isBlank()) return Result.success(0)
+            cleanTx.chunked(400).forEach { chunk ->
+                dao.deleteRefsByBookAndTransactionIds(bookId, chunk)
+            }
+            Result.success(cleanTx.size)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setBooksForTransaction(
+        txId: String,
+        bookIds: Collection<String>
+    ): Result<Unit> {
+        return try {
+            require(txId.isNotBlank()) { "账单 ID 不能为空" }
+            dao.deleteRefsByTransactionId(txId)
+            val cleanBooks = bookIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (cleanBooks.isNotEmpty()) {
+                val now = System.currentTimeMillis()
+                dao.insertBookRefs(cleanBooks.map { TransactionBookCrossRefEntity(txId, it, now) })
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun mergeBooksFromBackup(
+        books: List<LedgerBook>,
+        links: List<TransactionBookLink>
+    ) {
+        if (books.isNotEmpty()) {
+            dao.upsertBooks(books.map { LedgerBookEntity.fromDomain(it) })
+        }
+        if (links.isNotEmpty()) {
+            val existingTxIds = dao.getAllTransactionsOnce().mapTo(HashSet()) { it.id }
+            val existingBookIds = dao.getAllBooksOnce().mapTo(HashSet()) { it.id }
+            val validRefs = links
+                .filter { it.transactionId in existingTxIds && it.bookId in existingBookIds }
+                .map { TransactionBookCrossRefEntity.fromDomain(it) }
+            validRefs.chunked(400).forEach { chunk ->
+                dao.insertBookRefs(chunk)
+            }
         }
     }
 

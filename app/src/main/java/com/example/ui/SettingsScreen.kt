@@ -101,7 +101,7 @@ fun SettingsScreen(
                         SettingsNavRow(
                             icon = AppIcons.AccountBalanceWallet,
                             title = "账单工具",
-                            subtitle = "记账与预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 智能去重 · 存储优化",
+                            subtitle = "账本管理 · 记账与预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 智能去重 · 存储优化",
                             testTag = "menu_ledger_management",
                             onClick = onOpenLedgerManagement
                         )
@@ -143,7 +143,7 @@ fun SettingsScreen(
                         SettingsNavRow(
                             icon = AppIcons.Palette,
                             title = "外观与布局",
-                            subtitle = "动态取色、自定义调色、DPI密度、图标与手势动画",
+                            subtitle = "动态取色、OLED纯黑、底部Tab排序、DPI密度、图标与快捷方式",
                             testTag = "menu_appearance",
                             onClick = onOpenAppearance
                         )

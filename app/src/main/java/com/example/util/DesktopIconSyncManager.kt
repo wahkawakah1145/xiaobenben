@@ -1,5 +1,6 @@
 package com.example.util
 
+import android.app.AppOpsManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -9,7 +10,9 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.net.Uri
 import android.os.Process
+import android.provider.Settings
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.pm.ShortcutInfoCompat
@@ -19,6 +22,12 @@ import androidx.core.graphics.drawable.IconCompat
 import com.example.MainActivity
 import com.example.model.AppIconStyle
 
+enum class ShortcutPermissionState {
+    GRANTED,
+    DENIED,
+    UNSUPPORTED
+}
+
 object DesktopIconSyncManager {
     private const val ALIAS_EMERALD = "com.example.LauncherEmerald"
     private const val ALIAS_MINIMAL = "com.example.LauncherMinimal"
@@ -26,6 +35,8 @@ object DesktopIconSyncManager {
     private const val ALIAS_CYBER = "com.example.LauncherCyber"
     private const val ALIAS_VINTAGE = "com.example.LauncherVintage"
     private const val ALIAS_MONET = "com.example.LauncherMonet"
+
+    private const val MIUI_OP_INSTALL_SHORTCUT = 10017
 
     private val allAliases = listOf(
         ALIAS_EMERALD,
@@ -46,8 +57,8 @@ object DesktopIconSyncManager {
     }
 
     /**
-     * Switches the enabled launcher <activity-alias> without killing the app process immediately,
-     * allowing the UI to ask the user whether to restart immediately or defer restart.
+     * Switches the enabled launcher <activity-alias>.
+     * Caller should confirm with the user before calling this and [restartApp].
      */
     fun applyLauncherIconAlias(
         context: Context,
@@ -84,6 +95,73 @@ object DesktopIconSyncManager {
         )
         context.startActivity(launchIntent)
         Process.killProcess(Process.myPid())
+    }
+
+    /**
+     * Inspects whether the system launcher supports pinning shortcuts and whether OEM permission
+     * (e.g. HyperOS/MIUI OP_INSTALL_SHORTCUT) is currently granted.
+     */
+    fun checkPinShortcutPermission(context: Context): ShortcutPermissionState {
+        if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
+            return ShortcutPermissionState.UNSUPPORTED
+        }
+        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
+            ?: return ShortcutPermissionState.GRANTED
+        val uid = Process.myUid()
+        val pkg = context.packageName
+
+        // Check MIUI / HyperOS custom AppOps code (10017 = OP_INSTALL_SHORTCUT) if available
+        val oemMode = runCatching {
+            val method = AppOpsManager::class.java.getMethod(
+                "checkOpNoThrow",
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                String::class.java
+            )
+            method.invoke(appOps, MIUI_OP_INSTALL_SHORTCUT, uid, pkg) as? Int
+        }.getOrNull()
+
+        if (oemMode == AppOpsManager.MODE_IGNORED || oemMode == AppOpsManager.MODE_ERRORED || oemMode == 5) {
+            return ShortcutPermissionState.DENIED
+        }
+
+        // Also check standard string op if exposed by OEM ROM
+        val stringOpMode = runCatching {
+            @Suppress("DEPRECATION")
+            appOps.checkOpNoThrow("android:install_shortcut", uid, pkg)
+        }.getOrNull()
+        if (stringOpMode == AppOpsManager.MODE_IGNORED || stringOpMode == AppOpsManager.MODE_ERRORED) {
+            return ShortcutPermissionState.DENIED
+        }
+
+        return ShortcutPermissionState.GRANTED
+    }
+
+    /**
+     * Opens the system permission screen where the user can enable "桌面快捷方式" (Pin Shortcut).
+     */
+    fun openShortcutPermissionSettings(context: Context): Boolean {
+        val pkg = context.packageName
+        val candidateIntents = listOf(
+            // Xiaomi HyperOS / MIUI app permission editor (contains "桌面快捷方式")
+            Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                putExtra("extra_pkgname", pkg)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+            // Fallback to Android App Details Settings
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", pkg, null)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+        for (intent in candidateIntents) {
+            val ok = runCatching {
+                context.startActivity(intent)
+                true
+            }.getOrDefault(false)
+            if (ok) return true
+        }
+        return false
     }
 
     /**
@@ -211,8 +289,8 @@ object DesktopIconSyncManager {
     }
 
     /**
-     * Requests pinning a launcher shortcut using the user's custom arbitrary name and
-     * live theme-tinted SVG icon. Returns (success, statusMessage).
+     * Requests pinning a launcher shortcut with fully customizable label, icon style, and icon colors.
+     * Returns (success, statusMessage).
      */
     fun pinCustomDesktopShortcut(
         context: Context,
@@ -221,7 +299,8 @@ object DesktopIconSyncManager {
         primaryColor: Color,
         primaryContainerColor: Color,
         onPrimaryColor: Color,
-        tertiaryColor: Color
+        tertiaryColor: Color,
+        shortcutIdSuffix: String? = null
     ): Pair<Boolean, String> {
         val label = customName.trim().ifBlank { "小本本" }
         val style = AppIconStyle.fromId(styleId)
@@ -234,12 +313,16 @@ object DesktopIconSyncManager {
             sizePx = 192
         )
         if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
-            return false to "当前系统桌面不支持直接创建自定义快捷方式"
+            return false to "当前系统桌面不支持直接创建快捷方式，请检查桌面权限设置"
         }
         val launchIntent = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
         }
-        val shortcut = ShortcutInfoCompat.Builder(context, "xiao_ben_ben_custom_brand")
+        val shortcutId = buildString {
+            append("xiao_ben_ben_custom_")
+            append(shortcutIdSuffix ?: "${style.id}_${label.hashCode().toUInt()}_${(primaryColor.toArgb() and 0xFFFFFF).toString(16)}")
+        }
+        val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
             .setShortLabel(label.take(18))
             .setLongLabel(label.take(28))
             .setIcon(IconCompat.createWithBitmap(bitmap))
@@ -248,9 +331,9 @@ object DesktopIconSyncManager {
 
         val requested = ShortcutManagerCompat.requestPinShortcut(context, shortcut, null)
         return if (requested) {
-            true to "已请求桌面添加「$label」（实时主题配色图标）"
+            true to "已向桌面发起创建「$label」快捷方式请求，如未弹出请在系统权限中允许「桌面快捷方式」"
         } else {
-            false to "未能发起桌面图标创建请求，请检查桌面权限"
+            false to "未能发起桌面快捷方式请求，请授予桌面快捷方式权限后重试"
         }
     }
 }

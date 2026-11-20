@@ -19,6 +19,7 @@ import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
 import com.example.model.IconVisualStyle
 import com.example.model.LatinNumberFont
+import com.example.model.MainBottomTab
 import com.example.model.PredictiveBackStyle
 import com.example.model.TabClickAnimationStyle
 import com.example.model.ThemeMode
@@ -84,6 +85,9 @@ class SettingsDataStore(private val context: Context) {
         val ANALYTICS_PULL_CALENDAR_DISTANCE_DP = intPreferencesKey("appearance_analytics_pull_calendar_distance_dp")
         val APP_ICON_STYLE_ID = stringPreferencesKey("appearance_app_icon_style_id")
         val ICON_VISUAL_STYLE = stringPreferencesKey("appearance_icon_visual_style")
+        val OLED_PURE_BLACK = booleanPreferencesKey("appearance_oled_pure_black")
+        val SHOW_BOOKS_TAB = booleanPreferencesKey("appearance_show_books_tab")
+        val BOTTOM_TAB_ORDER = stringPreferencesKey("appearance_bottom_tab_order")
 
         val EXCHANGE_RATES_JSON = stringPreferencesKey("exchange_rates_json")
         val EXCHANGE_RATES_UPDATED_AT = longPreferencesKey("exchange_rates_updated_at")
@@ -164,7 +168,10 @@ class SettingsDataStore(private val context: Context) {
             analyticsPieSizeDp = (prefs[Keys.ANALYTICS_PIE_SIZE_DP] ?: 220).coerceIn(140, 300),
             analyticsPullCalendarDistanceDp = (prefs[Keys.ANALYTICS_PULL_CALENDAR_DISTANCE_DP] ?: 260).coerceIn(80, 560),
             appIconStyleId = AppIconStyle.fromId(prefs[Keys.APP_ICON_STYLE_ID]).id,
-            iconVisualStyle = IconVisualStyle.fromRaw(prefs[Keys.ICON_VISUAL_STYLE])
+            iconVisualStyle = IconVisualStyle.fromRaw(prefs[Keys.ICON_VISUAL_STYLE]),
+            oledPureBlack = prefs[Keys.OLED_PURE_BLACK] ?: false,
+            showBooksTab = prefs[Keys.SHOW_BOOKS_TAB] ?: true,
+            bottomTabOrder = MainBottomTab.decodeOrder(prefs[Keys.BOTTOM_TAB_ORDER])
         )
     }
 
@@ -290,6 +297,9 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.ANALYTICS_PULL_CALENDAR_DISTANCE_DP] = settings.analyticsPullCalendarDistanceDp.coerceIn(80, 560)
             prefs[Keys.APP_ICON_STYLE_ID] = AppIconStyle.fromId(settings.appIconStyleId).id
             prefs[Keys.ICON_VISUAL_STYLE] = settings.iconVisualStyle.name
+            prefs[Keys.OLED_PURE_BLACK] = settings.oledPureBlack
+            prefs[Keys.SHOW_BOOKS_TAB] = settings.showBooksTab
+            prefs[Keys.BOTTOM_TAB_ORDER] = MainBottomTab.encodeOrder(settings.bottomTabOrder)
         }
     }
 

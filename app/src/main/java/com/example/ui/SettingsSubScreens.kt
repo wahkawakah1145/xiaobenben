@@ -51,11 +51,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import com.example.util.DesktopIconSyncManager
+import com.example.util.ShortcutPermissionState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.luminance
+import com.example.model.MainBottomTab
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -757,9 +765,21 @@ fun AppearanceSettingsScreen(
 ) {
     val context = LocalContext.current
     val supportsMonet = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val scope = rememberCoroutineScope()
     var showColorPickerDialog by remember { mutableStateOf(false) }
-    var restartPromptTitle by remember { mutableStateOf<String?>(null) }
-    var restartPromptBody by remember { mutableStateOf("") }
+    var pendingIconStyleId by remember(appearance.appIconStyleId) { mutableStateOf(appearance.appIconStyleId) }
+    var showIconApplyConfirmDialog by remember { mutableStateOf(false) }
+    var showShortcutPermissionDialog by remember { mutableStateOf(false) }
+    var showShortcutCustomDialog by remember { mutableStateOf(false) }
+    var showShortcutColorPicker by remember { mutableStateOf(false) }
+    var shortcutCustomName by remember(appearance.homeBrandCustomName) {
+        mutableStateOf(appearance.homeBrandCustomName.ifBlank { "小本本" })
+    }
+    var shortcutCustomStyleId by remember(appearance.appIconStyleId) { mutableStateOf(appearance.appIconStyleId) }
+    var shortcutUseThemeColor by remember { mutableStateOf(true) }
+    var shortcutCustomColorArgb by remember(appearance.customPrimaryColorArgb) {
+        mutableStateOf(appearance.customPrimaryColorArgb)
+    }
     var desktopSyncFeedback by remember { mutableStateOf<String?>(null) }
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -881,9 +901,38 @@ fun AppearanceSettingsScreen(
                                 FilterChip(
                                     selected = appearance.themeMode == mode,
                                     onClick = { viewModel.saveAppearanceSettings(appearance.copy(themeMode = mode)) },
-                                    label = { Text(mode.label) }
+                                    label = { Text(mode.label) },
+                                    modifier = Modifier.testTag("theme_mode_chip_${mode.name}")
                                 )
                             }
+                        }
+
+                        val oledAvailable = appearance.themeMode != ThemeMode.LIGHT
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("OLED 纯黑背景", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = if (oledAvailable) {
+                                        "深色模式生效时使用 #000000 纯黑背景与低亮度表面层级"
+                                    } else {
+                                        "切换到「深色」或「跟随系统」后可启用 OLED 纯黑背景"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = appearance.oledPureBlack,
+                                enabled = oledAvailable,
+                                onCheckedChange = { enabled ->
+                                    viewModel.saveAppearanceSettings(appearance.copy(oledPureBlack = enabled))
+                                },
+                                modifier = Modifier.testTag("toggle_oled_pure_black")
+                            )
                         }
 
                         Text("英文与数字字体", style = MaterialTheme.typography.labelLarge)
@@ -1055,6 +1104,9 @@ fun AppearanceSettingsScreen(
             }
 
             item(key = "icon_style_settings") {
+                val pendingStyle = AppIconStyle.fromId(pendingIconStyleId)
+                val hasPendingIconChange = !pendingIconStyleId.equals(appearance.appIconStyleId, ignoreCase = true)
+
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -1064,17 +1116,16 @@ fun AppearanceSettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("应用图标风格与桌面同步", style = MaterialTheme.typography.titleMedium)
+                        Text("图标风格", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "统一采用简约矢量 SVG 绘图，图标配色实时同步莫奈动态取色或手动调色，并同步切换系统桌面图标",
+                            text = if (hasPendingIconChange) {
+                                "已预选「${pendingStyle.label}」，点选不会立即切换；点击下方「应用并重启」确认后再切换桌面入口图标"
+                            } else {
+                                "通过系统 activity-alias 切换桌面图标（含支持壁纸莫奈取色的「莫奈徽标」）；也可通过创建桌面快捷方式完全自定义图标与名称"
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (hasPendingIconChange) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
-
-                        val livePrimary = MaterialTheme.colorScheme.primary
-                        val liveContainer = MaterialTheme.colorScheme.primaryContainer
-                        val liveOnPrimary = MaterialTheme.colorScheme.onPrimary
-                        val liveTertiary = MaterialTheme.colorScheme.tertiary
 
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1082,7 +1133,8 @@ fun AppearanceSettingsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             AppIconStyle.entries.forEach { style ->
-                                val selected = appearance.appIconStyleId.equals(style.id, ignoreCase = true)
+                                val selected = pendingIconStyleId.equals(style.id, ignoreCase = true)
+                                val isApplied = appearance.appIconStyleId.equals(style.id, ignoreCase = true)
                                 Surface(
                                     shape = RoundedCornerShape(16.dp),
                                     color = if (selected) {
@@ -1097,10 +1149,8 @@ fun AppearanceSettingsScreen(
                                     modifier = Modifier
                                         .width(96.dp)
                                         .clickable {
-                                            viewModel.saveAppearanceSettings(appearance.copy(appIconStyleId = style.id))
-                                            DesktopIconSyncManager.applyLauncherIconAlias(context, style)
-                                            restartPromptTitle = "同步桌面图标样式"
-                                            restartPromptBody = "已切换为「${style.label}」简约矢量图标。系统桌面通常需要重启应用进程才能立刻刷新入口图标与配色，是否立即重启？"
+                                            pendingIconStyleId = style.id
+                                            desktopSyncFeedback = null
                                         }
                                         .testTag("app_icon_style_${style.id}")
                                 ) {
@@ -1120,6 +1170,14 @@ fun AppearanceSettingsScreen(
                                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                                             maxLines = 1
                                         )
+                                        if (isApplied) {
+                                            Text(
+                                                text = "当前使用",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                maxLines = 1
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1131,34 +1189,30 @@ fun AppearanceSettingsScreen(
                         ) {
                             OutlinedButton(
                                 onClick = {
-                                    val customLabel = appearance.homeBrandCustomName.ifBlank { "小本本" }
-                                    val (_, msg) = DesktopIconSyncManager.pinCustomDesktopShortcut(
-                                        context = context,
-                                        customName = customLabel,
-                                        styleId = appearance.appIconStyleId,
-                                        primaryColor = livePrimary,
-                                        primaryContainerColor = liveContainer,
-                                        onPrimaryColor = liveOnPrimary,
-                                        tertiaryColor = liveTertiary
-                                    )
-                                    desktopSyncFeedback = msg
+                                    shortcutCustomName = appearance.homeBrandCustomName.ifBlank { "小本本" }
+                                    shortcutCustomStyleId = pendingIconStyleId
+                                    val permState = DesktopIconSyncManager.checkPinShortcutPermission(context)
+                                    if (permState == ShortcutPermissionState.GRANTED) {
+                                        showShortcutCustomDialog = true
+                                    } else {
+                                        showShortcutPermissionDialog = true
+                                    }
                                 },
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("sync_themed_desktop_shortcut_button")
+                                    .weight(1.1f)
+                                    .testTag("create_desktop_shortcut_button")
                             ) {
-                                Text("同步主题色与名称到桌面", maxLines = 1)
+                                Icon(AppIcons.AddToHomeScreen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("创建桌面快捷方式", maxLines = 1)
                             }
-                            OutlinedButton(
-                                onClick = {
-                                    val curStyle = AppIconStyle.fromId(appearance.appIconStyleId)
-                                    DesktopIconSyncManager.applyLauncherIconAlias(context, curStyle)
-                                    restartPromptTitle = "应用桌面更改"
-                                    restartPromptBody = "系统桌面缓存更新需重启软件才能完整生效，点击「立即重启」马上刷新，或点击「确认」稍后生效。"
-                                },
-                                modifier = Modifier.testTag("trigger_desktop_restart_dialog_button")
+                            Button(
+                                onClick = { showIconApplyConfirmDialog = true },
+                                modifier = Modifier
+                                    .weight(0.95f)
+                                    .testTag("apply_icon_and_restart_button")
                             ) {
-                                Text("应用重启")
+                                Text("应用并重启", maxLines = 1)
                             }
                         }
 
@@ -1191,6 +1245,137 @@ fun AppearanceSettingsScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+            }
+
+            item(key = "bottom_tab_bar_customization") {
+                val normalizedOrder = remember(appearance.bottomTabOrder) {
+                    MainBottomTab.normalizeOrder(appearance.bottomTabOrder)
+                }
+
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("底部导航栏自定义", style = MaterialTheme.typography.titleMedium)
+                            TextButton(
+                                onClick = {
+                                    viewModel.saveAppearanceSettings(
+                                        appearance.copy(
+                                            bottomTabOrder = MainBottomTab.defaultOrder,
+                                            showBooksTab = true
+                                        )
+                                    )
+                                },
+                                modifier = Modifier.testTag("bottom_tab_order_reset_button")
+                            ) {
+                                Text("恢复默认")
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("底部显示「账本」标签页", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = "隐藏后仍可在「设置 -> 账单工具 -> 账本管理与分析」中完整使用账本功能",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = appearance.showBooksTab,
+                                onCheckedChange = { show ->
+                                    viewModel.saveAppearanceSettings(appearance.copy(showBooksTab = show))
+                                },
+                                modifier = Modifier.testTag("toggle_show_books_tab")
+                            )
+                        }
+
+                        HorizontalDivider()
+
+                        Text("自定义底部 Tab 位置（从左到右顺序）", style = MaterialTheme.typography.labelLarge)
+
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            normalizedOrder.forEachIndexed { index, tab ->
+                                val isHidden = tab == MainBottomTab.BOOKS && !appearance.showBooksTab
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainer,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("bottom_tab_order_row_${tab.name}")
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Text(
+                                            text = "${index + 1}.",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = tab.label,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Medium,
+                                                color = if (isHidden) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            if (isHidden) {
+                                                Text(
+                                                    text = "当前已隐藏（可在账单工具内访问）",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        IconButton(
+                                            enabled = index > 0,
+                                            onClick = {
+                                                val mutable = normalizedOrder.toMutableList()
+                                                val item = mutable.removeAt(index)
+                                                mutable.add(index - 1, item)
+                                                viewModel.saveAppearanceSettings(appearance.copy(bottomTabOrder = mutable))
+                                            },
+                                            modifier = Modifier.testTag("tab_move_up_${tab.name}")
+                                        ) {
+                                            Icon(AppIcons.ArrowUpward, contentDescription = "前移", modifier = Modifier.size(18.dp))
+                                        }
+                                        IconButton(
+                                            enabled = index < normalizedOrder.lastIndex,
+                                            onClick = {
+                                                val mutable = normalizedOrder.toMutableList()
+                                                val item = mutable.removeAt(index)
+                                                mutable.add(index + 1, item)
+                                                viewModel.saveAppearanceSettings(appearance.copy(bottomTabOrder = mutable))
+                                            },
+                                            modifier = Modifier.testTag("tab_move_down_${tab.name}")
+                                        ) {
+                                            Icon(AppIcons.ArrowDownward, contentDescription = "后移", modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1749,29 +1934,226 @@ fun AppearanceSettingsScreen(
         )
     }
 
-    restartPromptTitle?.let { dialogTitle ->
+    if (showIconApplyConfirmDialog) {
+        val pendingStyle = AppIconStyle.fromId(pendingIconStyleId)
         AlertDialog(
-            onDismissRequest = { restartPromptTitle = null },
-            title = { Text(dialogTitle) },
-            text = { Text(restartPromptBody) },
+            onDismissRequest = { showIconApplyConfirmDialog = false },
+            title = { Text("确认切换图标风格并重启") },
+            text = {
+                Text(
+                    "确认将桌面应用图标切换为「${pendingStyle.label}」吗？确认后将更新系统 activity-alias 入口并重启应用以刷新桌面图标。"
+                )
+            },
             dismissButton = {
                 TextButton(
-                    onClick = { restartPromptTitle = null },
-                    modifier = Modifier.testTag("desktop_sync_confirm_no_restart_button")
+                    onClick = { showIconApplyConfirmDialog = false },
+                    modifier = Modifier.testTag("icon_apply_cancel_button")
                 ) {
-                    Text("确认（不重启）")
+                    Text("取消")
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        restartPromptTitle = null
-                        DesktopIconSyncManager.restartApp(context)
+                        showIconApplyConfirmDialog = false
+                        scope.launch {
+                            viewModel.saveAppearanceSettingsSuspend(
+                                appearance.copy(appIconStyleId = pendingStyle.id)
+                            )
+                            DesktopIconSyncManager.applyLauncherIconAlias(context, pendingStyle)
+                            delay(150L)
+                            DesktopIconSyncManager.restartApp(context)
+                        }
                     },
-                    modifier = Modifier.testTag("desktop_sync_restart_now_button")
+                    modifier = Modifier.testTag("icon_apply_confirm_restart_button")
                 ) {
-                    Text("立即重启")
+                    Text("确认并重启")
                 }
+            }
+        )
+    }
+
+    if (showShortcutPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showShortcutPermissionDialog = false },
+            title = { Text("需要桌面快捷方式权限") },
+            text = {
+                Text(
+                    "当前系统未授予本应用「桌面快捷方式」权限或桌面限制了静默创建。请前往应用权限设置开启「桌面快捷方式」后，即可创建完全自定义名称、风格与配色的桌面图标。"
+                )
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { showShortcutPermissionDialog = false }) {
+                        Text("取消")
+                    }
+                    TextButton(
+                        onClick = {
+                            showShortcutPermissionDialog = false
+                            showShortcutCustomDialog = true
+                        },
+                        modifier = Modifier.testTag("shortcut_perm_try_anyway_button")
+                    ) {
+                        Text("仍尝试创建")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showShortcutPermissionDialog = false
+                        val opened = DesktopIconSyncManager.openShortcutPermissionSettings(context)
+                        desktopSyncFeedback = if (opened) {
+                            "请在打开的权限页中允许「桌面快捷方式」，返回后再点击创建"
+                        } else {
+                            "未能自动跳转系统权限页，请手动在系统设置中授予「桌面快捷方式」权限"
+                        }
+                    },
+                    modifier = Modifier.testTag("shortcut_perm_open_settings_button")
+                ) {
+                    Text("前往授权")
+                }
+            }
+        )
+    }
+
+    if (showShortcutCustomDialog) {
+        val livePrimary = MaterialTheme.colorScheme.primary
+        val liveContainer = MaterialTheme.colorScheme.primaryContainer
+        val liveOnPrimary = MaterialTheme.colorScheme.onPrimary
+        val liveTertiary = MaterialTheme.colorScheme.tertiary
+
+        val customSeedColor = Color(shortcutCustomColorArgb.toInt())
+        val effectivePrimary = if (shortcutUseThemeColor) livePrimary else customSeedColor
+        val effectiveContainer = if (shortcutUseThemeColor) liveContainer else customSeedColor.copy(alpha = 0.22f)
+        val effectiveOnPrimary = if (shortcutUseThemeColor) liveOnPrimary else {
+            if (customSeedColor.luminance() > 0.45f) Color(0xFF101413) else Color.White
+        }
+        val effectiveTertiary = if (shortcutUseThemeColor) liveTertiary else customSeedColor
+
+        AlertDialog(
+            onDismissRequest = { showShortcutCustomDialog = false },
+            title = { Text("创建自定义桌面快捷方式") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "保留原有桌面图标的同时，额外添加一个可完全自定义名称、风格与配色的桌面快捷方式。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = shortcutCustomName,
+                        onValueChange = { shortcutCustomName = it.take(18) },
+                        label = { Text("快捷方式桌面名称") },
+                        placeholder = { Text("小本本") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("shortcut_custom_name_input")
+                    )
+
+                    Text("选择快捷方式图标风格", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AppIconStyle.entries.forEach { st ->
+                            FilterChip(
+                                selected = shortcutCustomStyleId.equals(st.id, ignoreCase = true),
+                                onClick = { shortcutCustomStyleId = st.id },
+                                label = { Text(st.label) }
+                            )
+                        }
+                    }
+
+                    Text("快捷方式图标配色", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = shortcutUseThemeColor,
+                            onClick = { shortcutUseThemeColor = true },
+                            label = { Text("跟随当前主题色") }
+                        )
+                        FilterChip(
+                            selected = !shortcutUseThemeColor,
+                            onClick = { shortcutUseThemeColor = false },
+                            label = { Text("自定义图标色") }
+                        )
+                    }
+
+                    if (!shortcutUseThemeColor) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .clip(CircleShape)
+                                        .background(customSeedColor)
+                                        .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                                )
+                                Text(
+                                    text = "#%06X".format(shortcutCustomColorArgb.toInt() and 0xFFFFFF),
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                            OutlinedButton(onClick = { showShortcutColorPicker = true }) {
+                                Text("选取颜色")
+                            }
+                        }
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showShortcutCustomDialog = false }) {
+                    Text("取消")
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showShortcutCustomDialog = false
+                        val (ok, msg) = DesktopIconSyncManager.pinCustomDesktopShortcut(
+                            context = context,
+                            customName = shortcutCustomName,
+                            styleId = shortcutCustomStyleId,
+                            primaryColor = effectivePrimary,
+                            primaryContainerColor = effectiveContainer,
+                            onPrimaryColor = effectiveOnPrimary,
+                            tertiaryColor = effectiveTertiary
+                        )
+                        desktopSyncFeedback = msg
+                        if (!ok) {
+                            showShortcutPermissionDialog = true
+                        }
+                    },
+                    modifier = Modifier.testTag("shortcut_custom_confirm_button")
+                ) {
+                    Text("创建到桌面")
+                }
+            }
+        )
+    }
+
+    if (showShortcutColorPicker) {
+        CustomColorPickerDialog(
+            initialColorArgb = shortcutCustomColorArgb,
+            onDismiss = { showShortcutColorPicker = false },
+            onConfirm = { argb ->
+                shortcutCustomColorArgb = argb
+                shortcutUseThemeColor = false
+                showShortcutColorPicker = false
             }
         )
     }

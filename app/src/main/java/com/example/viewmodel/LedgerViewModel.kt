@@ -21,7 +21,9 @@ import com.example.model.CustomParsingRule
 import com.example.model.ExchangeRateAutoUpdateFrequency
 import com.example.model.ExchangeRateState
 import com.example.model.HomeStatsDimension
+import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
+import com.example.model.TransactionBookLink
 import com.example.model.NotificationInquiry
 import com.example.model.ParseMethod
 import com.example.model.ParsedNotificationResult
@@ -138,6 +140,37 @@ class LedgerViewModel(
                 started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
                 initialValue = UiState.Loading
             )
+
+    val booksState: StateFlow<List<LedgerBook>> =
+        repository.observeBooks()
+            .catch { error ->
+                if (error is CancellationException) throw error
+                emit(emptyList())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                initialValue = emptyList()
+            )
+
+    val bookLinksState: StateFlow<List<TransactionBookLink>> =
+        repository.observeBookLinks()
+            .catch { error ->
+                if (error is CancellationException) throw error
+                emit(emptyList())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                initialValue = emptyList()
+            )
+
+    private val _selectedAnalyticsBookId = MutableStateFlow<String?>(null)
+    val selectedAnalyticsBookId: StateFlow<String?> = _selectedAnalyticsBookId.asStateFlow()
+
+    fun selectAnalyticsBook(bookId: String?) {
+        _selectedAnalyticsBookId.value = bookId?.takeIf { it.isNotBlank() }
+    }
 
     val inquiriesState: StateFlow<List<NotificationInquiry>> =
         repository.observeInquiries()
@@ -687,6 +720,89 @@ class LedgerViewModel(
         }
     }
 
+    suspend fun saveAppearanceSettingsSuspend(settings: AppearanceSettings): Result<Unit> {
+        return repository.saveAppearanceSettings(settings)
+    }
+
+    fun saveBook(
+        name: String,
+        description: String = "",
+        colorArgb: Long = 0xFF0F6B54L,
+        existingBookId: String? = null,
+        onSaved: ((LedgerBook) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            val existing = existingBookId?.let { id -> booksState.value.firstOrNull { it.id == id } }
+            val book = (existing ?: LedgerBook(name = name)).copy(
+                name = name.trim(),
+                description = description.trim(),
+                colorArgb = colorArgb
+            )
+            repository.saveBook(book)
+                .onSuccess { saved ->
+                    _actionMessage.value = if (existing == null) "已创建账本「${saved.name}」" else "已更新账本「${saved.name}」"
+                    onSaved?.invoke(saved)
+                }
+                .onFailure { err ->
+                    _actionMessage.value = "保存账本失败：${err.localizedMessage ?: "请检查名称"}"
+                }
+        }
+    }
+
+    fun deleteBook(bookId: String) {
+        viewModelScope.launch {
+            val targetName = booksState.value.firstOrNull { it.id == bookId }?.name
+            repository.deleteBook(bookId)
+                .onSuccess {
+                    if (_selectedAnalyticsBookId.value == bookId) {
+                        _selectedAnalyticsBookId.value = null
+                    }
+                    _actionMessage.value = targetName?.let { "已删除账本「$it」（账单本身已保留）" } ?: "已删除账本"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = "删除账本失败：${err.localizedMessage ?: "请重试"}"
+                }
+        }
+    }
+
+    fun addTransactionsToBooks(txIds: Collection<String>, bookIds: Collection<String>) {
+        viewModelScope.launch {
+            repository.addTransactionsToBooks(txIds, bookIds)
+                .onSuccess {
+                    _actionMessage.value = "已将 ${txIds.size} 笔账单加入 ${bookIds.size} 个账本"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = "加入账本失败：${err.localizedMessage ?: "请重试"}"
+                }
+        }
+    }
+
+    fun removeTransactionsFromBook(txIds: Collection<String>, bookId: String) {
+        viewModelScope.launch {
+            repository.removeTransactionsFromBook(txIds, bookId)
+                .onSuccess { count ->
+                    if (count > 0) _actionMessage.value = "已从账本移出 $count 笔账单"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = "移出失败：${err.localizedMessage ?: "请重试"}"
+                }
+        }
+    }
+
+    fun buildQuickSelectionSummary(
+        transactions: List<LedgerTransaction>,
+        scopeTitle: String = "选中账单快速分析"
+    ): String {
+        val settings = settingsState.value
+        val rates = exchangeRateState.value.ratesToCny
+        return LocalSpendingAnalyzer.generateQuickSelectionSummary(
+            transactions = transactions,
+            baseCurrencyCode = settings.baseCurrencyCode,
+            ratesToCny = rates,
+            scopeTitle = scopeTitle
+        )
+    }
+
     fun saveAppearanceSettings(settings: AppearanceSettings) {
         viewModelScope.launch {
             repository.saveAppearanceSettings(settings)
@@ -1044,10 +1160,16 @@ class LedgerViewModel(
         return buildPeriodInsight(AnalyticsGranularity.MONTH, cal.timeInMillis)
     }
 
-    fun buildPeriodInsight(granularity: AnalyticsGranularity, anchorMillis: Long): String {
-        val allTx = (transactionsState.value as? UiState.Success)?.data ?: emptyList()
-        val periodTx = filterByGranularity(allTx, granularity, anchorMillis)
-        val periodLabel = formatPeriodTitle(granularity, anchorMillis)
+    fun buildPeriodInsight(
+        granularity: AnalyticsGranularity,
+        anchorMillis: Long,
+        scopedTransactions: List<LedgerTransaction>? = null,
+        bookNamePrefix: String? = null
+    ): String {
+        val sourceTx = scopedTransactions ?: ((transactionsState.value as? UiState.Success)?.data ?: emptyList())
+        val periodTx = filterByGranularity(sourceTx, granularity, anchorMillis)
+        val rawLabel = formatPeriodTitle(granularity, anchorMillis)
+        val periodLabel = if (!bookNamePrefix.isNullOrBlank()) "「$bookNamePrefix」$rawLabel" else rawLabel
         val settings = settingsState.value
         val rates = exchangeRateState.value.ratesToCny
         return LocalSpendingAnalyzer.generatePeriodSummary(

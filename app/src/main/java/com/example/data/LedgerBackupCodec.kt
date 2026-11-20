@@ -2,7 +2,9 @@ package com.example.data
 
 import com.example.model.BudgetSettings
 import com.example.model.CustomParsingRule
+import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
+import com.example.model.TransactionBookLink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -11,7 +13,9 @@ data class LedgerBackupPayload(
     val transactions: List<LedgerTransaction>,
     val parsingRules: List<CustomParsingRule>,
     val settings: BudgetSettings?,
-    val exportedAtMillis: Long
+    val exportedAtMillis: Long,
+    val books: List<LedgerBook> = emptyList(),
+    val bookLinks: List<TransactionBookLink> = emptyList()
 )
 
 object LedgerBackupCodec {
@@ -19,10 +23,12 @@ object LedgerBackupCodec {
     fun encodeBackupJson(
         transactions: List<LedgerTransaction>,
         rules: List<CustomParsingRule>,
-        settings: BudgetSettings
+        settings: BudgetSettings,
+        books: List<LedgerBook> = emptyList(),
+        bookLinks: List<TransactionBookLink> = emptyList()
     ): String {
         val rootJson = JSONObject().apply {
-            put("version", 3)
+            put("version", 4)
             put("appId", "com.live150yo.lvshuiqingshan")
             put("exportedAtMillis", System.currentTimeMillis())
             put("settings", JSONObject().apply {
@@ -91,6 +97,31 @@ object LedgerBackupCodec {
                     })
                 }
             })
+            if (books.isNotEmpty()) {
+                put("books", JSONArray().apply {
+                    books.forEach { book ->
+                        put(JSONObject().apply {
+                            put("id", book.id)
+                            put("name", book.name)
+                            if (book.description.isNotBlank()) put("description", book.description)
+                            put("colorArgb", book.colorArgb)
+                            put("createdAtMillis", book.createdAtMillis)
+                            put("updatedAtMillis", book.updatedAtMillis)
+                        })
+                    }
+                })
+            }
+            if (bookLinks.isNotEmpty()) {
+                put("bookLinks", JSONArray().apply {
+                    bookLinks.forEach { link ->
+                        put(JSONObject().apply {
+                            put("transactionId", link.transactionId)
+                            put("bookId", link.bookId)
+                            put("addedAtMillis", link.addedAtMillis)
+                        })
+                    }
+                })
+            }
         }
         return rootJson.toString()
     }
@@ -156,6 +187,42 @@ object LedgerBackupCodec {
             }
         }
 
+        val booksArray = root.optJSONArray("books") ?: JSONArray()
+        val bookList = buildList {
+            for (i in 0 until booksArray.length()) {
+                val o = booksArray.getJSONObject(i)
+                val name = o.optString("name").trim()
+                if (name.isEmpty()) continue
+                add(
+                    LedgerBook(
+                        id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
+                        name = name.take(40),
+                        description = o.optString("description", "").take(120),
+                        colorArgb = o.optLong("colorArgb", 0xFF0F6B54L),
+                        createdAtMillis = o.optLong("createdAtMillis", System.currentTimeMillis()),
+                        updatedAtMillis = o.optLong("updatedAtMillis", System.currentTimeMillis())
+                    )
+                )
+            }
+        }
+
+        val linksArray = root.optJSONArray("bookLinks") ?: JSONArray()
+        val linkList = buildList {
+            for (i in 0 until linksArray.length()) {
+                val o = linksArray.getJSONObject(i)
+                val txId = o.optString("transactionId").trim()
+                val bookId = o.optString("bookId").trim()
+                if (txId.isEmpty() || bookId.isEmpty()) continue
+                add(
+                    TransactionBookLink(
+                        transactionId = txId,
+                        bookId = bookId,
+                        addedAtMillis = o.optLong("addedAtMillis", System.currentTimeMillis())
+                    )
+                )
+            }
+        }
+
         val parsedSettings = root.optJSONObject("settings")?.let { s ->
             currentSettings.copy(
                 monthlyBudgetCents = s.optLong("monthlyBudgetCents", currentSettings.monthlyBudgetCents),
@@ -177,7 +244,9 @@ object LedgerBackupCodec {
             transactions = txList,
             parsingRules = ruleList,
             settings = parsedSettings,
-            exportedAtMillis = root.optLong("exportedAtMillis", 0L)
+            exportedAtMillis = root.optLong("exportedAtMillis", 0L),
+            books = bookList,
+            bookLinks = linkList
         )
     }
 }

@@ -147,7 +147,11 @@ jobs:
             find app/build/outputs/apk -maxdepth 3 -type f || true
             exit 1
           fi
-          cp "${APK_SRC}" "dist/xiaobenben-${TAG}-arm64-v8a.apk"
+          APK_DEST="dist/xiaobenben-${TAG}-arm64-v8a.apk"
+          cp "${APK_SRC}" "${APK_DEST}"
+          APK_BYTES="$(stat -c%s "${APK_DEST}" 2>/dev/null || wc -c < "${APK_DEST}")"
+          APK_SIZE_HR="$(awk -v b="${APK_BYTES}" 'BEGIN { printf "%.2f MB", b / 1048576 }')"
+          echo "APK_SIZE_HR=${APK_SIZE_HR}" >> "$GITHUB_ENV"
           ls -lh dist/
 
       - name: Generate release changelog
@@ -164,6 +168,9 @@ jobs:
             echo ""
             echo "- 包名：\`com.live150yo.lvshuiqingshan\`"
             echo "- 架构：\`arm64-v8a\` (ARMv8)"
+            if [ -n "${APK_SIZE_HR:-}" ]; then
+              echo "- 安装包体积：\`${APK_SIZE_HR}\`"
+            fi
             echo "- 系统要求：Android 11 (API 30)+ · Target Android 17 (API 37)"
             if [ -n "${SIGNING_SHA256:-}" ]; then
               echo "- 签名 SHA-256：\`${SIGNING_SHA256}\`"

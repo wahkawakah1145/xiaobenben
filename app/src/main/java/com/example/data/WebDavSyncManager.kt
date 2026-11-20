@@ -80,7 +80,9 @@ class WebDavSyncManager {
             val transactions = repository.getAllTransactionsOnce()
             val rules = repository.getRulesOnce()
             val settings = repository.getSettingsOnce()
-            val backupJson = LedgerBackupCodec.encodeBackupJson(transactions, rules, settings)
+            val books = repository.getAllBooksOnce()
+            val bookLinks = repository.getAllBookLinksOnce()
+            val backupJson = LedgerBackupCodec.encodeBackupJson(transactions, rules, settings, books, bookLinks)
 
             val putBuilder = Request.Builder()
                 .url(fileUrl)
@@ -146,6 +148,7 @@ class WebDavSyncManager {
 
             repository.mergeTransactionsFromBackup(payload.transactions)
             repository.mergeRulesFromBackup(payload.parsingRules)
+            repository.mergeBooksFromBackup(payload.books, payload.bookLinks)
             payload.settings?.let { restored ->
                 repository.saveSettings(
                     restored.copy(

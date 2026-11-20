@@ -73,8 +73,13 @@ android {
       excludes += listOf(
         "META-INF/LICENSE*",
         "META-INF/NOTICE*",
+        "META-INF/AL2.0",
+        "META-INF/LGPL2.1",
+        "META-INF/DEPENDENCIES",
         "META-INF/INDEX.LIST",
         "META-INF/*.kotlin_module",
+        "META-INF/com/android/build/gradle/app-metadata.properties",
+        "META-INF/version-control-info.textproto",
         "DebugProbesKt.bin"
       )
     }

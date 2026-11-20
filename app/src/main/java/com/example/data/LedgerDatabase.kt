@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
@@ -13,7 +15,9 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.model.CustomParsingRule
+import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
+import com.example.model.TransactionBookLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -195,6 +199,77 @@ data class NotificationInquiryEntity(
     }
 }
 
+
+@Entity(tableName = "ledger_books")
+data class LedgerBookEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val description: String = "",
+    val colorArgb: Long = 0xFF0F6B54L,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+) {
+    fun toDomain(): LedgerBook = LedgerBook(
+        id = id,
+        name = name,
+        description = description,
+        colorArgb = colorArgb,
+        createdAtMillis = createdAtMillis,
+        updatedAtMillis = updatedAtMillis
+    )
+
+    companion object {
+        fun fromDomain(book: LedgerBook): LedgerBookEntity = LedgerBookEntity(
+            id = book.id,
+            name = book.name,
+            description = book.description,
+            colorArgb = book.colorArgb,
+            createdAtMillis = book.createdAtMillis,
+            updatedAtMillis = book.updatedAtMillis
+        )
+    }
+}
+
+@Entity(
+    tableName = "transaction_book_cross_ref",
+    primaryKeys = ["transactionId", "bookId"],
+    indices = [Index(value = ["bookId"]), Index(value = ["transactionId"])],
+    foreignKeys = [
+        ForeignKey(
+            entity = TransactionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["transactionId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = LedgerBookEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["bookId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
+data class TransactionBookCrossRefEntity(
+    val transactionId: String,
+    val bookId: String,
+    val addedAtMillis: Long = System.currentTimeMillis()
+) {
+    fun toDomain(): TransactionBookLink = TransactionBookLink(
+        transactionId = transactionId,
+        bookId = bookId,
+        addedAtMillis = addedAtMillis
+    )
+
+    companion object {
+        fun fromDomain(link: TransactionBookLink): TransactionBookCrossRefEntity =
+            TransactionBookCrossRefEntity(
+                transactionId = link.transactionId,
+                bookId = link.bookId,
+                addedAtMillis = link.addedAtMillis
+            )
+    }
+}
+
 @Dao
 interface LedgerDao {
     @Query("SELECT * FROM transactions ORDER BY occurredAtMillis DESC")
@@ -265,11 +340,53 @@ interface LedgerDao {
 
     @Query("DELETE FROM notification_inquiries WHERE createdAtMillis < :cutoffMillis")
     suspend fun pruneStaleInquiries(cutoffMillis: Long): Int
+
+    @Query("SELECT * FROM ledger_books ORDER BY createdAtMillis ASC")
+    fun observeAllBooks(): Flow<List<LedgerBookEntity>>
+
+    @Query("SELECT * FROM ledger_books ORDER BY createdAtMillis ASC")
+    suspend fun getAllBooksOnce(): List<LedgerBookEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertBook(entity: LedgerBookEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertBooks(entities: List<LedgerBookEntity>)
+
+    @Query("DELETE FROM ledger_books WHERE id = :id")
+    suspend fun deleteBookById(id: String)
+
+    @Query("SELECT * FROM transaction_book_cross_ref")
+    fun observeAllBookRefs(): Flow<List<TransactionBookCrossRefEntity>>
+
+    @Query("SELECT * FROM transaction_book_cross_ref")
+    suspend fun getAllBookRefsOnce(): List<TransactionBookCrossRefEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertBookRefs(refs: List<TransactionBookCrossRefEntity>)
+
+    @Query("DELETE FROM transaction_book_cross_ref WHERE bookId = :bookId")
+    suspend fun deleteRefsByBookId(bookId: String)
+
+    @Query("DELETE FROM transaction_book_cross_ref WHERE transactionId = :txId")
+    suspend fun deleteRefsByTransactionId(txId: String)
+
+    @Query("DELETE FROM transaction_book_cross_ref WHERE transactionId IN (:txIds)")
+    suspend fun deleteRefsByTransactionIds(txIds: List<String>)
+
+    @Query("DELETE FROM transaction_book_cross_ref WHERE bookId = :bookId AND transactionId IN (:txIds)")
+    suspend fun deleteRefsByBookAndTransactionIds(bookId: String, txIds: List<String>)
 }
 
 @Database(
-    entities = [TransactionEntity::class, ParsingRuleEntity::class, NotificationInquiryEntity::class],
-    version = 5,
+    entities = [
+        TransactionEntity::class,
+        ParsingRuleEntity::class,
+        NotificationInquiryEntity::class,
+        LedgerBookEntity::class,
+        TransactionBookCrossRefEntity::class
+    ],
+    version = 6,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -334,6 +451,38 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `ledger_books` (
+                        `id` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `description` TEXT NOT NULL,
+                        `colorArgb` INTEGER NOT NULL,
+                        `createdAtMillis` INTEGER NOT NULL,
+                        `updatedAtMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `transaction_book_cross_ref` (
+                        `transactionId` TEXT NOT NULL,
+                        `bookId` TEXT NOT NULL,
+                        `addedAtMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`transactionId`, `bookId`),
+                        FOREIGN KEY(`transactionId`) REFERENCES `transactions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(`bookId`) REFERENCES `ledger_books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transaction_book_cross_ref_bookId` ON `transaction_book_cross_ref` (`bookId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transaction_book_cross_ref_transactionId` ON `transaction_book_cross_ref` (`transactionId`)")
+            }
+        }
+
         fun getInstance(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -341,7 +490,7 @@ abstract class LedgerDatabase : RoomDatabase() {
                     LedgerDatabase::class.java,
                     "smart_ledger.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .addCallback(object : Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)

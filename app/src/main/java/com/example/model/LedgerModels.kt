@@ -274,6 +274,56 @@ enum class AnalyticsGranularity(val label: String) {
     DAY("日")
 }
 
+
+enum class MainBottomTab(val id: String, val label: String) {
+    LEDGER("ledger", "账单"),
+    BOOKS("books", "账本"),
+    ANALYTICS("analytics", "收支分析"),
+    SETTINGS("settings", "设置");
+
+    companion object {
+        val defaultOrder: List<MainBottomTab> = listOf(LEDGER, BOOKS, ANALYTICS, SETTINGS)
+
+        fun fromRaw(raw: String?): MainBottomTab? =
+            entries.firstOrNull {
+                it.name.equals(raw?.trim(), ignoreCase = true) ||
+                    it.id.equals(raw?.trim(), ignoreCase = true)
+            }
+
+        fun normalizeOrder(order: List<MainBottomTab>): List<MainBottomTab> {
+            val distinct = order.distinct().toMutableList()
+            defaultOrder.forEach { tab ->
+                if (tab !in distinct) distinct.add(tab)
+            }
+            return distinct
+        }
+
+        fun decodeOrder(raw: String?): List<MainBottomTab> {
+            if (raw.isNullOrBlank()) return defaultOrder
+            val parsed = raw.split(",").mapNotNull { fromRaw(it) }
+            return normalizeOrder(parsed)
+        }
+
+        fun encodeOrder(order: List<MainBottomTab>): String =
+            normalizeOrder(order).joinToString(",") { it.name }
+    }
+}
+
+data class LedgerBook(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val description: String = "",
+    val colorArgb: Long = 0xFF0F6B54L,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
+)
+
+data class TransactionBookLink(
+    val transactionId: String,
+    val bookId: String,
+    val addedAtMillis: Long = System.currentTimeMillis()
+)
+
 data class AppearanceSettings(
     val dynamicColor: Boolean = true,
     val customPrimaryColorArgb: Long = 0xFF0F6B54L,
@@ -304,8 +354,16 @@ data class AppearanceSettings(
     val analyticsPieSizeDp: Int = 220,
     val analyticsPullCalendarDistanceDp: Int = 260,
     val appIconStyleId: String = AppIconStyle.EMERALD.id,
-    val iconVisualStyle: IconVisualStyle = IconVisualStyle.FILLED
-)
+    val iconVisualStyle: IconVisualStyle = IconVisualStyle.FILLED,
+    val oledPureBlack: Boolean = false,
+    val showBooksTab: Boolean = true,
+    val bottomTabOrder: List<MainBottomTab> = MainBottomTab.defaultOrder
+) {
+    fun visibleBottomTabs(): List<MainBottomTab> {
+        val normalized = MainBottomTab.normalizeOrder(bottomTabOrder)
+        return if (showBooksTab) normalized else normalized.filter { it != MainBottomTab.BOOKS }
+    }
+}
 
 enum class HomeStatsDimension(val label: String, val shortLabel: String) {
     TODAY("今天收支", "今日"),

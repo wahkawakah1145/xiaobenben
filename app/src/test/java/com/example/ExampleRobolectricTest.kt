@@ -642,5 +642,102 @@ class ExampleRobolectricTest {
     assertEquals(6, com.example.service.NotificationBridge.capturedLogs.value.size)
     com.example.service.NotificationBridge.trimMemoryCaches(keepRecentLogs = 0)
   }
-}
 
+  @Test
+  fun `books multi-assignment backup round-trip and quick selection summary work end to end`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+
+    val tx1 = com.example.model.LedgerTransaction(
+      id = "book-tx-1",
+      amountCents = 8800L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "东京拉面",
+      channel = "支付宝"
+    )
+    val tx2 = com.example.model.LedgerTransaction(
+      id = "book-tx-2",
+      amountCents = 20000L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.INCOME.name,
+      category = "退款返现",
+      merchant = "酒店退押金",
+      channel = "招商银行"
+    )
+    repository.addTransaction(tx1).getOrThrow()
+    repository.addTransaction(tx2).getOrThrow()
+
+    val bookTrip = repository.saveBook(com.example.model.LedgerBook(name = "旅行账本", description = "出游花销")).getOrThrow()
+    val bookReimburse = repository.saveBook(com.example.model.LedgerBook(name = "报销账本")).getOrThrow()
+
+    repository.addTransactionsToBooks(listOf(tx1.id, tx2.id), listOf(bookTrip.id, bookReimburse.id)).getOrThrow()
+    val links = repository.getAllBookLinksOnce()
+    org.junit.Assert.assertTrue(links.any { it.transactionId == tx1.id && it.bookId == bookTrip.id })
+    org.junit.Assert.assertTrue(links.any { it.transactionId == tx1.id && it.bookId == bookReimburse.id })
+
+    val encoded = com.example.data.LedgerBackupCodec.encodeBackupJson(
+      transactions = listOf(tx1, tx2),
+      rules = emptyList(),
+      settings = com.example.model.BudgetSettings(),
+      books = listOf(bookTrip, bookReimburse),
+      bookLinks = links
+    )
+    val decoded = com.example.data.LedgerBackupCodec.decodeBackupJson(encoded)
+    assertEquals(2, decoded.books.size)
+    org.junit.Assert.assertTrue(decoded.bookLinks.size >= 4)
+
+    val quickText = com.example.parser.LocalSpendingAnalyzer.generateQuickSelectionSummary(
+      transactions = listOf(tx1, tx2),
+      baseCurrencyCode = "CNY"
+    )
+    org.junit.Assert.assertTrue(quickText.contains("共 2 笔"))
+    org.junit.Assert.assertTrue(quickText.contains("¥88.00"))
+    org.junit.Assert.assertTrue(quickText.contains("¥200.00"))
+    org.junit.Assert.assertTrue(quickText.contains("东京拉面"))
+  }
+
+  @Test
+  fun `bottom tab customization oled pure black and enhanced dynamic palette styles persist and differentiate`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+
+    val customOrder = listOf(
+      com.example.model.MainBottomTab.ANALYTICS,
+      com.example.model.MainBottomTab.LEDGER,
+      com.example.model.MainBottomTab.SETTINGS,
+      com.example.model.MainBottomTab.BOOKS
+    )
+    val saved = com.example.model.AppearanceSettings(
+      oledPureBlack = true,
+      showBooksTab = false,
+      bottomTabOrder = customOrder
+    )
+    repository.saveAppearanceSettings(saved).getOrThrow()
+    val loaded = repository.observeAppearanceSettings().first()
+    assertEquals(true, loaded.oledPureBlack)
+    assertEquals(false, loaded.showBooksTab)
+    assertEquals(customOrder, loaded.bottomTabOrder)
+    assertEquals(
+      listOf(
+        com.example.model.MainBottomTab.ANALYTICS,
+        com.example.model.MainBottomTab.LEDGER,
+        com.example.model.MainBottomTab.SETTINGS
+      ),
+      loaded.visibleBottomTabs()
+    )
+
+    val seed = androidx.compose.ui.graphics.Color(0xFF0F6B54)
+    val tonal = com.example.ui.theme.buildCustomColorScheme(seed, com.example.model.CustomPaletteStyle.TONAL_SPOT, darkTheme = true)
+    val expressive = com.example.ui.theme.buildCustomColorScheme(seed, com.example.model.CustomPaletteStyle.EXPRESSIVE, darkTheme = true)
+    val vibrant = com.example.ui.theme.buildCustomColorScheme(seed, com.example.model.CustomPaletteStyle.VIBRANT, darkTheme = true)
+    val neutral = com.example.ui.theme.buildCustomColorScheme(seed, com.example.model.CustomPaletteStyle.NEUTRAL, darkTheme = true)
+    org.junit.Assert.assertNotEquals(tonal.primary, expressive.primary)
+    org.junit.Assert.assertNotEquals(vibrant.primary, neutral.primary)
+
+    val oledScheme = com.example.ui.theme.applyOledPureBlack(tonal)
+    assertEquals(androidx.compose.ui.graphics.Color.Black, oledScheme.background)
+    assertEquals(androidx.compose.ui.graphics.Color.Black, oledScheme.surface)
+  }
+}
