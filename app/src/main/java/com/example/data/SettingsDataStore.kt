@@ -80,6 +80,7 @@ class SettingsDataStore(private val context: Context) {
         val HOME_BRAND_TITLE_BOLD = booleanPreferencesKey("appearance_home_brand_title_bold")
         val HOME_BRAND_SUBTITLE_SIZE_SP = intPreferencesKey("appearance_home_brand_subtitle_size_sp")
         val ANALYTICS_PIE_SIZE_DP = intPreferencesKey("appearance_analytics_pie_size_dp")
+        val ANALYTICS_PULL_CALENDAR_DISTANCE_DP = intPreferencesKey("appearance_analytics_pull_calendar_distance_dp")
         val APP_ICON_STYLE_ID = stringPreferencesKey("appearance_app_icon_style_id")
         val ICON_VISUAL_STYLE = stringPreferencesKey("appearance_icon_visual_style")
 
@@ -158,6 +159,7 @@ class SettingsDataStore(private val context: Context) {
             homeBrandTitleBold = prefs[Keys.HOME_BRAND_TITLE_BOLD] ?: true,
             homeBrandSubtitleSizeSp = (prefs[Keys.HOME_BRAND_SUBTITLE_SIZE_SP] ?: 11).coerceIn(9, 16),
             analyticsPieSizeDp = (prefs[Keys.ANALYTICS_PIE_SIZE_DP] ?: 220).coerceIn(140, 300),
+            analyticsPullCalendarDistanceDp = (prefs[Keys.ANALYTICS_PULL_CALENDAR_DISTANCE_DP] ?: 128).coerceIn(72, 220),
             appIconStyleId = AppIconStyle.fromId(prefs[Keys.APP_ICON_STYLE_ID]).id,
             iconVisualStyle = IconVisualStyle.fromRaw(prefs[Keys.ICON_VISUAL_STYLE])
         )
@@ -280,6 +282,7 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.HOME_BRAND_TITLE_BOLD] = settings.homeBrandTitleBold
             prefs[Keys.HOME_BRAND_SUBTITLE_SIZE_SP] = settings.homeBrandSubtitleSizeSp.coerceIn(9, 16)
             prefs[Keys.ANALYTICS_PIE_SIZE_DP] = settings.analyticsPieSizeDp.coerceIn(140, 300)
+            prefs[Keys.ANALYTICS_PULL_CALENDAR_DISTANCE_DP] = settings.analyticsPullCalendarDistanceDp.coerceIn(72, 220)
             prefs[Keys.APP_ICON_STYLE_ID] = AppIconStyle.fromId(settings.appIconStyleId).id
             prefs[Keys.ICON_VISUAL_STYLE] = settings.iconVisualStyle.name
         }

@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -263,6 +264,17 @@ fun AiSettingsScreen(
                                 is AiModelDownloadState.Idle -> Unit
                             }
 
+                            fun openUrlInBrowser(url: String) {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                runCatching {
+                                    context.startActivity(intent)
+                                }.onFailure { err ->
+                                    onShowMessage("无法打开浏览器：${err.message ?: "请检查系统浏览器"}")
+                                }
+                            }
+
                             OutlinedButton(
                                 enabled = downloadState !is AiModelDownloadState.Downloading,
                                 onClick = { importWeightLauncher.launch(arrayOf("*/*")) },
@@ -274,6 +286,18 @@ fun AiSettingsScreen(
                                 Icon(AppIcons.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("从本地导入模型权重 / 词表 (.gguf / .onnx / .tflite / .json)")
+                            }
+
+                            OutlinedButton(
+                                onClick = { openUrlInBrowser(LocalModelCatalog.weightsBrowserPortalUrl(selectedMirror)) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("open_weights_website_button")
+                            ) {
+                                Icon(AppIcons.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("打开浏览器查找/下载模型权重 (${if (selectedMirror.contains("hf-mirror")) "HF-Mirror" else "HuggingFace"})")
                             }
 
                             if (customModels.isNotEmpty()) {
@@ -354,7 +378,7 @@ fun AiSettingsScreen(
                                 HorizontalDivider()
                             }
 
-                            Text("内置推荐开源小模型（${LocalModelCatalog.presets.size} 款可按需下载）", style = MaterialTheme.typography.labelLarge)
+                            Text("内置推荐开源小模型（${LocalModelCatalog.presets.size} 档体积由小到大）", style = MaterialTheme.typography.labelLarge)
 
                             LocalModelCatalog.presets.forEach { preset ->
                                 val status = remember(preset.id, downloadState, selectedLocalModelId, customModels) {
@@ -363,6 +387,7 @@ fun AiSettingsScreen(
                                 val isSelected = selectedLocalModelId == preset.id
                                 val isDownloadingThis = downloadState is AiModelDownloadState.Downloading &&
                                     (downloadState as AiModelDownloadState.Downloading).modelId == preset.id
+                                val presetRepoUrl = LocalModelCatalog.modelRepoUrl(selectedMirror, preset.repoId)
 
                                 Surface(
                                     shape = RoundedCornerShape(16.dp),
@@ -409,7 +434,8 @@ fun AiSettingsScreen(
                                         )
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             if (!status.installed) {
                                                 Button(
@@ -451,6 +477,16 @@ fun AiSettingsScreen(
                                                     Spacer(modifier = Modifier.width(4.dp))
                                                     Text("清理")
                                                 }
+                                            }
+                                            OutlinedButton(
+                                                onClick = { openUrlInBrowser(presetRepoUrl) },
+                                                modifier = Modifier
+                                                    .minimumInteractiveComponentSize()
+                                                    .testTag("open_model_site_${preset.id}")
+                                            ) {
+                                                Icon(AppIcons.OpenInNew, contentDescription = "浏览器打开权重下载页", modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("网页下载")
                                             }
                                         }
                                     }

@@ -37,6 +37,9 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import android.os.SystemClock
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -68,6 +71,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -260,6 +265,12 @@ fun AppNavigation(
             var pagerBackProgress by remember { mutableFloatStateOf(0f) }
             var isAnalyticsCalendarOpen by remember { mutableStateOf(false) }
 
+            val homeListState = rememberLazyListState()
+            val analyticsListState = rememberLazyListState()
+            val settingsListState = rememberLazyListState()
+            var lastTabTapPage by remember { mutableIntStateOf(-1) }
+            var lastTabTapMillis by remember { mutableLongStateOf(0L) }
+
             LaunchedEffect(pagerState.currentPage) {
                 if (pagerState.currentPage != 1 && isAnalyticsCalendarOpen) {
                     isAnalyticsCalendarOpen = false
@@ -267,10 +278,13 @@ fun AppNavigation(
             }
 
             val navigateTab: (Int) -> Unit = { targetPage ->
+                val now = SystemClock.uptimeMillis()
                 if (isAnalyticsCalendarOpen) {
                     isAnalyticsCalendarOpen = false
                 }
                 if (pagerState.currentPage != targetPage) {
+                    lastTabTapPage = targetPage
+                    lastTabTapMillis = now
                     scope.launch {
                         when (appearance.tabClickAnimation) {
                             TabClickAnimationStyle.SLIDE -> {
@@ -286,6 +300,20 @@ fun AppNavigation(
                             }
                             TabClickAnimationStyle.NONE -> {
                                 pagerState.scrollToPage(targetPage)
+                            }
+                        }
+                    }
+                } else {
+                    val isDoubleTap = lastTabTapPage == targetPage && (now - lastTabTapMillis) <= 450L
+                    lastTabTapPage = targetPage
+                    lastTabTapMillis = now
+                    if (isDoubleTap) {
+                        lastTabTapMillis = 0L
+                        scope.launch {
+                            when (targetPage) {
+                                0 -> homeListState.animateScrollToItem(0)
+                                1 -> analyticsListState.animateScrollToItem(0)
+                                2 -> settingsListState.animateScrollToItem(0)
                             }
                         }
                     }
@@ -375,7 +403,8 @@ fun AppNavigation(
                             exchangeRates = exchangeRates,
                             isListenerEnabled = isListenerEnabled,
                             viewModel = viewModel,
-                            onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) }
+                            onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                            listState = homeListState
                         )
                         1 -> AnalyticsScreen(
                             transactionsState = transactionsState,
@@ -384,7 +413,8 @@ fun AppNavigation(
                             exchangeRates = exchangeRates,
                             viewModel = viewModel,
                             isCalendarFullScreen = isAnalyticsCalendarOpen,
-                            onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it }
+                            onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it },
+                            listState = analyticsListState
                         )
                         else -> SettingsScreen(
                             settings = settings,
@@ -398,7 +428,8 @@ fun AppNavigation(
                             onOpenDataHub = { navController.navigate(ROUTE_SETTINGS_DATA_HUB) },
                             onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) },
                             onOpenPermissions = { navController.navigate(ROUTE_SETTINGS_PERMISSIONS) },
-                            onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) }
+                            onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) },
+                            listState = settingsListState
                         )
                     }
                     ROUTE_SETTINGS_LEDGER_MGMT -> BillToolsMenuScreen(
@@ -656,7 +687,8 @@ fun AppNavigation(
                                                 exchangeRates = exchangeRates,
                                                 isListenerEnabled = isListenerEnabled,
                                                 viewModel = viewModel,
-                                                onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) }
+                                                onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                                                listState = homeListState
                                             )
                                         }
                                     }
@@ -687,7 +719,8 @@ fun AppNavigation(
                                                     exchangeRates = exchangeRates,
                                                     isListenerEnabled = isListenerEnabled,
                                                     viewModel = viewModel,
-                                                    onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) }
+                                                    onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                                                    listState = homeListState
                                                 )
                                                 1 -> AnalyticsScreen(
                                                     transactionsState = transactionsState,
@@ -696,7 +729,8 @@ fun AppNavigation(
                                                     exchangeRates = exchangeRates,
                                                     viewModel = viewModel,
                                                     isCalendarFullScreen = isAnalyticsCalendarOpen,
-                                                    onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it }
+                                                    onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it },
+                                                    listState = analyticsListState
                                                 )
                                                 2 -> SettingsScreen(
                                                     settings = settings,
@@ -710,7 +744,8 @@ fun AppNavigation(
                                                     onOpenDataHub = { navController.navigate(ROUTE_SETTINGS_DATA_HUB) },
                                                     onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) },
                                                     onOpenPermissions = { navController.navigate(ROUTE_SETTINGS_PERMISSIONS) },
-                                                    onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) }
+                                                    onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) },
+                                                    listState = settingsListState
                                                 )
                                             }
                                         }
@@ -806,18 +841,35 @@ private fun SwipeBackContainer(
     val systemBackAnim = remember { Animatable(0f) }
     var navigatingUp by remember { mutableStateOf(false) }
 
+    LaunchedEffect(active) {
+        if (active) {
+            navigatingUp = false
+            dragOffset.snapTo(0f)
+            systemBackAnim.snapTo(0f)
+        }
+    }
+
+    // Keep PredictiveBackHandler enabled while `active` so toggling `navigatingUp`
+    // does NOT cancel the completion animation coroutine before `onNavigateUp()` executes.
     if (predictiveBackEnabled && active) {
-        PredictiveBackHandler(enabled = !navigatingUp) { progressFlow ->
+        PredictiveBackHandler(enabled = true) { progressFlow ->
             try {
                 progressFlow.collect { event ->
-                    systemBackAnim.snapTo(event.progress.coerceIn(0f, 1f))
+                    if (!navigatingUp) {
+                        systemBackAnim.snapTo(event.progress.coerceIn(0f, 1f))
+                    }
                 }
-                navigatingUp = true
-                // Complete predictive animation smoothly to 1f WITHOUT resetting to 0f, eliminating flash
-                systemBackAnim.animateTo(1f, tween(120, easing = FastOutSlowInEasing))
-                onNavigateUp()
+                if (!navigatingUp) {
+                    navigatingUp = true
+                    scope.launch {
+                        systemBackAnim.animateTo(1f, tween(110, easing = FastOutSlowInEasing))
+                        onNavigateUp()
+                    }
+                }
             } catch (_: CancellationException) {
-                systemBackAnim.animateTo(0f, tween(160))
+                if (!navigatingUp) {
+                    systemBackAnim.animateTo(0f, tween(160))
+                }
             }
         }
     }

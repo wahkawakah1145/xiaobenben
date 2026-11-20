@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -55,6 +56,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -124,7 +126,7 @@ private data class ChartDatum(
     val color: Color
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AnalyticsScreen(
     transactionsState: UiState<List<LedgerTransaction>>,
@@ -134,11 +136,12 @@ fun AnalyticsScreen(
     viewModel: LedgerViewModel,
     isCalendarFullScreen: Boolean = false,
     onCalendarFullScreenChange: (Boolean) -> Unit = {},
+    listState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier
 ) {
     var selectedGranularity by remember { mutableStateOf(AnalyticsGranularity.MONTH) }
     var anchorMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val listState = rememberLazyListState()
+    var showPullThresholdAdjuster by remember { mutableStateOf(false) }
     val density = LocalDensity.current
 
     var livePieSizeDp by remember(appearance.analyticsPieSizeDp) {
@@ -155,8 +158,9 @@ fun AnalyticsScreen(
     }
 
     var topPullDistancePx by remember { mutableFloatStateOf(0f) }
-    val pullTriggerPx = with(density) { 64.dp.toPx() }
-    val pullDownToCalendarConnection = remember(isCalendarFullScreen) {
+    val pullTriggerDp = appearance.analyticsPullCalendarDistanceDp.coerceIn(72, 220)
+    val pullTriggerPx = with(density) { pullTriggerDp.dp.toPx() }
+    val pullDownToCalendarConnection = remember(isCalendarFullScreen, pullTriggerPx) {
         object : NestedScrollConnection {
             override fun onPostScroll(
                 consumed: Offset,
@@ -166,7 +170,7 @@ fun AnalyticsScreen(
                 if (isCalendarFullScreen || source != NestedScrollSource.UserInput) return Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 if (atTop && available.y > 0f) {
-                    topPullDistancePx = (topPullDistancePx + available.y).coerceIn(0f, pullTriggerPx * 1.6f)
+                    topPullDistancePx = (topPullDistancePx + available.y).coerceIn(0f, pullTriggerPx * 1.4f)
                     if (topPullDistancePx >= pullTriggerPx) {
                         topPullDistancePx = 0f
                         onCalendarFullScreenChange(true)
@@ -179,7 +183,7 @@ fun AnalyticsScreen(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (!isCalendarFullScreen && topPullDistancePx >= pullTriggerPx * 0.65f) {
+                if (!isCalendarFullScreen && topPullDistancePx >= pullTriggerPx * 0.85f) {
                     topPullDistancePx = 0f
                     onCalendarFullScreenChange(true)
                 } else {
@@ -298,7 +302,8 @@ fun AnalyticsScreen(
         ) {
             if (topPullDistancePx > 4f) {
                 item(key = "pull_calendar_hint") {
-                    val ready = topPullDistancePx >= pullTriggerPx * 0.65f
+                    val progressRatio = (topPullDistancePx / pullTriggerPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    val ready = topPullDistancePx >= pullTriggerPx * 0.85f
                     Box(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.Center
@@ -319,7 +324,11 @@ fun AnalyticsScreen(
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Text(
-                                    text = if (ready) "松手进入全屏收支日历" else "继续下拉打开收支日历",
+                                    text = if (ready) {
+                                        "松手进入全屏收支日历"
+                                    } else {
+                                        "继续下拉打开收支日历 (${(progressRatio * 100).roundToInt()}% · ${pullTriggerDp}dp)"
+                                    },
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -389,9 +398,9 @@ fun AnalyticsScreen(
                                     textAlign = TextAlign.Center,
                                     maxLines = 2
                                 )
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     AssistChip(
                                         onClick = {
@@ -414,6 +423,11 @@ fun AnalyticsScreen(
                                         label = { Text("全屏日历") },
                                         modifier = Modifier.testTag("analytics_scroll_calendar_chip")
                                     )
+                                    AssistChip(
+                                        onClick = { showPullThresholdAdjuster = !showPullThresholdAdjuster },
+                                        label = { Text("下拉 ${pullTriggerDp}dp") },
+                                        modifier = Modifier.testTag("analytics_pull_distance_chip")
+                                    )
                                 }
                             }
 
@@ -427,6 +441,44 @@ fun AnalyticsScreen(
                                 Icon(
                                     Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                                     contentDescription = "下一${selectedGranularity.label}"
+                                )
+                            }
+                        }
+
+                        AnimatedVisibility(visible = showPullThresholdAdjuster) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                HorizontalDivider()
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "下拉打开日历触发距离（越长越防误触）",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "${pullTriggerDp} dp",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Slider(
+                                    value = pullTriggerDp.toFloat(),
+                                    onValueChange = { raw ->
+                                        val nextDp = raw.roundToInt().coerceIn(72, 220)
+                                        viewModel.saveAppearanceSettings(
+                                            appearance.copy(analyticsPullCalendarDistanceDp = nextDp)
+                                        )
+                                    },
+                                    valueRange = 72f..220f,
+                                    modifier = Modifier.testTag("analytics_inline_pull_distance_slider")
                                 )
                             }
                         }

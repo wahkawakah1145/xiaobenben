@@ -300,6 +300,7 @@ data class AppearanceSettings(
     val homeBrandTitleBold: Boolean = true,
     val homeBrandSubtitleSizeSp: Int = 11,
     val analyticsPieSizeDp: Int = 220,
+    val analyticsPullCalendarDistanceDp: Int = 128,
     val appIconStyleId: String = AppIconStyle.EMERALD.id,
     val iconVisualStyle: IconVisualStyle = IconVisualStyle.FILLED
 )

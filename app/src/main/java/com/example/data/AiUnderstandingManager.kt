@@ -43,37 +43,24 @@ object LocalModelCatalog {
 
     val presets: List<LocalModelPreset> = listOf(
         LocalModelPreset(
-            id = "bge-small-zh-v15",
-            name = "BGE-Small-Zh v1.5 (轻量中文核)",
-            repoId = "BAAI/bge-small-zh-v15",
-            license = "MIT License",
-            sizeHint = "约 560 KB（词表 + 分词 + 配置）",
-            summary = "智源研究院开源中文语义模型词表与架构配置，适合快速离线分类、商户实体切分与消费意图评分。",
-            files = listOf(
-                LocalModelFileSpec("config.json", "resolve/main/config.json"),
-                LocalModelFileSpec("vocab.txt", "resolve/main/vocab.txt"),
-                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
-            )
-        ),
-        LocalModelPreset(
             id = "ernie-3.0-nano-zh",
-            name = "ERNIE-3.0-Nano-Zh (超轻量极速核)",
+            name = "轻巧极速档 · ERNIE-3.0-Nano-Zh",
             repoId = "nghuyong/ernie-3.0-nano-zh",
             license = "Apache-2.0",
-            sizeHint = "约 130 KB（极速按需下载）",
-            summary = "极小体积开源中文 NLP 模型词表与配置，毫秒级离线分词并匹配消费/收入/退款意图。",
+            sizeHint = "约 130 KB（超小体积 · 极速按需下载）",
+            summary = "第一档超轻量中文核，毫秒级离线分词并匹配消费/收入/退款意图，几乎不占存储空间。",
             files = listOf(
                 LocalModelFileSpec("config.json", "resolve/main/config.json"),
                 LocalModelFileSpec("vocab.txt", "resolve/main/vocab.txt")
             )
         ),
         LocalModelPreset(
-            id = "m3e-small-zh",
-            name = "M3E-Small (中文双语向量核)",
-            repoId = "moka-ai/m3e-small",
+            id = "bge-small-zh-v15",
+            name = "均衡推荐档 · BGE-Small-Zh v1.5",
+            repoId = "BAAI/bge-small-zh-v15",
             license = "MIT License",
-            sizeHint = "约 610 KB（双语词表 + 分词器）",
-            summary = "Moka 开源中英双语文本理解核，擅长跨境外币账单、PayPal/Amazon 等中英混合商户识别。",
+            sizeHint = "约 560 KB（中等体积 · 词表 + 分词 + 配置）",
+            summary = "第二档智源开源中文平衡核，兼顾体积与理解精度，适合日常消费分类、商户切分与意图评分。",
             files = listOf(
                 LocalModelFileSpec("config.json", "resolve/main/config.json"),
                 LocalModelFileSpec("vocab.txt", "resolve/main/vocab.txt"),
@@ -81,59 +68,35 @@ object LocalModelCatalog {
             )
         ),
         LocalModelPreset(
-            id = "bge-micro-v2",
-            name = "BGE-Micro-v2 (微核极省空间)",
-            repoId = "TaylorAI/bge-micro-v2",
-            license = "MIT License",
-            sizeHint = "约 470 KB（高精度微核配置）",
-            summary = "极致压缩的多场景语义微核，适合低内存设备长期驻留并在前台秒级启动离线理解。",
-            files = listOf(
-                LocalModelFileSpec("config.json", "resolve/main/config.json"),
-                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
-            )
-        ),
-        LocalModelPreset(
             id = "qwen25-0.5b-instruct",
-            name = "Qwen2.5-0.5B-Instruct (通义轻量词表核)",
+            name = "增强全量档 · Qwen2.5-0.5B-Instruct",
             repoId = "Qwen/Qwen2.5-0.5B-Instruct",
             license = "Apache-2.0",
-            sizeHint = "约 7.1 MB（BPE 全量词表 + 配置）",
-            summary = "阿里开源 Qwen2.5 轻量模型 BPE 分词词表与配置，适合复杂账单文本、外币符号与混合商户识别。",
+            sizeHint = "约 7.1 MB（大词表体积 · BPE 全量词表 + 配置）",
+            summary = "第三档通义轻量全量词表增强核，覆盖复杂账单长文本、外币符号及多语言混合商户解析。",
             files = listOf(
                 LocalModelFileSpec("config.json", "resolve/main/config.json"),
                 LocalModelFileSpec("tokenizer_config.json", "resolve/main/tokenizer_config.json"),
-                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
-            )
-        ),
-        LocalModelPreset(
-            id = "qwen25-1.5b-instruct",
-            name = "Qwen2.5-1.5B-Instruct (通义增强词表核)",
-            repoId = "Qwen/Qwen2.5-1.5B-Instruct",
-            license = "Apache-2.0",
-            sizeHint = "约 7.2 MB（增强配置 + BPE 词表）",
-            summary = "千问 1.5B 开源模型词表与架构定义，提供更丰富的长尾商户及消费类别特征锚点。",
-            files = listOf(
-                LocalModelFileSpec("config.json", "resolve/main/config.json"),
-                LocalModelFileSpec("tokenizer_config.json", "resolve/main/tokenizer_config.json"),
-                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
-            )
-        ),
-        LocalModelPreset(
-            id = "smollm2-360m-instruct",
-            name = "SmolLM2-360M-Instruct (端侧英文/跨境小模型)",
-            repoId = "HuggingFaceTB/SmolLM2-360M-Instruct",
-            license = "Apache-2.0",
-            sizeHint = "约 2.1 MB（端侧分词核）",
-            summary = "HuggingFace 官方端侧紧凑指令模型配置与分词表，擅长海外订阅扣款与美元/欧元流水解析。",
-            files = listOf(
-                LocalModelFileSpec("config.json", "resolve/main/config.json"),
                 LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
             )
         )
     )
 
     fun resolve(modelId: String?): LocalModelPreset =
-        presets.firstOrNull { it.id == modelId } ?: presets.first()
+        presets.firstOrNull { it.id == modelId } ?: resolveDefaultPreset()
+
+    private fun resolveDefaultPreset(): LocalModelPreset =
+        presets.firstOrNull { it.id == "bge-small-zh-v15" } ?: presets.first()
+
+    fun modelRepoUrl(mirrorBase: String, repoId: String): String {
+        val cleanBase = mirrorBase.trim().trimEnd('/').ifBlank { "https://hf-mirror.com" }
+        return "$cleanBase/${repoId.trimStart('/')}"
+    }
+
+    fun weightsBrowserPortalUrl(mirrorBase: String): String {
+        val cleanBase = mirrorBase.trim().trimEnd('/').ifBlank { "https://hf-mirror.com" }
+        return "$cleanBase/models?sort=trending"
+    }
 
     fun isCustomModelId(modelId: String?): Boolean =
         !modelId.isNullOrBlank() && modelId.startsWith(CUSTOM_PREFIX)

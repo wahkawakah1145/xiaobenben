@@ -7,6 +7,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 enum class DeduplicationTimeWindow(val label: String, val maxDiffMillis: Long) {
+    ONE_MINUTE("1 分钟内", 60_000L),
     FIVE_MINUTES("5 分钟内", 5L * 60_000L),
     FIFTEEN_MINUTES("15 分钟内", 15L * 60_000L),
     THIRTY_MINUTES("30 分钟内", 30L * 60_000L),
@@ -37,7 +38,7 @@ data class DuplicateGroup(
 
 object SmartDeduplicator {
 
-    const val DEFAULT_SHORT_WINDOW_MINUTES = 30
+    const val DEFAULT_SHORT_WINDOW_MINUTES = 1
     const val MAX_SHORT_WINDOW_MILLIS = 7L * 24L * 3_600_000L
 
     private val bracketSuffixRegex = Regex("""[（(【\[][^）)】\]]{1,24}[）)】\]]""")
@@ -94,7 +95,7 @@ object SmartDeduplicator {
 
     fun findDuplicateGroups(
         transactions: List<LedgerTransaction>,
-        timeWindow: DeduplicationTimeWindow = DeduplicationTimeWindow.THIRTY_MINUTES,
+        timeWindow: DeduplicationTimeWindow = DeduplicationTimeWindow.ONE_MINUTE,
         channelFilter: DeduplicationChannelFilter = DeduplicationChannelFilter.ALL,
         minSimilarity: Double = 0.58
     ): List<DuplicateGroup> = findDuplicateGroups(

@@ -79,7 +79,7 @@ fun SmartDeduplicationScreen(
 ) {
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
     var customWindowMinutes by rememberSaveable { mutableIntStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_MINUTES) }
-    var customValueInput by rememberSaveable { mutableStateOf("30") }
+    var customValueInput by rememberSaveable { mutableStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_MINUTES.toString()) }
     var customUnitHours by rememberSaveable { mutableStateOf(false) }
     var customErrorText by remember { mutableStateOf<String?>(null) }
     var channelFilter by remember { mutableStateOf(DeduplicationChannelFilter.ALL) }

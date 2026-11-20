@@ -53,6 +53,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import com.example.util.DesktopIconSyncManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -907,9 +908,13 @@ fun AppearanceSettingsScreen(
                     1.15f to "舒适",
                     1.30f to "大屏"
                 )
-                var dpiTextInput by remember(appearance.uiDensityScale) {
-                    mutableStateOf(String.format(Locale.US, "%.2f", appearance.uiDensityScale))
+                var draftDpiScale by remember(appearance.uiDensityScale) {
+                    mutableFloatStateOf(appearance.uiDensityScale.coerceIn(0.80f, 1.35f))
                 }
+                var dpiTextInput by remember(appearance.uiDensityScale) {
+                    mutableStateOf(String.format(Locale.US, "%.2f", appearance.uiDensityScale.coerceIn(0.80f, 1.35f)))
+                }
+                val hasPendingDpiChange = abs(draftDpiScale - appearance.uiDensityScale) >= 0.005f
 
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -928,13 +933,17 @@ fun AppearanceSettingsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("页面缩放与显示密度 (DPI)", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    text = "支持 4 档磁吸微调及无级数值缩放，即时全局生效",
+                                    text = if (hasPendingDpiChange) {
+                                        "已应用 ${(appearance.uiDensityScale * 100).roundToInt()}% · 待确认 ${(draftDpiScale * 100).roundToInt()}%，点击「应用」生效"
+                                    } else {
+                                        "支持 4 档磁吸微调及无级数值缩放，调整后点击「应用」生效"
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = if (hasPendingDpiChange) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             Text(
-                                text = "${(appearance.uiDensityScale * 100).roundToInt()}%",
+                                text = "${(draftDpiScale * 100).roundToInt()}%",
                                 style = MaterialTheme.typography.titleMedium.copy(fontFamily = LocalNumberFontFamily.current),
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
@@ -947,15 +956,15 @@ fun AppearanceSettingsScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Slider(
-                                value = appearance.uiDensityScale.coerceIn(0.80f, 1.35f),
+                                value = draftDpiScale.coerceIn(0.80f, 1.35f),
                                 onValueChange = { raw ->
                                     val snapped = dpiSnaps
                                         .firstOrNull { (target, _) -> abs(raw - target) <= 0.024f }
                                         ?.first
                                         ?: ((raw * 100f).roundToInt() / 100f)
                                     val clamped = snapped.coerceIn(0.80f, 1.35f)
+                                    draftDpiScale = clamped
                                     dpiTextInput = String.format(Locale.US, "%.2f", clamped)
-                                    viewModel.saveAppearanceSettings(appearance.copy(uiDensityScale = clamped))
                                 },
                                 valueRange = 0.80f..1.35f,
                                 modifier = Modifier
@@ -969,7 +978,7 @@ fun AppearanceSettingsScreen(
                                     dpiTextInput = filtered
                                     val parsed = filtered.toFloatOrNull()
                                     if (parsed != null && parsed in 0.80f..1.35f) {
-                                        viewModel.saveAppearanceSettings(appearance.copy(uiDensityScale = parsed))
+                                        draftDpiScale = parsed
                                     }
                                 },
                                 label = { Text("倍率") },
@@ -987,13 +996,57 @@ fun AppearanceSettingsScreen(
                         ) {
                             dpiSnaps.forEach { (scale, label) ->
                                 FilterChip(
-                                    selected = abs(appearance.uiDensityScale - scale) < 0.015f,
+                                    selected = abs(draftDpiScale - scale) < 0.015f,
                                     onClick = {
+                                        draftDpiScale = scale
                                         dpiTextInput = String.format(Locale.US, "%.2f", scale)
-                                        viewModel.saveAppearanceSettings(appearance.copy(uiDensityScale = scale))
                                     },
                                     label = { Text("$label (${String.format(Locale.US, "%.2f", scale)}x)") },
                                     modifier = Modifier.testTag("dpi_snap_${label}")
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                enabled = hasPendingDpiChange || abs(appearance.uiDensityScale - 1.00f) >= 0.005f,
+                                onClick = {
+                                    draftDpiScale = 1.00f
+                                    dpiTextInput = "1.00"
+                                    if (abs(appearance.uiDensityScale - 1.00f) >= 0.005f) {
+                                        viewModel.saveAppearanceSettings(appearance.copy(uiDensityScale = 1.00f))
+                                    }
+                                },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("dpi_reset_button")
+                            ) {
+                                Text("恢复标准")
+                            }
+                            Button(
+                                enabled = hasPendingDpiChange,
+                                onClick = {
+                                    val parsed = dpiTextInput.toFloatOrNull()
+                                    val finalScale = (parsed ?: draftDpiScale).coerceIn(0.80f, 1.35f)
+                                    draftDpiScale = finalScale
+                                    dpiTextInput = String.format(Locale.US, "%.2f", finalScale)
+                                    viewModel.saveAppearanceSettings(appearance.copy(uiDensityScale = finalScale))
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("dpi_apply_button")
+                            ) {
+                                Text(
+                                    if (hasPendingDpiChange) {
+                                        "应用 (${(draftDpiScale * 100).roundToInt()}%)"
+                                    } else {
+                                        "应用 (${(appearance.uiDensityScale * 100).roundToInt()}%)"
+                                    }
                                 )
                             }
                         }
@@ -1542,6 +1595,38 @@ fun AppearanceSettingsScreen(
                                 text = appearance.predictiveBackStyle.description,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        HorizontalDivider()
+
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("收支分析下拉打开全屏日历距离", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    text = "${appearance.analyticsPullCalendarDistanceDp.coerceIn(72, 220)} dp",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Text(
+                                text = "增大触发距离可减少分析页面滚动回弹时误触打开全屏日历（默认 128 dp，同时可在分析页顶部快捷调节）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Slider(
+                                value = appearance.analyticsPullCalendarDistanceDp.coerceIn(72, 220).toFloat(),
+                                onValueChange = { raw ->
+                                    viewModel.saveAppearanceSettings(
+                                        appearance.copy(analyticsPullCalendarDistanceDp = raw.roundToInt().coerceIn(72, 220))
+                                    )
+                                },
+                                valueRange = 72f..220f,
+                                modifier = Modifier.testTag("analytics_pull_distance_slider")
                             )
                         }
                     }

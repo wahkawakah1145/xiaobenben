@@ -167,6 +167,18 @@ class ExampleRobolectricTest {
     val preset = com.example.data.LocalModelCatalog.resolve("qwen25-0.5b-instruct")
     assertEquals("Qwen/Qwen2.5-0.5B-Instruct", preset.repoId)
     org.junit.Assert.assertTrue(preset.files.isNotEmpty())
+    assertEquals(
+      listOf("ernie-3.0-nano-zh", "bge-small-zh-v15", "qwen25-0.5b-instruct"),
+      com.example.data.LocalModelCatalog.presets.map { it.id }
+    )
+    assertEquals(
+      "https://hf-mirror.com/BAAI/bge-small-zh-v15",
+      com.example.data.LocalModelCatalog.modelRepoUrl("https://hf-mirror.com", "BAAI/bge-small-zh-v15")
+    )
+    assertEquals(
+      "https://huggingface.co/models?sort=trending",
+      com.example.data.LocalModelCatalog.weightsBrowserPortalUrl("https://huggingface.co/")
+    )
 
     val config = com.example.model.AiConfig(
       providerMode = com.example.model.AiProviderMode.ONLINE_API,
@@ -439,5 +451,13 @@ class ExampleRobolectricTest {
     )
     assertEquals(96, svgBitmap.width)
     assertEquals(96, svgBitmap.height)
+
+    // Verify smart deduplication defaults to 1 minute and pull-down calendar distance persists
+    assertEquals(1, com.example.parser.SmartDeduplicator.DEFAULT_SHORT_WINDOW_MINUTES)
+    assertEquals(60_000L, com.example.parser.DeduplicationTimeWindow.ONE_MINUTE.maxDiffMillis)
+
+    repository.saveAppearanceSettings(saved.copy(analyticsPullCalendarDistanceDp = 168)).getOrThrow()
+    val reloadedPull = repository.observeAppearanceSettings().first()
+    assertEquals(168, reloadedPull.analyticsPullCalendarDistanceDp)
   }
 }
