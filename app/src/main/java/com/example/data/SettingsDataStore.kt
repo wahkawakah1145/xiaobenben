@@ -157,7 +157,7 @@ class SettingsDataStore(private val context: Context) {
             homeBrandTitleSizeSp = (prefs[Keys.HOME_BRAND_TITLE_SIZE_SP] ?: 24).coerceIn(16, 36),
             homeBrandTitleBold = prefs[Keys.HOME_BRAND_TITLE_BOLD] ?: true,
             homeBrandSubtitleSizeSp = (prefs[Keys.HOME_BRAND_SUBTITLE_SIZE_SP] ?: 11).coerceIn(9, 16),
-            analyticsPieSizeDp = (prefs[Keys.ANALYTICS_PIE_SIZE_DP] ?: 220).coerceIn(150, 290),
+            analyticsPieSizeDp = (prefs[Keys.ANALYTICS_PIE_SIZE_DP] ?: 220).coerceIn(140, 300),
             appIconStyleId = AppIconStyle.fromId(prefs[Keys.APP_ICON_STYLE_ID]).id,
             iconVisualStyle = IconVisualStyle.fromRaw(prefs[Keys.ICON_VISUAL_STYLE])
         )
@@ -279,7 +279,7 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.HOME_BRAND_TITLE_SIZE_SP] = settings.homeBrandTitleSizeSp.coerceIn(16, 36)
             prefs[Keys.HOME_BRAND_TITLE_BOLD] = settings.homeBrandTitleBold
             prefs[Keys.HOME_BRAND_SUBTITLE_SIZE_SP] = settings.homeBrandSubtitleSizeSp.coerceIn(9, 16)
-            prefs[Keys.ANALYTICS_PIE_SIZE_DP] = settings.analyticsPieSizeDp.coerceIn(150, 290)
+            prefs[Keys.ANALYTICS_PIE_SIZE_DP] = settings.analyticsPieSizeDp.coerceIn(140, 300)
             prefs[Keys.APP_ICON_STYLE_ID] = AppIconStyle.fromId(settings.appIconStyleId).id
             prefs[Keys.ICON_VISUAL_STYLE] = settings.iconVisualStyle.name
         }

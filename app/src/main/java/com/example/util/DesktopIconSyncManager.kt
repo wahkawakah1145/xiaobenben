@@ -1,0 +1,256 @@
+package com.example.util
+
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
+import android.os.Process
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.ColorUtils
+import androidx.core.graphics.drawable.IconCompat
+import com.example.MainActivity
+import com.example.model.AppIconStyle
+
+object DesktopIconSyncManager {
+    private const val ALIAS_EMERALD = "com.example.LauncherEmerald"
+    private const val ALIAS_MINIMAL = "com.example.LauncherMinimal"
+    private const val ALIAS_INK = "com.example.LauncherInk"
+    private const val ALIAS_CYBER = "com.example.LauncherCyber"
+    private const val ALIAS_VINTAGE = "com.example.LauncherVintage"
+    private const val ALIAS_MONET = "com.example.LauncherMonet"
+
+    private val allAliases = listOf(
+        ALIAS_EMERALD,
+        ALIAS_MINIMAL,
+        ALIAS_INK,
+        ALIAS_CYBER,
+        ALIAS_VINTAGE,
+        ALIAS_MONET
+    )
+
+    fun aliasClassNameFor(style: AppIconStyle): String = when (style) {
+        AppIconStyle.EMERALD -> ALIAS_EMERALD
+        AppIconStyle.MINIMAL -> ALIAS_MINIMAL
+        AppIconStyle.INK -> ALIAS_INK
+        AppIconStyle.CYBER -> ALIAS_CYBER
+        AppIconStyle.VINTAGE -> ALIAS_VINTAGE
+        AppIconStyle.MONET_ADAPTIVE -> ALIAS_MONET
+    }
+
+    /**
+     * Switches the enabled launcher <activity-alias> without killing the app process immediately,
+     * allowing the UI to ask the user whether to restart immediately or defer restart.
+     */
+    fun applyLauncherIconAlias(
+        context: Context,
+        style: AppIconStyle
+    ): Boolean {
+        val targetAlias = aliasClassNameFor(style)
+        val pm = context.packageManager
+        val pkg = context.packageName
+        return runCatching {
+            allAliases.forEach { aliasName ->
+                val state = if (aliasName == targetAlias) {
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                } else {
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                }
+                pm.setComponentEnabledSetting(
+                    ComponentName(pkg, aliasName),
+                    state,
+                    PackageManager.DONT_KILL_APP
+                )
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    fun restartApp(context: Context) {
+        val pm = context.packageManager
+        val launchIntent = pm.getLaunchIntentForPackage(context.packageName)
+            ?: Intent(context, MainActivity::class.java)
+        launchIntent.addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+        )
+        context.startActivity(launchIntent)
+        Process.killProcess(Process.myPid())
+    }
+
+    /**
+     * Renders the unified minimalist SVG/vector icon geometry tinted with active Monet or custom colors.
+     */
+    fun renderThemedSvgBitmap(
+        styleId: String,
+        primaryArgb: Int,
+        primaryContainerArgb: Int,
+        onPrimaryArgb: Int,
+        tertiaryArgb: Int,
+        sizePx: Int = 192
+    ): Bitmap {
+        val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val w = sizePx.toFloat()
+        val style = AppIconStyle.fromId(styleId)
+
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.style = Paint.Style.FILL }
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            this.style = Paint.Style.STROKE
+            this.strokeCap = Paint.Cap.ROUND
+            this.strokeJoin = Paint.Join.ROUND
+        }
+
+        val radius = w * 0.24f
+        val bgRect = RectF(0f, 0f, w, w)
+
+        fun drawYen(cx: Float, cy: Float, scale: Float, color: Int, strokeW: Float) {
+            strokePaint.color = color
+            strokePaint.strokeWidth = strokeW
+            val arm = scale * 0.34f
+            canvas.drawLine(cx - arm, cy - scale * 0.36f, cx, cy - scale * 0.04f, strokePaint)
+            canvas.drawLine(cx + arm, cy - scale * 0.36f, cx, cy - scale * 0.04f, strokePaint)
+            canvas.drawLine(cx, cy - scale * 0.04f, cx, cy + scale * 0.38f, strokePaint)
+            canvas.drawLine(cx - arm * 0.92f, cy + scale * 0.06f, cx + arm * 0.92f, cy + scale * 0.06f, strokePaint)
+            canvas.drawLine(cx - arm * 0.92f, cy + scale * 0.22f, cx + arm * 0.92f, cy + scale * 0.22f, strokePaint)
+        }
+
+        when (style) {
+            AppIconStyle.EMERALD -> {
+                fillPaint.color = primaryArgb
+                canvas.drawRoundRect(bgRect, radius, radius, fillPaint)
+                fillPaint.color = onPrimaryArgb
+                val book = RectF(w * 0.27f, w * 0.22f, w * 0.73f, w * 0.78f)
+                canvas.drawRoundRect(book, w * 0.09f, w * 0.09f, fillPaint)
+                drawYen(w * 0.52f, w * 0.50f, w * 0.28f, primaryArgb, w * 0.045f)
+            }
+            AppIconStyle.MINIMAL -> {
+                fillPaint.color = primaryContainerArgb
+                canvas.drawRoundRect(bgRect, radius, radius, fillPaint)
+                strokePaint.color = primaryArgb
+                strokePaint.strokeWidth = w * 0.048f
+                val path = Path().apply {
+                    moveTo(w * 0.29f, w * 0.23f)
+                    lineTo(w * 0.60f, w * 0.23f)
+                    lineTo(w * 0.72f, w * 0.35f)
+                    lineTo(w * 0.72f, w * 0.77f)
+                    lineTo(w * 0.29f, w * 0.77f)
+                    close()
+                }
+                canvas.drawPath(path, strokePaint)
+                drawYen(w * 0.505f, w * 0.535f, w * 0.24f, primaryArgb, w * 0.042f)
+            }
+            AppIconStyle.INK -> {
+                val darkWash = ColorUtils.blendARGB(primaryArgb, 0xFF132220.toInt(), 0.58f)
+                fillPaint.color = darkWash
+                canvas.drawRoundRect(bgRect, radius, radius, fillPaint)
+                fillPaint.color = primaryContainerArgb
+                canvas.drawCircle(w * 0.65f, w * 0.34f, w * 0.075f, fillPaint)
+                strokePaint.color = ColorUtils.blendARGB(primaryContainerArgb, 0xFFFFFFFF.toInt(), 0.45f)
+                strokePaint.strokeWidth = w * 0.05f
+                val ridge = Path().apply {
+                    moveTo(w * 0.20f, w * 0.68f)
+                    lineTo(w * 0.39f, w * 0.44f)
+                    lineTo(w * 0.54f, w * 0.60f)
+                    lineTo(w * 0.64f, w * 0.49f)
+                    lineTo(w * 0.80f, w * 0.68f)
+                }
+                canvas.drawPath(ridge, strokePaint)
+            }
+            AppIconStyle.CYBER -> {
+                val slate = ColorUtils.blendARGB(primaryArgb, 0xFF0F172A.toInt(), 0.76f)
+                fillPaint.color = slate
+                canvas.drawRoundRect(bgRect, radius, radius, fillPaint)
+                val bright = ColorUtils.blendARGB(primaryArgb, 0xFFFFFFFF.toInt(), 0.32f)
+                strokePaint.color = bright
+                strokePaint.strokeWidth = w * 0.044f
+                val hex = Path().apply {
+                    moveTo(w * 0.50f, w * 0.20f)
+                    lineTo(w * 0.76f, w * 0.35f)
+                    lineTo(w * 0.76f, w * 0.65f)
+                    lineTo(w * 0.50f, w * 0.80f)
+                    lineTo(w * 0.24f, w * 0.65f)
+                    lineTo(w * 0.24f, w * 0.35f)
+                    close()
+                }
+                canvas.drawPath(hex, strokePaint)
+                drawYen(w * 0.50f, w * 0.50f, w * 0.24f, tertiaryArgb, w * 0.042f)
+            }
+            AppIconStyle.VINTAGE -> {
+                val warmLeather = ColorUtils.blendARGB(primaryArgb, 0xFF5D4037.toInt(), 0.52f)
+                fillPaint.color = warmLeather
+                canvas.drawRoundRect(bgRect, radius, radius, fillPaint)
+                strokePaint.color = 0xFFF5ECD8.toInt()
+                strokePaint.strokeWidth = w * 0.045f
+                val cover = RectF(w * 0.26f, w * 0.23f, w * 0.74f, w * 0.77f)
+                canvas.drawRoundRect(cover, w * 0.07f, w * 0.07f, strokePaint)
+                canvas.drawLine(w * 0.37f, w * 0.23f, w * 0.37f, w * 0.77f, strokePaint)
+                fillPaint.color = ColorUtils.blendARGB(tertiaryArgb, 0xFFE5B96E.toInt(), 0.45f)
+                val clasp = RectF(w * 0.57f, w * 0.44f, w * 0.79f, w * 0.56f)
+                canvas.drawRoundRect(clasp, w * 0.04f, w * 0.04f, fillPaint)
+            }
+            AppIconStyle.MONET_ADAPTIVE -> {
+                fillPaint.color = primaryContainerArgb
+                canvas.drawRoundRect(bgRect, radius, radius, fillPaint)
+                fillPaint.color = primaryArgb
+                val wallet = RectF(w * 0.24f, w * 0.30f, w * 0.76f, w * 0.70f)
+                canvas.drawRoundRect(wallet, w * 0.11f, w * 0.11f, fillPaint)
+                fillPaint.color = primaryContainerArgb
+                canvas.drawCircle(w * 0.63f, w * 0.50f, w * 0.055f, fillPaint)
+            }
+        }
+        return bitmap
+    }
+
+    /**
+     * Requests pinning a launcher shortcut using the user's custom arbitrary name and
+     * live theme-tinted SVG icon. Returns (success, statusMessage).
+     */
+    fun pinCustomDesktopShortcut(
+        context: Context,
+        customName: String,
+        styleId: String,
+        primaryColor: Color,
+        primaryContainerColor: Color,
+        onPrimaryColor: Color,
+        tertiaryColor: Color
+    ): Pair<Boolean, String> {
+        val label = customName.trim().ifBlank { "小本本" }
+        val style = AppIconStyle.fromId(styleId)
+        val bitmap = renderThemedSvgBitmap(
+            styleId = style.id,
+            primaryArgb = primaryColor.toArgb(),
+            primaryContainerArgb = primaryContainerColor.toArgb(),
+            onPrimaryArgb = onPrimaryColor.toArgb(),
+            tertiaryArgb = tertiaryColor.toArgb(),
+            sizePx = 192
+        )
+        if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
+            return false to "当前系统桌面不支持直接创建自定义快捷方式"
+        }
+        val launchIntent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+        }
+        val shortcut = ShortcutInfoCompat.Builder(context, "xiao_ben_ben_custom_brand")
+            .setShortLabel(label.take(18))
+            .setLongLabel(label.take(28))
+            .setIcon(IconCompat.createWithBitmap(bitmap))
+            .setIntent(launchIntent)
+            .build()
+
+        val requested = ShortcutManagerCompat.requestPinShortcut(context, shortcut, null)
+        return if (requested) {
+            true to "已请求桌面添加「$label」（实时主题配色图标）"
+        } else {
+            false to "未能发起桌面图标创建请求，请检查桌面权限"
+        }
+    }
+}

@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import com.example.ui.theme.AppIcons
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -47,7 +48,9 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
+import com.example.util.DesktopIconSyncManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -751,8 +754,12 @@ fun AppearanceSettingsScreen(
     viewModel: LedgerViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val supportsMonet = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     var showColorPickerDialog by remember { mutableStateOf(false) }
+    var restartPromptTitle by remember { mutableStateOf<String?>(null) }
+    var restartPromptBody by remember { mutableStateOf("") }
+    var desktopSyncFeedback by remember { mutableStateOf<String?>(null) }
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -782,7 +789,7 @@ fun AppearanceSettingsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("莫奈动态取色 (Material You)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 Text(
-                                    text = if (supportsMonet) "关闭后可使用自定义色轮 / HSV / RGB / Hex 调色" else "当前系统低于 Android 12，自动使用自定义调色板",
+                                    text = if (supportsMonet) "跟随系统壁纸自动取色；开启后同样支持下方选择调色板衍生风格" else "当前系统低于 Android 12，自动使用自定义调色板",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -831,7 +838,7 @@ fun AppearanceSettingsScreen(
                                             fontWeight = FontWeight.SemiBold
                                         )
                                         Text(
-                                            text = "点击打开圆形色环、HSV / RGB 滑块与 Hex 调色窗口",
+                                            text = "点击打开圆形色轮、HSV / RGB 滑块与 HEX 调色窗口",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -841,29 +848,29 @@ fun AppearanceSettingsScreen(
                                     }
                                 }
                             }
-
-                            Text("调色板衍生风格", style = MaterialTheme.typography.labelLarge)
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                CustomPaletteStyle.entries.forEach { paletteStyle ->
-                                    FilterChip(
-                                        selected = appearance.customPaletteStyle == paletteStyle,
-                                        onClick = {
-                                            viewModel.saveAppearanceSettings(appearance.copy(customPaletteStyle = paletteStyle))
-                                        },
-                                        label = { Text(paletteStyle.label) },
-                                        modifier = Modifier.testTag("palette_style_${paletteStyle.name}")
-                                    )
-                                }
-                            }
-                            Text(
-                                text = appearance.customPaletteStyle.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
+
+                        Text("调色板衍生风格", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            CustomPaletteStyle.entries.forEach { paletteStyle ->
+                                FilterChip(
+                                    selected = appearance.customPaletteStyle == paletteStyle,
+                                    onClick = {
+                                        viewModel.saveAppearanceSettings(appearance.copy(customPaletteStyle = paletteStyle))
+                                    },
+                                    label = { Text(paletteStyle.label) },
+                                    modifier = Modifier.testTag("palette_style_${paletteStyle.name}")
+                                )
+                            }
+                        }
+                        Text(
+                            text = appearance.customPaletteStyle.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
 
                         HorizontalDivider()
 
@@ -1004,12 +1011,17 @@ fun AppearanceSettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("应用图标风格与账单图标样式", style = MaterialTheme.typography.titleMedium)
+                        Text("应用图标风格与桌面同步", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "选择主页品牌图标与关于页展示风格，支持 6 种艺术样式",
+                            text = "统一采用简约矢量 SVG 绘图，图标配色实时同步莫奈动态取色或手动调色，并同步切换系统桌面图标",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+
+                        val livePrimary = MaterialTheme.colorScheme.primary
+                        val liveContainer = MaterialTheme.colorScheme.primaryContainer
+                        val liveOnPrimary = MaterialTheme.colorScheme.onPrimary
+                        val liveTertiary = MaterialTheme.colorScheme.tertiary
 
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1033,6 +1045,9 @@ fun AppearanceSettingsScreen(
                                         .width(96.dp)
                                         .clickable {
                                             viewModel.saveAppearanceSettings(appearance.copy(appIconStyleId = style.id))
+                                            DesktopIconSyncManager.applyLauncherIconAlias(context, style)
+                                            restartPromptTitle = "同步桌面图标样式"
+                                            restartPromptBody = "已切换为「${style.label}」简约矢量图标。系统桌面通常需要重启应用进程才能立刻刷新入口图标与配色，是否立即重启？"
                                         }
                                         .testTag("app_icon_style_${style.id}")
                                 ) {
@@ -1055,6 +1070,51 @@ fun AppearanceSettingsScreen(
                                     }
                                 }
                             }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    val customLabel = appearance.homeBrandCustomName.ifBlank { "小本本" }
+                                    val (_, msg) = DesktopIconSyncManager.pinCustomDesktopShortcut(
+                                        context = context,
+                                        customName = customLabel,
+                                        styleId = appearance.appIconStyleId,
+                                        primaryColor = livePrimary,
+                                        primaryContainerColor = liveContainer,
+                                        onPrimaryColor = liveOnPrimary,
+                                        tertiaryColor = liveTertiary
+                                    )
+                                    desktopSyncFeedback = msg
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("sync_themed_desktop_shortcut_button")
+                            ) {
+                                Text("同步主题色与名称到桌面", maxLines = 1)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    val curStyle = AppIconStyle.fromId(appearance.appIconStyleId)
+                                    DesktopIconSyncManager.applyLauncherIconAlias(context, curStyle)
+                                    restartPromptTitle = "应用桌面更改"
+                                    restartPromptBody = "系统桌面缓存更新需重启软件才能完整生效，点击「立即重启」马上刷新，或点击「确认」稍后生效。"
+                                },
+                                modifier = Modifier.testTag("trigger_desktop_restart_dialog_button")
+                            ) {
+                                Text("应用重启")
+                            }
+                        }
+
+                        desktopSyncFeedback?.let { feedback ->
+                            Text(
+                                text = feedback,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
 
                         HorizontalDivider()
@@ -1577,6 +1637,33 @@ fun AppearanceSettingsScreen(
                         customPrimaryColorArgb = newColorArgb
                     )
                 )
+            }
+        )
+    }
+
+    restartPromptTitle?.let { dialogTitle ->
+        AlertDialog(
+            onDismissRequest = { restartPromptTitle = null },
+            title = { Text(dialogTitle) },
+            text = { Text(restartPromptBody) },
+            dismissButton = {
+                TextButton(
+                    onClick = { restartPromptTitle = null },
+                    modifier = Modifier.testTag("desktop_sync_confirm_no_restart_button")
+                ) {
+                    Text("确认（不重启）")
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        restartPromptTitle = null
+                        DesktopIconSyncManager.restartApp(context)
+                    },
+                    modifier = Modifier.testTag("desktop_sync_restart_now_button")
+                ) {
+                    Text("立即重启")
+                }
             }
         )
     }

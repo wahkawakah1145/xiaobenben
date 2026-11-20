@@ -258,8 +258,18 @@ fun AppNavigation(
             val pagerState = rememberPagerState(initialPage = 0, pageCount = { topDestinations.size })
             val tabFadeAlpha = remember { Animatable(1f) }
             var pagerBackProgress by remember { mutableFloatStateOf(0f) }
+            var isAnalyticsCalendarOpen by remember { mutableStateOf(false) }
+
+            LaunchedEffect(pagerState.currentPage) {
+                if (pagerState.currentPage != 1 && isAnalyticsCalendarOpen) {
+                    isAnalyticsCalendarOpen = false
+                }
+            }
 
             val navigateTab: (Int) -> Unit = { targetPage ->
+                if (isAnalyticsCalendarOpen) {
+                    isAnalyticsCalendarOpen = false
+                }
                 if (pagerState.currentPage != targetPage) {
                     scope.launch {
                         when (appearance.tabClickAnimation) {
@@ -283,15 +293,15 @@ fun AppNavigation(
             }
 
             // On non-home main tab: system back / predictive back returns to tab 0 (Ledger)
-            if (isTopLevelRoute && pagerState.currentPage != 0) {
+            if (isTopLevelRoute && pagerState.currentPage != 0 && !isAnalyticsCalendarOpen) {
                 if (appearance.predictiveBackEnabled) {
                     PredictiveBackHandler(enabled = true) { progress: Flow<BackEventCompat> ->
                         try {
                             progress.collect { event ->
                                 pagerBackProgress = event.progress.coerceIn(0f, 1f)
                             }
+                            pagerState.scrollToPage(0)
                             pagerBackProgress = 0f
-                            pagerState.animateScrollToPage(0)
                         } catch (_: CancellationException) {
                             pagerBackProgress = 0f
                         }
@@ -334,7 +344,22 @@ fun AppNavigation(
                 }
             }
 
+            var suppressNextPopTransition by remember { mutableStateOf(false) }
+
+            LaunchedEffect(currentRoute) {
+                if (suppressNextPopTransition) {
+                    delay(80)
+                    suppressNextPopTransition = false
+                }
+            }
+
             val popWithStyle: () -> Unit = {
+                suppressNextPopTransition = false
+                navController.navigateUp()
+            }
+
+            val popFromGestureImmediate: () -> Unit = {
+                suppressNextPopTransition = true
                 navController.navigateUp()
             }
 
@@ -357,7 +382,9 @@ fun AppNavigation(
                             settings = settings,
                             appearance = appearance,
                             exchangeRates = exchangeRates,
-                            viewModel = viewModel
+                            viewModel = viewModel,
+                            isCalendarFullScreen = isAnalyticsCalendarOpen,
+                            onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it }
                         )
                         else -> SettingsScreen(
                             settings = settings,
@@ -578,7 +605,7 @@ fun AppNavigation(
                                 slideOutHorizontally(tween(240)) { -(it * 0.12f).toInt() } + fadeOut(tween(180))
                             },
                             popEnterTransition = {
-                                if (!appearance.predictiveBackEnabled) {
+                                if (suppressNextPopTransition || !appearance.predictiveBackEnabled) {
                                     EnterTransition.None
                                 } else {
                                     when (appearance.predictiveBackStyle) {
@@ -592,7 +619,7 @@ fun AppNavigation(
                                 }
                             },
                             popExitTransition = {
-                                if (!appearance.predictiveBackEnabled) {
+                                if (suppressNextPopTransition || !appearance.predictiveBackEnabled) {
                                     ExitTransition.None
                                 } else {
                                     when (appearance.predictiveBackStyle) {
@@ -667,7 +694,9 @@ fun AppNavigation(
                                                     settings = settings,
                                                     appearance = appearance,
                                                     exchangeRates = exchangeRates,
-                                                    viewModel = viewModel
+                                                    viewModel = viewModel,
+                                                    isCalendarFullScreen = isAnalyticsCalendarOpen,
+                                                    onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it }
                                                 )
                                                 2 -> SettingsScreen(
                                                     settings = settings,
@@ -712,7 +741,7 @@ fun AppNavigation(
                                         active = currentRoute == subRoute,
                                         predictiveBackEnabled = appearance.predictiveBackEnabled,
                                         style = appearance.predictiveBackStyle,
-                                        onNavigateUp = popWithStyle,
+                                        onNavigateUp = popFromGestureImmediate,
                                         previousContent = prevComposable
                                     ) {
                                         DestinationContent(subRoute)
@@ -774,44 +803,46 @@ private fun SwipeBackContainer(
 
     var widthPx by remember { mutableFloatStateOf(1080f) }
     val dragOffset = remember { Animatable(0f) }
-    var systemBackProgress by remember { mutableFloatStateOf(0f) }
+    val systemBackAnim = remember { Animatable(0f) }
     var navigatingUp by remember { mutableStateOf(false) }
 
     if (predictiveBackEnabled && active) {
         PredictiveBackHandler(enabled = !navigatingUp) { progressFlow ->
             try {
                 progressFlow.collect { event ->
-                    systemBackProgress = event.progress.coerceIn(0f, 1f)
+                    systemBackAnim.snapTo(event.progress.coerceIn(0f, 1f))
                 }
-                systemBackProgress = 0f
                 navigatingUp = true
+                // Complete predictive animation smoothly to 1f WITHOUT resetting to 0f, eliminating flash
+                systemBackAnim.animateTo(1f, tween(120, easing = FastOutSlowInEasing))
                 onNavigateUp()
             } catch (_: CancellationException) {
-                systemBackProgress = 0f
+                systemBackAnim.animateTo(0f, tween(160))
             }
         }
     }
 
     val dragProgress = (dragOffset.value / widthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
-    val progress = maxOf(dragProgress, systemBackProgress)
+    val progress = maxOf(dragProgress, systemBackAnim.value)
 
     val cornerDp = (22f * progress).dp
     val scale = when (style) {
-        PredictiveBackStyle.SYSTEM_SCALE -> 1f - 0.10f * progress
+        PredictiveBackStyle.SYSTEM_SCALE -> 1f - 0.12f * progress
         else -> 1f
     }
     val translationXVal = when {
         dragOffset.value > 0f && style != PredictiveBackStyle.FADE ->
             if (style == PredictiveBackStyle.SYSTEM_SCALE) dragOffset.value * 0.48f else dragOffset.value
-        systemBackProgress > 0f && style == PredictiveBackStyle.SLIDE_RIGHT ->
-            systemBackProgress * widthPx * 0.45f
-        systemBackProgress > 0f && style == PredictiveBackStyle.SYSTEM_SCALE ->
-            systemBackProgress * widthPx * 0.14f
+        systemBackAnim.value > 0f && style == PredictiveBackStyle.SLIDE_RIGHT ->
+            systemBackAnim.value * widthPx
+        systemBackAnim.value > 0f && style == PredictiveBackStyle.SYSTEM_SCALE ->
+            systemBackAnim.value * widthPx * 0.14f
         else -> progress * widthPx * 0.15f
     }
-    val alphaVal = when (style) {
-        PredictiveBackStyle.FADE -> 1f - 0.50f * progress
-        else -> 1f - 0.08f * progress
+    val alphaVal = when {
+        navigatingUp && progress > 0.72f -> (1f - ((progress - 0.72f) / 0.28f)).coerceIn(0f, 1f)
+        style == PredictiveBackStyle.FADE -> 1f - 0.75f * progress
+        else -> 1f - 0.12f * progress
     }
 
     Box(

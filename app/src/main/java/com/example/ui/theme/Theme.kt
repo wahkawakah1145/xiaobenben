@@ -199,6 +199,19 @@ fun buildCustomColorScheme(
     }
 }
 
+fun applyPaletteStyleToDynamicScheme(
+    dynamicScheme: ColorScheme,
+    style: CustomPaletteStyle,
+    darkTheme: Boolean
+): ColorScheme {
+    if (style == CustomPaletteStyle.TONAL_SPOT) return dynamicScheme
+    return buildCustomColorScheme(
+        seedColor = dynamicScheme.primary,
+        style = style,
+        darkTheme = darkTheme
+    )
+}
+
 @Composable
 fun SmartLedgerTheme(
     appearanceSettings: AppearanceSettings = AppearanceSettings(),
@@ -214,10 +227,24 @@ fun SmartLedgerTheme(
     val colorScheme = when {
         appearanceSettings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            val baseDynamic = if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            applyPaletteStyleToDynamicScheme(
+                dynamicScheme = baseDynamic,
+                style = appearanceSettings.customPaletteStyle,
+                darkTheme = darkTheme
+            )
         }
         appearanceSettings.dynamicColor -> {
-            if (darkTheme) DarkColorScheme else LightColorScheme
+            val fallbackSeed = if (darkTheme) JadePrimaryDark else JadePrimaryLight
+            if (appearanceSettings.customPaletteStyle == CustomPaletteStyle.TONAL_SPOT) {
+                if (darkTheme) DarkColorScheme else LightColorScheme
+            } else {
+                buildCustomColorScheme(
+                    seedColor = fallbackSeed,
+                    style = appearanceSettings.customPaletteStyle,
+                    darkTheme = darkTheme
+                )
+            }
         }
         else -> {
             buildCustomColorScheme(

@@ -1,10 +1,22 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,9 +24,11 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,6 +45,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -40,13 +55,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -54,7 +68,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,14 +75,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextGeometricTransform
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
@@ -96,7 +116,6 @@ import com.example.ui.theme.IncomeJade
 import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
-import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private data class ChartDatum(
@@ -113,13 +132,63 @@ fun AnalyticsScreen(
     appearance: AppearanceSettings = AppearanceSettings(),
     exchangeRates: ExchangeRateState,
     viewModel: LedgerViewModel,
+    isCalendarFullScreen: Boolean = false,
+    onCalendarFullScreenChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedGranularity by remember { mutableStateOf(AnalyticsGranularity.MONTH) }
     var anchorMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    val pieSizeDp = appearance.analyticsPieSizeDp.coerceIn(150, 290)
+    val density = LocalDensity.current
+
+    var livePieSizeDp by remember(appearance.analyticsPieSizeDp) {
+        mutableFloatStateOf(appearance.analyticsPieSizeDp.toFloat().coerceIn(140f, 300f))
+    }
+    val pieSizeDp by animateDpAsState(
+        targetValue = livePieSizeDp.roundToInt().coerceIn(140, 300).dp,
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 500f),
+        label = "analytics_pie_size"
+    )
+
+    BackHandler(enabled = isCalendarFullScreen) {
+        onCalendarFullScreenChange(false)
+    }
+
+    var topPullDistancePx by remember { mutableFloatStateOf(0f) }
+    val pullTriggerPx = with(density) { 64.dp.toPx() }
+    val pullDownToCalendarConnection = remember(isCalendarFullScreen) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (isCalendarFullScreen || source != NestedScrollSource.UserInput) return Offset.Zero
+                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                if (atTop && available.y > 0f) {
+                    topPullDistancePx = (topPullDistancePx + available.y).coerceIn(0f, pullTriggerPx * 1.6f)
+                    if (topPullDistancePx >= pullTriggerPx) {
+                        topPullDistancePx = 0f
+                        onCalendarFullScreenChange(true)
+                    }
+                    return available
+                } else if (available.y < 0f && topPullDistancePx > 0f) {
+                    topPullDistancePx = (topPullDistancePx + available.y).coerceAtLeast(0f)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (!isCalendarFullScreen && topPullDistancePx >= pullTriggerPx * 0.65f) {
+                    topPullDistancePx = 0f
+                    onCalendarFullScreenChange(true)
+                } else {
+                    topPullDistancePx = 0f
+                }
+                return Velocity.Zero
+            }
+        }
+    }
 
     var categoryChartStyle by remember { mutableStateOf(AnalyticsChartStyle.PIE) }
     var channelChartStyle by remember { mutableStateOf(AnalyticsChartStyle.BAR) }
@@ -214,7 +283,9 @@ fun AnalyticsScreen(
     }
 
     Box(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .nestedScroll(pullDownToCalendarConnection),
         contentAlignment = Alignment.TopCenter
     ) {
         LazyColumn(
@@ -225,6 +296,38 @@ fun AnalyticsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            if (topPullDistancePx > 4f) {
+                item(key = "pull_calendar_hint") {
+                    val ready = topPullDistancePx >= pullTriggerPx * 0.65f
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = if (ready) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = if (ready) "松手进入全屏收支日历" else "继续下拉打开收支日历",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             item(key = "period_switcher") {
                 Card(
                     shape = RoundedCornerShape(18.dp),
@@ -300,11 +403,7 @@ fun AnalyticsScreen(
                                         modifier = Modifier.testTag("analytics_today_chip")
                                     )
                                     AssistChip(
-                                        onClick = {
-                                            scope.launch {
-                                                listState.animateScrollToItem(5)
-                                            }
-                                        },
+                                        onClick = { onCalendarFullScreenChange(true) },
                                         leadingIcon = {
                                             Icon(
                                                 imageVector = AppIcons.CalendarMonth,
@@ -312,7 +411,7 @@ fun AnalyticsScreen(
                                                 modifier = Modifier.size(16.dp)
                                             )
                                         },
-                                        label = { Text("收支日历") },
+                                        label = { Text("全屏日历") },
                                         modifier = Modifier.testTag("analytics_scroll_calendar_chip")
                                     )
                                 }
@@ -425,7 +524,21 @@ fun AnalyticsScreen(
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(pieSizeDp.dp)
+                                            .size(pieSizeDp)
+                                            .twoFingerPinchZoom(
+                                                key = "category_pie",
+                                                onZoomDelta = { zoom ->
+                                                    livePieSizeDp = (livePieSizeDp * zoom).coerceIn(140f, 300f)
+                                                },
+                                                onZoomEnd = {
+                                                    val finalDp = livePieSizeDp.roundToInt().coerceIn(140, 300)
+                                                    if (finalDp != appearance.analyticsPieSizeDp) {
+                                                        viewModel.saveAppearanceSettings(
+                                                            appearance.copy(analyticsPieSizeDp = finalDp)
+                                                        )
+                                                    }
+                                                }
+                                            )
                                             .testTag("category_pie_chart_box"),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -461,30 +574,12 @@ fun AnalyticsScreen(
                                         }
                                     }
 
-                                    // Pie size adjustment slider
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            text = "饼图大小 (${pieSizeDp}dp)",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Slider(
-                                            value = pieSizeDp.toFloat(),
-                                            onValueChange = { next ->
-                                                viewModel.saveAppearanceSettings(
-                                                    appearance.copy(analyticsPieSizeDp = next.roundToInt())
-                                                )
-                                            },
-                                            valueRange = 150f..290f,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .testTag("analytics_pie_size_slider")
-                                        )
-                                    }
+                                    Text(
+                                        text = "双指捏合饼图可无级调节大小 (${livePieSizeDp.roundToInt()}dp)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+                                        modifier = Modifier.testTag("analytics_pie_pinch_hint")
+                                    )
 
                                     Column(
                                         modifier = Modifier.fillMaxWidth(),
@@ -597,7 +692,22 @@ fun AnalyticsScreen(
                                     verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     Box(
-                                        modifier = Modifier.size(pieSizeDp.dp),
+                                        modifier = Modifier
+                                            .size(pieSizeDp)
+                                            .twoFingerPinchZoom(
+                                                key = "channel_pie",
+                                                onZoomDelta = { zoom ->
+                                                    livePieSizeDp = (livePieSizeDp * zoom).coerceIn(140f, 300f)
+                                                },
+                                                onZoomEnd = {
+                                                    val finalDp = livePieSizeDp.roundToInt().coerceIn(140, 300)
+                                                    if (finalDp != appearance.analyticsPieSizeDp) {
+                                                        viewModel.saveAppearanceSettings(
+                                                            appearance.copy(analyticsPieSizeDp = finalDp)
+                                                        )
+                                                    }
+                                                }
+                                            ),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         DonutPieChart(
@@ -699,60 +809,320 @@ fun AnalyticsScreen(
             }
 
             item(key = "period_summary") {
+                val netCents = totalIncome - totalExpense
+                val topCategory = categoryData.firstOrNull()
+                val topChannel = channelData.firstOrNull()
+                val budgetRef = remember(settings.monthlyBudgetCents, selectedGranularity) {
+                    val m = settings.monthlyBudgetCents.coerceAtLeast(0L)
+                    when (selectedGranularity) {
+                        AnalyticsGranularity.YEAR -> m * 12L
+                        AnalyticsGranularity.MONTH -> m
+                        AnalyticsGranularity.WEEK -> (m * 7L) / 30L
+                        AnalyticsGranularity.DAY -> m / 30L
+                    }
+                }
+                val budgetRatio = if (budgetRef > 0L) (totalExpense.toFloat() / budgetRef.toFloat()).coerceIn(0f, 1.5f) else 0f
+
                 Card(
-                    shape = RoundedCornerShape(22.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("analytics_dimension_summary_card")
                 ) {
                     Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        // Tinted gradient header strip
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    Brush.horizontalGradient(
+                                        colors = listOf(
+                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
+                                        )
+                                    )
+                                )
+                                .padding(horizontal = 18.dp, vertical = 14.dp)
                         ) {
-                            Icon(
-                                imageVector = AppIcons.Insights,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.tertiary
-                            )
-                            Text(summaryCardTitle, style = MaterialTheme.typography.titleMedium)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = AppIcons.Insights,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                    Column {
+                                        Text(
+                                            text = summaryCardTitle,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "多维度收支结构与预算健康评估",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (netCents >= 0L) IncomeJade.copy(alpha = 0.14f) else ExpenseCoral.copy(alpha = 0.14f)
+                                ) {
+                                    Text(
+                                        text = if (netCents >= 0L) "净盈余" else "净支出",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (netCents >= 0L) IncomeJade else ExpenseCoral,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
                         }
 
-                        Surface(
-                            color = MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text(
-                                text = summaryText,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(14.dp)
-                            )
+                            // 3-KPI Dimension Grid
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Text("期间结余", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        CompactFullText(
+                                            text = "${if (netCents >= 0L) "+" else "-"}${formatCurrency(kotlin.math.abs(netCents), baseCurrency)}",
+                                            style = MaterialTheme.typography.labelLarge.copy(
+                                                fontFamily = numberFont,
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            color = if (netCents >= 0L) IncomeJade else ExpenseCoral,
+                                            maxLines = 2
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Text("高频分类", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        val catPct = if (topCategory != null && totalExpense > 0L) {
+                                            "${(topCategory.cents * 100L / totalExpense)}%"
+                                        } else ""
+                                        CompactFullText(
+                                            text = topCategory?.let { "${it.label} $catPct" } ?: "暂无",
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 2
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Text("主力渠道", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        CompactFullText(
+                                            text = topChannel?.label ?: "暂无",
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                            color = topChannel?.color ?: MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 2
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (budgetRef > 0L) {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "预算执行进度 (${(budgetRatio * 100f).roundToInt()}%)",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = "${formatCurrency(totalExpense, baseCurrency)} / ${formatCurrency(budgetRef, baseCurrency)}",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = numberFont),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        LinearProgressIndicator(
+                                            progress = { budgetRatio.coerceIn(0f, 1f) },
+                                            color = if (budgetRatio > 1f) ExpenseCoral else MaterialTheme.colorScheme.primary,
+                                            trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(8.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Accent Quote Insight Callout
+                            Surface(
+                                color = MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(IntrinsicSize.Min)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(4.dp)
+                                            .fillMaxHeight()
+                                            .background(MaterialTheme.colorScheme.primary)
+                                    )
+                                    Text(
+                                        text = summaryText,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.padding(14.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            item(key = "analytics_calendar") {
-                AnalyticsCalendarSection(
-                    transactions = allTransactions,
-                    granularity = selectedGranularity,
-                    anchorMillis = anchorMillis,
-                    baseCurrencyCode = baseCurrency,
-                    ratesToCny = exchangeRates.ratesToCny,
-                    onGranularityAndAnchorChange = { nextGran, nextAnchor ->
-                        selectedGranularity = nextGran
-                        anchorMillis = nextAnchor
-                        selectedCategoryFilter = null
-                        selectedChannelFilter = null
-                    },
-                    onTransactionClick = { inspectingTransaction = it }
-                )
+            item(key = "calendar_pull_entry_hint") {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable { onCalendarFullScreenChange(true) }
+                        .testTag("analytics_open_fullscreen_calendar_card")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = AppIcons.CalendarMonth,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column {
+                                Text(
+                                    text = "进入全屏收支日历",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "在顶部向下划动或点击此处展开 年/月/周/日 日历视图",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
             }
+        }
+
+        AnimatedVisibility(
+            visible = isCalendarFullScreen,
+            enter = slideInVertically(
+                animationSpec = spring(dampingRatio = 0.86f, stiffness = 360f),
+                initialOffsetY = { -it }
+            ) + fadeIn(tween(220)),
+            exit = slideOutVertically(
+                animationSpec = spring(dampingRatio = 0.90f, stiffness = 420f),
+                targetOffsetY = { -it }
+            ) + fadeOut(tween(180)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            AnalyticsCalendarSection(
+                transactions = allTransactions,
+                granularity = selectedGranularity,
+                anchorMillis = anchorMillis,
+                baseCurrencyCode = baseCurrency,
+                ratesToCny = exchangeRates.ratesToCny,
+                onGranularityAndAnchorChange = { nextGran, nextAnchor ->
+                    selectedGranularity = nextGran
+                    anchorMillis = nextAnchor
+                    selectedCategoryFilter = null
+                    selectedChannelFilter = null
+                },
+                onTransactionClick = { inspectingTransaction = it },
+                isFullScreen = true,
+                onRequestExitFullScreen = { onCalendarFullScreenChange(false) },
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 
@@ -1281,3 +1651,31 @@ private fun FilteredTransactionsPanel(
         }
     }
 }
+
+private fun Modifier.twoFingerPinchZoom(
+    key: Any?,
+    onZoomDelta: (Float) -> Unit,
+    onZoomEnd: () -> Unit = {}
+): Modifier = pointerInput(key) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        var pinching = false
+        while (true) {
+            val event = awaitPointerEvent()
+            val pressedCount = event.changes.count { it.pressed }
+            if (pressedCount == 0) {
+                if (pinching) onZoomEnd()
+                break
+            }
+            if (pressedCount >= 2) {
+                pinching = true
+                val zoom = event.calculateZoom()
+                if (zoom != 1f && !zoom.isNaN()) {
+                    onZoomDelta(zoom)
+                }
+                event.changes.forEach { it.consume() }
+            }
+        }
+    }
+}
+

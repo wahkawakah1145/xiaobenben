@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Ink ridge horizon + minimalist sun circle -->
+    <path
+        android:fillColor="#E9E2D0"
+        android:pathData="M65,41 m-6.5,0 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M29,69 L44,50 L56,63 L64,54 L79,69"
+        android:strokeWidth="4.5"
+        android:strokeColor="#F4EFE6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M34,76 L74,76"
+        android:strokeWidth="3.5"
+        android:strokeColor="#A7C4BC"
+        android:strokeLineCap="round" />
+</vector>

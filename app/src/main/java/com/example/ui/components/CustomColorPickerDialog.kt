@@ -182,7 +182,7 @@ fun CustomColorPickerDialog(
                                     }
                                 }
                             },
-                            label = { Text("HEX 色值（常驻可输入）") },
+                            label = { Text("HEX") },
                             prefix = { Text("#") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(

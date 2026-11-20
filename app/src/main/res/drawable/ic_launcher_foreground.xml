@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="66dp"
-        android:height="66dp"
-        android:drawable="@drawable/app_icon_ledger"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Crisp minimalist emerald ledger card with clean bookmark spine and ¥ glyph -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,28 C32.69,28 30,30.69 30,34 L30,74 C30,77.31 32.69,80 36,80 L72,80 C75.31,80 78,77.31 78,74 L78,34 C78,30.69 75.31,28 72,28 Z M37,37 L41.5,37 L41.5,43 L37,43 Z M37,51 L41.5,51 L41.5,57 L37,57 Z M37,65 L41.5,65 L41.5,71 L37,71 Z" />
+    <path
+        android:fillColor="#0C6756"
+        android:pathData="M48,39 L55,49.5 L62,39 L67,39 L58,52 L65,52 L65,55.5 L57.5,55.5 L57.5,59 L65,59 L65,62.5 L57.5,62.5 L57.5,70 L52.5,70 L52.5,62.5 L45,62.5 L45,59 L52.5,59 L52.5,55.5 L45,55.5 L45,52 L52,52 L43,39 Z" />
+</vector>

@@ -417,5 +417,27 @@ class ExampleRobolectricTest {
     val restored = repository.importTransactions(listOf(deletedTx)).getOrThrow()
     assertEquals(1, restored)
     org.junit.Assert.assertTrue(repository.getAllTransactionsOnce().any { it.id == "undo-restore-tx" })
+
+    val expressiveDynamic = com.example.ui.theme.applyPaletteStyleToDynamicScheme(
+      dynamicScheme = customScheme,
+      style = com.example.model.CustomPaletteStyle.EXPRESSIVE,
+      darkTheme = false
+    )
+    org.junit.Assert.assertNotEquals(expressiveDynamic.secondary, customScheme.secondary)
+
+    assertEquals(
+      "com.example.LauncherInk",
+      com.example.util.DesktopIconSyncManager.aliasClassNameFor(com.example.model.AppIconStyle.INK)
+    )
+    val svgBitmap = com.example.util.DesktopIconSyncManager.renderThemedSvgBitmap(
+      styleId = com.example.model.AppIconStyle.MINIMAL.id,
+      primaryArgb = 0xFF0C6756.toInt(),
+      primaryContainerArgb = 0xFFD0F0E6.toInt(),
+      onPrimaryArgb = 0xFFFFFFFF.toInt(),
+      tertiaryArgb = 0xFF336B5E.toInt(),
+      sizePx = 96
+    )
+    assertEquals(96, svgBitmap.width)
+    assertEquals(96, svgBitmap.height)
   }
 }

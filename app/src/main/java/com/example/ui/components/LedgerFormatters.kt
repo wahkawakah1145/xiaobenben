@@ -60,13 +60,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -879,15 +889,19 @@ fun parseDateTimeInputMillis(dateInput: String, timeInput: String): Long? {
     }.getOrNull()
 }
 
-fun appIconDrawableRes(styleId: String?): Int? {
-    return when (AppIconStyle.fromId(styleId)) {
-        AppIconStyle.EMERALD -> R.drawable.app_icon_ledger
-        AppIconStyle.MINIMAL -> R.drawable.img_icon_minimal
-        AppIconStyle.INK -> R.drawable.img_icon_ink
-        AppIconStyle.CYBER -> R.drawable.img_icon_cyber
-        AppIconStyle.VINTAGE -> R.drawable.img_icon_vintage
-        AppIconStyle.MONET_ADAPTIVE -> null
-    }
+private fun DrawScope.drawMinimalYenSymbol(
+    cx: Float,
+    cy: Float,
+    scale: Float,
+    color: Color,
+    strokeWidth: Float
+) {
+    val arm = scale * 0.34f
+    drawLine(color, Offset(cx - arm, cy - scale * 0.36f), Offset(cx, cy - scale * 0.04f), strokeWidth, cap = StrokeCap.Round)
+    drawLine(color, Offset(cx + arm, cy - scale * 0.36f), Offset(cx, cy - scale * 0.04f), strokeWidth, cap = StrokeCap.Round)
+    drawLine(color, Offset(cx, cy - scale * 0.04f), Offset(cx, cy + scale * 0.38f), strokeWidth, cap = StrokeCap.Round)
+    drawLine(color, Offset(cx - arm * 0.92f, cy + scale * 0.06f), Offset(cx + arm * 0.92f, cy + scale * 0.06f), strokeWidth, cap = StrokeCap.Round)
+    drawLine(color, Offset(cx - arm * 0.92f, cy + scale * 0.22f), Offset(cx + arm * 0.92f, cy + scale * 0.22f), strokeWidth, cap = StrokeCap.Round)
 }
 
 @Composable
@@ -898,49 +912,176 @@ fun AppBrandIconAvatar(
     modifier: Modifier = Modifier,
     contentDescription: String = "小本本应用图标"
 ) {
-    val resId = appIconDrawableRes(styleId)
+    val style = AppIconStyle.fromId(styleId)
     val shape = RoundedCornerShape(cornerDp.coerceAtLeast(0.dp))
-    if (resId != null) {
-        Surface(
-            shape = shape,
-            shadowElevation = 2.dp,
-            modifier = modifier.size(size)
+    val primary = MaterialTheme.colorScheme.primary
+    val onPrimary = MaterialTheme.colorScheme.onPrimary
+    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+    val tertiary = MaterialTheme.colorScheme.tertiary
+    val tertiaryContainer = MaterialTheme.colorScheme.tertiaryContainer
+
+    Surface(
+        shape = shape,
+        shadowElevation = 2.dp,
+        border = BorderStroke(0.8.dp, primary.copy(alpha = 0.24f)),
+        modifier = modifier
+            .size(size)
+            .semantics { this.contentDescription = contentDescription }
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(shape)
         ) {
-            Image(
-                painter = painterResource(id = resId),
-                contentDescription = contentDescription,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(shape)
-            )
-        }
-    } else {
-        Surface(
-            shape = shape,
-            shadowElevation = 2.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)),
-            modifier = modifier.size(size)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                MaterialTheme.colorScheme.primaryContainer,
-                                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.85f)
-                            )
+            val w = this.size.width
+            val h = this.size.height
+            when (style) {
+                AppIconStyle.EMERALD -> {
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            colors = listOf(primary, lerp(primary, Color.Black, 0.18f))
                         )
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = AppIcons.AccountBalanceWallet,
-                    contentDescription = contentDescription,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(size * 0.56f)
-                )
+                    )
+                    drawRoundRect(
+                        color = onPrimary,
+                        topLeft = Offset(w * 0.27f, h * 0.22f),
+                        size = Size(w * 0.46f, h * 0.56f),
+                        cornerRadius = CornerRadius(w * 0.09f, w * 0.09f)
+                    )
+                    drawLine(
+                        color = primary.copy(alpha = 0.45f),
+                        start = Offset(w * 0.34f, h * 0.34f),
+                        end = Offset(w * 0.34f, h * 0.66f),
+                        strokeWidth = w * 0.035f,
+                        cap = StrokeCap.Round
+                    )
+                    drawMinimalYenSymbol(
+                        cx = w * 0.53f,
+                        cy = h * 0.50f,
+                        scale = w * 0.26f,
+                        color = primary,
+                        strokeWidth = w * 0.044f
+                    )
+                }
+                AppIconStyle.MINIMAL -> {
+                    drawRect(color = primaryContainer)
+                    val fold = Path().apply {
+                        moveTo(w * 0.29f, h * 0.23f)
+                        lineTo(w * 0.60f, h * 0.23f)
+                        lineTo(w * 0.72f, h * 0.35f)
+                        lineTo(w * 0.72f, h * 0.77f)
+                        lineTo(w * 0.29f, h * 0.77f)
+                        close()
+                    }
+                    drawPath(
+                        path = fold,
+                        color = primary,
+                        style = Stroke(width = w * 0.046f, join = StrokeJoin.Round)
+                    )
+                    drawMinimalYenSymbol(
+                        cx = w * 0.505f,
+                        cy = h * 0.535f,
+                        scale = w * 0.23f,
+                        color = primary,
+                        strokeWidth = w * 0.042f
+                    )
+                }
+                AppIconStyle.INK -> {
+                    val inkBg = lerp(primary, Color(0xFF10211F), 0.62f)
+                    drawRect(color = inkBg)
+                    drawCircle(
+                        color = primaryContainer,
+                        radius = w * 0.075f,
+                        center = Offset(w * 0.65f, h * 0.34f)
+                    )
+                    val ridge = Path().apply {
+                        moveTo(w * 0.20f, h * 0.68f)
+                        lineTo(w * 0.39f, h * 0.44f)
+                        lineTo(w * 0.54f, h * 0.60f)
+                        lineTo(w * 0.64f, h * 0.49f)
+                        lineTo(w * 0.80f, h * 0.68f)
+                    }
+                    drawPath(
+                        path = ridge,
+                        color = lerp(primaryContainer, Color.White, 0.5f),
+                        style = Stroke(width = w * 0.05f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+                    drawLine(
+                        color = primaryContainer.copy(alpha = 0.65f),
+                        start = Offset(w * 0.28f, h * 0.77f),
+                        end = Offset(w * 0.72f, h * 0.77f),
+                        strokeWidth = w * 0.032f,
+                        cap = StrokeCap.Round
+                    )
+                }
+                AppIconStyle.CYBER -> {
+                    val slate = lerp(primary, Color(0xFF0F172A), 0.78f)
+                    drawRect(color = slate)
+                    val hex = Path().apply {
+                        moveTo(w * 0.50f, h * 0.20f)
+                        lineTo(w * 0.76f, h * 0.35f)
+                        lineTo(w * 0.76f, h * 0.65f)
+                        lineTo(w * 0.50f, h * 0.80f)
+                        lineTo(w * 0.24f, h * 0.65f)
+                        lineTo(w * 0.24f, h * 0.35f)
+                        close()
+                    }
+                    drawPath(
+                        path = hex,
+                        color = lerp(primary, Color.White, 0.32f),
+                        style = Stroke(width = w * 0.044f, join = StrokeJoin.Round)
+                    )
+                    drawMinimalYenSymbol(
+                        cx = w * 0.50f,
+                        cy = h * 0.50f,
+                        scale = w * 0.23f,
+                        color = tertiary,
+                        strokeWidth = w * 0.042f
+                    )
+                }
+                AppIconStyle.VINTAGE -> {
+                    val leather = lerp(primary, Color(0xFF5D4037), 0.52f)
+                    val cream = Color(0xFFF5ECD8)
+                    val brass = lerp(tertiary, Color(0xFFE5B96E), 0.45f)
+                    drawRect(color = leather)
+                    drawRoundRect(
+                        color = cream,
+                        topLeft = Offset(w * 0.26f, h * 0.23f),
+                        size = Size(w * 0.48f, h * 0.54f),
+                        cornerRadius = CornerRadius(w * 0.07f, w * 0.07f),
+                        style = Stroke(width = w * 0.044f)
+                    )
+                    drawLine(
+                        color = cream.copy(alpha = 0.85f),
+                        start = Offset(w * 0.37f, h * 0.23f),
+                        end = Offset(w * 0.37f, h * 0.77f),
+                        strokeWidth = w * 0.038f
+                    )
+                    drawRoundRect(
+                        color = brass,
+                        topLeft = Offset(w * 0.57f, h * 0.44f),
+                        size = Size(w * 0.22f, h * 0.12f),
+                        cornerRadius = CornerRadius(w * 0.04f, w * 0.04f)
+                    )
+                }
+                AppIconStyle.MONET_ADAPTIVE -> {
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            colors = listOf(primaryContainer, tertiaryContainer.copy(alpha = 0.85f))
+                        )
+                    )
+                    drawRoundRect(
+                        color = primary,
+                        topLeft = Offset(w * 0.24f, h * 0.30f),
+                        size = Size(w * 0.52f, h * 0.40f),
+                        cornerRadius = CornerRadius(w * 0.11f, w * 0.11f)
+                    )
+                    drawCircle(
+                        color = primaryContainer,
+                        radius = w * 0.055f,
+                        center = Offset(w * 0.63f, h * 0.50f)
+                    )
+                }
             }
         }
     }

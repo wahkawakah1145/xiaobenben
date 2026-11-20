@@ -1,24 +1,41 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -35,16 +52,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.CurrencyExchangeManager
@@ -57,8 +82,10 @@ import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
 import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
+import kotlinx.coroutines.launch
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.abs
 
 private val weekDayLabels = listOf("一", "二", "三", "四", "五", "六", "日")
 
@@ -71,10 +98,15 @@ fun AnalyticsCalendarSection(
     ratesToCny: Map<String, Double>,
     onGranularityAndAnchorChange: (AnalyticsGranularity, Long) -> Unit,
     onTransactionClick: (LedgerTransaction) -> Unit,
+    isFullScreen: Boolean = false,
+    onRequestExitFullScreen: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val confirmedTxs = remember(transactions) { transactions.filter { it.confirmed } }
     var pinchAccumulator by remember { mutableFloatStateOf(1f) }
+    val livePinchVisualScale = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
     val numberFont = LocalNumberFontFamily.current
 
     fun toBaseCents(tx: LedgerTransaction): Long = CurrencyExchangeManager.convertCents(
@@ -104,44 +136,106 @@ fun AnalyticsCalendarSection(
         if (prev != granularity) onGranularityAndAnchorChange(prev, anchorMillis)
     }
 
-    val calendarTitle = when (granularity) {
-        AnalyticsGranularity.YEAR -> "${Calendar.getInstance().apply { timeInMillis = anchorMillis }.get(Calendar.YEAR)} 年收支年历"
-        AnalyticsGranularity.MONTH -> {
-            val c = Calendar.getInstance().apply { timeInMillis = anchorMillis }
-            "${c.get(Calendar.YEAR)}年${c.get(Calendar.MONTH) + 1}月 收支月历"
+    val calendarTitle = remember(granularity, anchorMillis) {
+        when (granularity) {
+            AnalyticsGranularity.YEAR -> "${Calendar.getInstance().apply { timeInMillis = anchorMillis }.get(Calendar.YEAR)} 年"
+            AnalyticsGranularity.MONTH -> {
+                val c = Calendar.getInstance().apply { timeInMillis = anchorMillis }
+                "${c.get(Calendar.YEAR)}年${c.get(Calendar.MONTH) + 1}月"
+            }
+            AnalyticsGranularity.WEEK -> LedgerViewModel.formatPeriodTitle(AnalyticsGranularity.WEEK, anchorMillis)
+            AnalyticsGranularity.DAY -> LedgerViewModel.formatPeriodTitle(AnalyticsGranularity.DAY, anchorMillis)
         }
-        AnalyticsGranularity.WEEK -> "${LedgerViewModel.formatPeriodTitle(AnalyticsGranularity.WEEK, anchorMillis)} 周历"
-        AnalyticsGranularity.DAY -> "${LedgerViewModel.formatPeriodTitle(AnalyticsGranularity.DAY, anchorMillis)} 日历明细"
     }
 
-    Card(
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-        modifier = modifier
-            .fillMaxWidth()
-            .pointerInput(granularity, anchorMillis) {
-                detectTransformGestures { _, _, zoom, _ ->
-                    if (zoom == 1f) return@detectTransformGestures
-                    pinchAccumulator = (pinchAccumulator * zoom).coerceIn(0.4f, 2.5f)
-                    when {
-                        pinchAccumulator >= 1.28f -> {
-                            pinchAccumulator = 1f
-                            zoomIn()
-                        }
-                        pinchAccumulator <= 0.78f -> {
-                            pinchAccumulator = 1f
-                            zoomOut()
+    val scrollState = rememberScrollState()
+    var swipeUpOverscrollPx by remember { mutableFloatStateOf(0f) }
+    val swipeExitThresholdPx = with(density) { 64.dp.toPx() }
+
+    val exitNestedScrollConnection = remember(isFullScreen, onRequestExitFullScreen) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (!isFullScreen || onRequestExitFullScreen == null || source != NestedScrollSource.UserInput) {
+                    return Offset.Zero
+                }
+                if (available.y < 0f && scrollState.value >= scrollState.maxValue) {
+                    swipeUpOverscrollPx += -available.y
+                    if (swipeUpOverscrollPx >= swipeExitThresholdPx) {
+                        swipeUpOverscrollPx = 0f
+                        onRequestExitFullScreen()
+                    }
+                    return available
+                } else if (available.y > 0f && swipeUpOverscrollPx > 0f) {
+                    swipeUpOverscrollPx = (swipeUpOverscrollPx - available.y).coerceAtLeast(0f)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (isFullScreen && onRequestExitFullScreen != null && swipeUpOverscrollPx > swipeExitThresholdPx * 0.65f) {
+                    swipeUpOverscrollPx = 0f
+                    onRequestExitFullScreen()
+                } else {
+                    swipeUpOverscrollPx = 0f
+                }
+                return Velocity.Zero
+            }
+        }
+    }
+
+    // Non-blocking multi-touch pinch zoom: single-finger scrolls and horizontal swipes are untouched!
+    val twoFingerPinchModifier = Modifier.pointerInput(granularity, anchorMillis) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+            var isPinching = false
+            while (true) {
+                val event = awaitPointerEvent()
+                val pressed = event.changes.count { it.pressed }
+                if (pressed == 0) {
+                    if (isPinching) {
+                        pinchAccumulator = 1f
+                        scope.launch { livePinchVisualScale.animateTo(1f, spring()) }
+                    }
+                    break
+                }
+                if (pressed >= 2) {
+                    isPinching = true
+                    val zoom = event.calculateZoom()
+                    if (zoom != 1f && !zoom.isNaN()) {
+                        pinchAccumulator = (pinchAccumulator * zoom).coerceIn(0.55f, 1.85f)
+                        val clampedVisual = pinchAccumulator.coerceIn(0.88f, 1.14f)
+                        scope.launch { livePinchVisualScale.snapTo(clampedVisual) }
+                        when {
+                            pinchAccumulator >= 1.24f -> {
+                                pinchAccumulator = 1f
+                                scope.launch { livePinchVisualScale.animateTo(1f, spring()) }
+                                zoomIn()
+                            }
+                            pinchAccumulator <= 0.80f -> {
+                                pinchAccumulator = 1f
+                                scope.launch { livePinchVisualScale.animateTo(1f, spring()) }
+                                zoomOut()
+                            }
                         }
                     }
+                    event.changes.forEach { it.consume() }
                 }
             }
-            .testTag("analytics_calendar_section")
-    ) {
+        }
+    }
+
+    val innerBody: @Composable () -> Unit = {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Header + Zoom +/- Buttons
+            // Header + Zoom +/- + Optional Exit FullScreen Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -158,9 +252,9 @@ fun AnalyticsCalendarSection(
                         tint = MaterialTheme.colorScheme.primary
                     )
                     Column {
-                        Text("收支多维日历", style = MaterialTheme.typography.titleMedium)
+                        Text("收支日历", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text(
-                            text = "双指捏合缩放或点击网格可切换 年历/月历/周历/日历",
+                            text = "双指缩放或点击切换 年 / 月 / 周 / 日",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -170,7 +264,7 @@ fun AnalyticsCalendarSection(
                     OutlinedButton(
                         onClick = { zoomOut() },
                         enabled = granularity != AnalyticsGranularity.YEAR,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier.testTag("calendar_zoom_out_button")
                     ) {
                         Text("缩小", style = MaterialTheme.typography.labelMedium)
@@ -178,7 +272,7 @@ fun AnalyticsCalendarSection(
                     OutlinedButton(
                         onClick = { zoomIn() },
                         enabled = granularity != AnalyticsGranularity.DAY,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier.testTag("calendar_zoom_in_button")
                     ) {
                         Text("放大", style = MaterialTheme.typography.labelMedium)
@@ -186,22 +280,28 @@ fun AnalyticsCalendarSection(
                 }
             }
 
-            // Granularity Filter Tabs
+            // Granularity Filter Tabs: 年 / 月 / 周 / 日
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 val labels = mapOf(
-                    AnalyticsGranularity.YEAR to "年历",
-                    AnalyticsGranularity.MONTH to "月历",
-                    AnalyticsGranularity.WEEK to "周历",
-                    AnalyticsGranularity.DAY to "日历"
+                    AnalyticsGranularity.YEAR to "年",
+                    AnalyticsGranularity.MONTH to "月",
+                    AnalyticsGranularity.WEEK to "周",
+                    AnalyticsGranularity.DAY to "日"
                 )
                 AnalyticsGranularity.entries.forEach { g ->
                     FilterChip(
                         selected = granularity == g,
                         onClick = { onGranularityAndAnchorChange(g, anchorMillis) },
-                        label = { Text(labels[g] ?: g.label) },
+                        label = {
+                            Text(
+                                text = labels[g] ?: g.label,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("calendar_tab_${g.name}")
@@ -248,7 +348,31 @@ fun AnalyticsCalendarSection(
 
             HorizontalDivider()
 
-            when (granularity) {
+            AnimatedContent(
+                targetState = granularity,
+                transitionSpec = {
+                    val zoomInAnim = targetState.ordinal > initialState.ordinal
+                    val enterSpec = (
+                        scaleIn(
+                            initialScale = if (zoomInAnim) 0.88f else 1.09f,
+                            animationSpec = spring(dampingRatio = 0.84f, stiffness = 420f)
+                        ) + fadeIn(tween(210))
+                    )
+                    val exitSpec = (
+                        scaleOut(
+                            targetScale = if (zoomInAnim) 1.09f else 0.88f,
+                            animationSpec = tween(170)
+                        ) + fadeOut(tween(150))
+                    )
+                    enterSpec togetherWith exitSpec
+                },
+                label = "calendar_granularity_zoom_anim",
+                modifier = Modifier.graphicsLayer {
+                    scaleX = livePinchVisualScale.value
+                    scaleY = livePinchVisualScale.value
+                }
+            ) { activeGranularity ->
+            when (activeGranularity) {
                 AnalyticsGranularity.YEAR -> {
                     val cal = Calendar.getInstance().apply { timeInMillis = anchorMillis }
                     val targetYear = cal.get(Calendar.YEAR)
@@ -719,17 +843,92 @@ fun AnalyticsCalendarSection(
                     }
                 }
             }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                if (isFullScreen && onRequestExitFullScreen != null) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { onRequestExitFullScreen() }
+                            .pointerInput(Unit) {
+                                var dragUp = 0f
+                                detectVerticalDragGestures(
+                                    onDragStart = { dragUp = 0f },
+                                    onVerticalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        if (dragAmount < 0f) dragUp += -dragAmount
+                                    },
+                                    onDragEnd = {
+                                        if (dragUp > 24.dp.toPx()) onRequestExitFullScreen()
+                                    }
+                                )
+                            }
+                            .testTag("calendar_exit_fullscreen_pill")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.KeyboardArrowUp,
+                                contentDescription = "上划退出全屏",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "上划或点击退出全屏",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                } else {
+                    Spacer(modifier = Modifier.width(1.dp))
+                }
                 TextButton(
                     onClick = { onGranularityAndAnchorChange(granularity, System.currentTimeMillis()) }
                 ) {
                     Text("定位到今天")
                 }
             }
+        }
+    }
+
+    if (isFullScreen) {
+        Surface(
+            color = MaterialTheme.colorScheme.background,
+            modifier = modifier
+                .fillMaxSize()
+                .nestedScroll(exitNestedScrollConnection)
+                .then(twoFingerPinchModifier)
+                .testTag("analytics_calendar_section")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
+            ) {
+                innerBody()
+            }
+        }
+    } else {
+        Card(
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            modifier = modifier
+                .fillMaxWidth()
+                .then(twoFingerPinchModifier)
+                .testTag("analytics_calendar_section")
+        ) {
+            innerBody()
         }
     }
 }
