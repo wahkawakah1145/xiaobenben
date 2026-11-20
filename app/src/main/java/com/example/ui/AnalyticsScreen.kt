@@ -56,7 +56,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -141,7 +140,6 @@ fun AnalyticsScreen(
 ) {
     var selectedGranularity by remember { mutableStateOf(AnalyticsGranularity.MONTH) }
     var anchorMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var showPullThresholdAdjuster by remember { mutableStateOf(false) }
     val density = LocalDensity.current
 
     var livePieSizeDp by remember(appearance.analyticsPieSizeDp) {
@@ -158,7 +156,7 @@ fun AnalyticsScreen(
     }
 
     var topPullDistancePx by remember { mutableFloatStateOf(0f) }
-    val pullTriggerDp = appearance.analyticsPullCalendarDistanceDp.coerceIn(72, 220)
+    val pullTriggerDp = appearance.analyticsPullCalendarDistanceDp.coerceIn(80, 560)
     val pullTriggerPx = with(density) { pullTriggerDp.dp.toPx() }
     val pullDownToCalendarConnection = remember(isCalendarFullScreen, pullTriggerPx) {
         object : NestedScrollConnection {
@@ -198,6 +196,8 @@ fun AnalyticsScreen(
     var channelChartStyle by remember { mutableStateOf(AnalyticsChartStyle.BAR) }
     var selectedCategoryFilter by remember { mutableStateOf<String?>(null) }
     var selectedChannelFilter by remember { mutableStateOf<String?>(null) }
+    var expandAllCategoryLegends by remember { mutableStateOf(false) }
+    var expandAllChannelLegends by remember { mutableStateOf(false) }
     var inspectingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
     var editingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
 
@@ -357,6 +357,8 @@ fun AnalyticsScreen(
                                         selectedGranularity = granularity
                                         selectedCategoryFilter = null
                                         selectedChannelFilter = null
+                                        expandAllCategoryLegends = false
+                                        expandAllChannelLegends = false
                                     },
                                     shape = SegmentedButtonDefaults.itemShape(
                                         index = index,
@@ -378,6 +380,8 @@ fun AnalyticsScreen(
                                 onClick = {
                                     selectedCategoryFilter = null
                                     selectedChannelFilter = null
+                                    expandAllCategoryLegends = false
+                                    expandAllChannelLegends = false
                                     anchorMillis = LedgerViewModel.shiftPeriodAnchor(selectedGranularity, anchorMillis, -1)
                                 }
                             ) {
@@ -406,6 +410,8 @@ fun AnalyticsScreen(
                                         onClick = {
                                             selectedCategoryFilter = null
                                             selectedChannelFilter = null
+                                            expandAllCategoryLegends = false
+                                            expandAllChannelLegends = false
                                             anchorMillis = System.currentTimeMillis()
                                         },
                                         label = { Text("回到今天") },
@@ -423,11 +429,6 @@ fun AnalyticsScreen(
                                         label = { Text("全屏日历") },
                                         modifier = Modifier.testTag("analytics_scroll_calendar_chip")
                                     )
-                                    AssistChip(
-                                        onClick = { showPullThresholdAdjuster = !showPullThresholdAdjuster },
-                                        label = { Text("下拉 ${pullTriggerDp}dp") },
-                                        modifier = Modifier.testTag("analytics_pull_distance_chip")
-                                    )
                                 }
                             }
 
@@ -435,50 +436,14 @@ fun AnalyticsScreen(
                                 onClick = {
                                     selectedCategoryFilter = null
                                     selectedChannelFilter = null
+                                    expandAllCategoryLegends = false
+                                    expandAllChannelLegends = false
                                     anchorMillis = LedgerViewModel.shiftPeriodAnchor(selectedGranularity, anchorMillis, +1)
                                 }
                             ) {
                                 Icon(
                                     Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                                     contentDescription = "下一${selectedGranularity.label}"
-                                )
-                            }
-                        }
-
-                        AnimatedVisibility(visible = showPullThresholdAdjuster) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                HorizontalDivider()
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "下拉打开日历触发距离（越长越防误触）",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${pullTriggerDp} dp",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Slider(
-                                    value = pullTriggerDp.toFloat(),
-                                    onValueChange = { raw ->
-                                        val nextDp = raw.roundToInt().coerceIn(72, 220)
-                                        viewModel.saveAppearanceSettings(
-                                            appearance.copy(analyticsPullCalendarDistanceDp = nextDp)
-                                        )
-                                    },
-                                    valueRange = 72f..220f,
-                                    modifier = Modifier.testTag("analytics_inline_pull_distance_slider")
                                 )
                             }
                         }
@@ -633,11 +598,18 @@ fun AnalyticsScreen(
                                         modifier = Modifier.testTag("analytics_pie_pinch_hint")
                                     )
 
+                                    val displayedCategoryData = if (selectedCategoryFilter != null && !expandAllCategoryLegends) {
+                                        categoryData.filter { it.label == selectedCategoryFilter }
+                                    } else {
+                                        categoryData
+                                    }
+                                    val collapsedCategoryCount = (categoryData.size - displayedCategoryData.size).coerceAtLeast(0)
+
                                     Column(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        categoryData.forEach { datum ->
+                                        displayedCategoryData.forEach { datum ->
                                             val pct = (datum.cents * 100.0 / totalExpense)
                                             val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
                                             val isSelected = selectedCategoryFilter == datum.label
@@ -649,6 +621,22 @@ fun AnalyticsScreen(
                                                 testTag = "category_legend_${datum.label}",
                                                 onClick = {
                                                     selectedCategoryFilter = if (isSelected) null else datum.label
+                                                    expandAllCategoryLegends = false
+                                                }
+                                            )
+                                        }
+                                        if (selectedCategoryFilter != null && categoryData.size > 1) {
+                                            CollapsedLegendsControlBar(
+                                                collapsedCount = collapsedCategoryCount,
+                                                isExpandedAll = expandAllCategoryLegends,
+                                                expandTestTag = "category_legends_expand_all",
+                                                collapseTestTag = "category_legends_collapse_others",
+                                                resetTestTag = "category_filter_reset_button",
+                                                onExpandAll = { expandAllCategoryLegends = true },
+                                                onCollapseOthers = { expandAllCategoryLegends = false },
+                                                onResetFilter = {
+                                                    selectedCategoryFilter = null
+                                                    expandAllCategoryLegends = false
                                                 }
                                             )
                                         }
@@ -661,10 +649,17 @@ fun AnalyticsScreen(
                                     selectedLabel = selectedCategoryFilter,
                                     onSelect = { label ->
                                         selectedCategoryFilter = if (selectedCategoryFilter == label) null else label
+                                        expandAllCategoryLegends = false
                                     }
                                 )
+                                val displayedCategoryRows = if (selectedCategoryFilter != null && !expandAllCategoryLegends) {
+                                    categoryData.filter { it.label == selectedCategoryFilter }
+                                } else {
+                                    categoryData
+                                }
+                                val collapsedCategoryRowCount = (categoryData.size - displayedCategoryRows.size).coerceAtLeast(0)
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    categoryData.forEach { datum ->
+                                    displayedCategoryRows.forEach { datum ->
                                         val ratio = (datum.cents.toFloat() / totalExpense.toFloat()).coerceIn(0f, 1f)
                                         val pct = datum.cents * 100.0 / totalExpense
                                         val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
@@ -678,6 +673,22 @@ fun AnalyticsScreen(
                                             testTag = "category_row_${datum.label}",
                                             onClick = {
                                                 selectedCategoryFilter = if (isSelected) null else datum.label
+                                                expandAllCategoryLegends = false
+                                            }
+                                        )
+                                    }
+                                    if (selectedCategoryFilter != null && categoryData.size > 1) {
+                                        CollapsedLegendsControlBar(
+                                            collapsedCount = collapsedCategoryRowCount,
+                                            isExpandedAll = expandAllCategoryLegends,
+                                            expandTestTag = "category_legends_expand_all",
+                                            collapseTestTag = "category_legends_collapse_others",
+                                            resetTestTag = "category_filter_reset_button",
+                                            onExpandAll = { expandAllCategoryLegends = true },
+                                            onCollapseOthers = { expandAllCategoryLegends = false },
+                                            onResetFilter = {
+                                                selectedCategoryFilter = null
+                                                expandAllCategoryLegends = false
                                             }
                                         )
                                     }
@@ -690,7 +701,10 @@ fun AnalyticsScreen(
                                     transactions = filteredCategoryTxs,
                                     baseCurrencyCode = baseCurrency,
                                     ratesToCny = exchangeRates.ratesToCny,
-                                    onClearFilter = { selectedCategoryFilter = null },
+                                    onClearFilter = {
+                                        selectedCategoryFilter = null
+                                        expandAllCategoryLegends = false
+                                    },
                                     onTransactionClick = { inspectingTransaction = it }
                                 )
                             }
@@ -794,11 +808,18 @@ fun AnalyticsScreen(
                                         }
                                     }
 
+                                    val displayedChannelData = if (selectedChannelFilter != null && !expandAllChannelLegends) {
+                                        channelData.filter { it.label == selectedChannelFilter }
+                                    } else {
+                                        channelData
+                                    }
+                                    val collapsedChannelCount = (channelData.size - displayedChannelData.size).coerceAtLeast(0)
+
                                     Column(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        channelData.forEach { datum ->
+                                        displayedChannelData.forEach { datum ->
                                             val pct = datum.cents * 100.0 / totalExpense
                                             val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
                                             val isSelected = selectedChannelFilter == datum.label
@@ -810,6 +831,22 @@ fun AnalyticsScreen(
                                                 testTag = "channel_legend_${datum.label}",
                                                 onClick = {
                                                     selectedChannelFilter = if (isSelected) null else datum.label
+                                                    expandAllChannelLegends = false
+                                                }
+                                            )
+                                        }
+                                        if (selectedChannelFilter != null && channelData.size > 1) {
+                                            CollapsedLegendsControlBar(
+                                                collapsedCount = collapsedChannelCount,
+                                                isExpandedAll = expandAllChannelLegends,
+                                                expandTestTag = "channel_legends_expand_all",
+                                                collapseTestTag = "channel_legends_collapse_others",
+                                                resetTestTag = "channel_filter_reset_button",
+                                                onExpandAll = { expandAllChannelLegends = true },
+                                                onCollapseOthers = { expandAllChannelLegends = false },
+                                                onResetFilter = {
+                                                    selectedChannelFilter = null
+                                                    expandAllChannelLegends = false
                                                 }
                                             )
                                         }
@@ -822,10 +859,17 @@ fun AnalyticsScreen(
                                     selectedLabel = selectedChannelFilter,
                                     onSelect = { label ->
                                         selectedChannelFilter = if (selectedChannelFilter == label) null else label
+                                        expandAllChannelLegends = false
                                     }
                                 )
+                                val displayedChannelRows = if (selectedChannelFilter != null && !expandAllChannelLegends) {
+                                    channelData.filter { it.label == selectedChannelFilter }
+                                } else {
+                                    channelData
+                                }
+                                val collapsedChannelRowCount = (channelData.size - displayedChannelRows.size).coerceAtLeast(0)
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    channelData.forEach { datum ->
+                                    displayedChannelRows.forEach { datum ->
                                         val ratio = (datum.cents.toFloat() / totalExpense.toFloat()).coerceIn(0f, 1f)
                                         val pct = datum.cents * 100.0 / totalExpense
                                         val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
@@ -839,6 +883,22 @@ fun AnalyticsScreen(
                                             testTag = "channel_row_${datum.label}",
                                             onClick = {
                                                 selectedChannelFilter = if (isSelected) null else datum.label
+                                                expandAllChannelLegends = false
+                                            }
+                                        )
+                                    }
+                                    if (selectedChannelFilter != null && channelData.size > 1) {
+                                        CollapsedLegendsControlBar(
+                                            collapsedCount = collapsedChannelRowCount,
+                                            isExpandedAll = expandAllChannelLegends,
+                                            expandTestTag = "channel_legends_expand_all",
+                                            collapseTestTag = "channel_legends_collapse_others",
+                                            resetTestTag = "channel_filter_reset_button",
+                                            onExpandAll = { expandAllChannelLegends = true },
+                                            onCollapseOthers = { expandAllChannelLegends = false },
+                                            onResetFilter = {
+                                                selectedChannelFilter = null
+                                                expandAllChannelLegends = false
                                             }
                                         )
                                     }
@@ -851,7 +911,10 @@ fun AnalyticsScreen(
                                     transactions = filteredChannelTxs,
                                     baseCurrencyCode = baseCurrency,
                                     ratesToCny = exchangeRates.ratesToCny,
-                                    onClearFilter = { selectedChannelFilter = null },
+                                    onClearFilter = {
+                                        selectedChannelFilter = null
+                                        expandAllChannelLegends = false
+                                    },
                                     onTransactionClick = { inspectingTransaction = it }
                                 )
                             }
@@ -1519,6 +1582,68 @@ private fun ClickableLegendRow(
                 maxLines = 2,
                 modifier = Modifier.padding(start = 16.dp)
             )
+        }
+    }
+}
+
+@Composable
+private fun CollapsedLegendsControlBar(
+    collapsedCount: Int,
+    isExpandedAll: Boolean,
+    expandTestTag: String,
+    collapseTestTag: String,
+    resetTestTag: String,
+    onExpandAll: () -> Unit,
+    onCollapseOthers: () -> Unit,
+    onResetFilter: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.6f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (!isExpandedAll && collapsedCount > 0) {
+                    "已折叠其余 $collapsedCount 项图例"
+                } else {
+                    "已展开全部图例"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (!isExpandedAll && collapsedCount > 0) {
+                    TextButton(
+                        onClick = onExpandAll,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.testTag(expandTestTag)
+                    ) {
+                        Text("展开全部", style = MaterialTheme.typography.labelSmall)
+                    }
+                } else {
+                    TextButton(
+                        onClick = onCollapseOthers,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.testTag(collapseTestTag)
+                    ) {
+                        Text("折叠未选", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                TextButton(
+                    onClick = onResetFilter,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier.testTag(resetTestTag)
+                ) {
+                    Text("取消筛选", style = MaterialTheme.typography.labelSmall)
+                }
+            }
         }
     }
 }

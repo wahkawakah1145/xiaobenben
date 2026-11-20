@@ -460,4 +460,187 @@ class ExampleRobolectricTest {
     val reloadedPull = repository.observeAppearanceSettings().first()
     assertEquals(168, reloadedPull.analyticsPullCalendarDistanceDp)
   }
+
+  @Test
+  fun `pull calendar distance defaults to 260 and clamps across 80 to 560 dp`() = kotlinx.coroutines.runBlocking {
+    val defaultAppearance = com.example.model.AppearanceSettings()
+    assertEquals(260, defaultAppearance.analyticsPullCalendarDistanceDp)
+
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+
+    repository.saveAppearanceSettings(defaultAppearance.copy(analyticsPullCalendarDistanceDp = 30)).getOrThrow()
+    assertEquals(80, repository.observeAppearanceSettings().first().analyticsPullCalendarDistanceDp)
+
+    repository.saveAppearanceSettings(defaultAppearance.copy(analyticsPullCalendarDistanceDp = 720)).getOrThrow()
+    assertEquals(560, repository.observeAppearanceSettings().first().analyticsPullCalendarDistanceDp)
+
+    repository.saveAppearanceSettings(defaultAppearance.copy(analyticsPullCalendarDistanceDp = 420)).getOrThrow()
+    assertEquals(420, repository.observeAppearanceSettings().first().analyticsPullCalendarDistanceDp)
+  }
+
+  @Test
+  fun `ai prompt editor rules selection and streaming tokenizer json vocab parsing work`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+
+    val ruleA = com.example.model.CustomParsingRule(
+      id = "prompt-rule-a",
+      name = "星巴克专享",
+      packageFilter = "com.eg.android.AlipayGphone",
+      keywordPattern = "星巴克|Starbucks",
+      channelName = "支付宝",
+      defaultType = "EXPENSE",
+      defaultCategory = "餐饮美食",
+      merchantOverride = "星巴克咖啡"
+    )
+    val ruleB = com.example.model.CustomParsingRule(
+      id = "prompt-rule-b",
+      name = "验证码忽略",
+      keywordPattern = "验证码",
+      defaultType = "IGNORE"
+    )
+
+    val config = com.example.model.AiConfig(
+      providerMode = com.example.model.AiProviderMode.ONLINE_API,
+      customSystemPrompt = "自定义提示词：优先保持中文商户名称。",
+      selectedPromptRuleIds = listOf(ruleA.id)
+    )
+    repository.saveAiConfig(config).getOrThrow()
+    val loaded = repository.getAiConfigOnce()
+    assertEquals("自定义提示词：优先保持中文商户名称。", loaded.customSystemPrompt)
+    assertEquals(listOf(ruleA.id), loaded.selectedPromptRuleIds)
+
+    val resolved = com.example.data.AiUnderstandingManager.resolveSelectedRules(
+      config = loaded,
+      availableRules = listOf(ruleA, ruleB)
+    )
+    assertEquals(1, resolved.size)
+    assertEquals(ruleA.id, resolved.first().id)
+
+    val effective = com.example.data.AiUnderstandingManager.buildEffectiveSystemPrompt(loaded, resolved)
+    org.junit.Assert.assertTrue(effective.contains("自定义提示词：优先保持中文商户名称。"))
+    org.junit.Assert.assertTrue(effective.contains("星巴克专享"))
+    org.junit.Assert.assertFalse(effective.contains("验证码忽略"))
+
+    val defaultPrompt = com.example.data.AiUnderstandingManager.buildEffectiveSystemPrompt(
+      config.copy(customSystemPrompt = ""),
+      emptyList()
+    )
+    assertEquals(com.example.data.AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT, defaultPrompt)
+
+    val tokenizerFile = java.io.File(context.cacheDir, "stream_vocab_tokenizer.json").apply {
+      writeText("""{"version":"1.0","model":{"vocab":{"餐饮":1,"外卖":2,"地铁":3}}}""", Charsets.UTF_8)
+    }
+    val aiManager = com.example.data.AiUnderstandingManager()
+    val imported = aiManager.importCustomModelWeight(
+      context = context,
+      uri = android.net.Uri.fromFile(tokenizerFile),
+      explicitFileName = "stream_vocab_tokenizer.json"
+    ).getOrThrow()
+    assertEquals(3, imported.vocabTokenCount)
+    com.example.data.AiUnderstandingManager.trimMemory(evictConnections = true)
+  }
+
+  @Test
+  fun `home dimension filter and non-current-year date formatting work accurately`() {
+    val anchorCal = java.util.Calendar.getInstance().apply {
+      set(2026, java.util.Calendar.MAY, 15, 14, 30, 0)
+      set(java.util.Calendar.MILLISECOND, 0)
+    }
+    val nowMillis = anchorCal.timeInMillis
+    val sameDayTx = com.example.model.LedgerTransaction(
+      id = "dim-today",
+      amountCents = 1200L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "午餐",
+      channel = "支付宝",
+      occurredAtMillis = nowMillis - 3_600_000L
+    )
+    val lastMonthCal = (anchorCal.clone() as java.util.Calendar).apply {
+      add(java.util.Calendar.MONTH, -1)
+    }
+    val lastMonthTx = sameDayTx.copy(
+      id = "dim-last-month",
+      occurredAtMillis = lastMonthCal.timeInMillis
+    )
+    val prevYearCal = (anchorCal.clone() as java.util.Calendar).apply {
+      set(2025, java.util.Calendar.DECEMBER, 20, 9, 15, 0)
+    }
+    val prevYearTx = sameDayTx.copy(
+      id = "dim-prev-year",
+      occurredAtMillis = prevYearCal.timeInMillis
+    )
+    val all = listOf(sameDayTx, lastMonthTx, prevYearTx)
+
+    assertEquals(
+      listOf("dim-today"),
+      com.example.viewmodel.LedgerViewModel.filterByHomeDimension(
+        all,
+        com.example.model.HomeStatsDimension.TODAY,
+        nowMillis
+      ).map { it.id }
+    )
+    assertEquals(
+      listOf("dim-last-month"),
+      com.example.viewmodel.LedgerViewModel.filterByHomeDimension(
+        all,
+        com.example.model.HomeStatsDimension.LAST_MONTH,
+        nowMillis
+      ).map { it.id }
+    )
+    assertEquals(
+      listOf("dim-today", "dim-last-month"),
+      com.example.viewmodel.LedgerViewModel.filterByHomeDimension(
+        all,
+        com.example.model.HomeStatsDimension.THIS_YEAR,
+        nowMillis
+      ).map { it.id }
+    )
+    assertEquals(
+      3,
+      com.example.viewmodel.LedgerViewModel.filterByHomeDimension(
+        all,
+        com.example.model.HomeStatsDimension.ALL_TIME,
+        nowMillis
+      ).size
+    )
+
+    val sameYearHeader = com.example.ui.components.formatDateHeader(nowMillis, nowYear = 2026)
+    val prevYearHeader = com.example.ui.components.formatDateHeader(prevYearCal.timeInMillis, nowYear = 2026)
+    org.junit.Assert.assertFalse(sameYearHeader.contains("2026年"))
+    org.junit.Assert.assertTrue(prevYearHeader.startsWith("2025年"))
+
+    val sameYearCompact = com.example.ui.components.formatItemTimeCompact(nowMillis, nowYear = 2026)
+    val prevYearCompact = com.example.ui.components.formatItemTimeCompact(prevYearCal.timeInMillis, nowYear = 2026)
+    assertEquals("14:30", sameYearCompact)
+    assertEquals("2025-12-20 09:15", prevYearCompact)
+  }
+
+  @Test
+  fun `notification bridge bounds logs and trims memory caches cleanly`() {
+    com.example.service.NotificationBridge.trimMemoryCaches(keepRecentLogs = 0)
+    repeat(25) { index ->
+      com.example.service.NotificationBridge.appendLog(
+        packageName = "com.example.pkg$index",
+        appLabel = "App$index",
+        title = "T".repeat(150),
+        content = "C".repeat(260),
+        status = "已入账",
+        summary = "S".repeat(200)
+      )
+    }
+    val capped = com.example.service.NotificationBridge.capturedLogs.value
+    assertEquals(20, capped.size)
+    org.junit.Assert.assertTrue(capped.first().title.length <= 120)
+    org.junit.Assert.assertTrue(capped.first().content.length <= 220)
+    org.junit.Assert.assertTrue(capped.first().summary.length <= 160)
+
+    com.example.service.NotificationBridge.trimMemoryCaches(keepRecentLogs = 6)
+    assertEquals(6, com.example.service.NotificationBridge.capturedLogs.value.size)
+    com.example.service.NotificationBridge.trimMemoryCaches(keepRecentLogs = 0)
+  }
 }
+

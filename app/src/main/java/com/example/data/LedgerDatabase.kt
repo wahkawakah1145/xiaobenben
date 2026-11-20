@@ -350,6 +350,7 @@ abstract class LedgerDatabase : RoomDatabase() {
 
                         override fun onOpen(db: SupportSQLiteDatabase) {
                             super.onOpen(db)
+                            runCatching { db.execSQL("PRAGMA cache_size = -1024") }
                             runCatching { db.query("PRAGMA incremental_vacuum").close() }
                         }
                     })

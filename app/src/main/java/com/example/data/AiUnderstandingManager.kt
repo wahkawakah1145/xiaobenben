@@ -1,10 +1,15 @@
 package com.example.data
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.JsonReader
+import android.util.JsonToken
 import com.example.model.AiConfig
 import com.example.model.AiProviderMode
-import com.example.model.CategoryCatalog
 import com.example.model.CurrencyCatalog
+import com.example.model.CustomLocalModelInfo
+import com.example.model.CustomParsingRule
 import com.example.model.LocalModelFileSpec
 import com.example.model.LocalModelPreset
 import com.example.model.ParseMethod
@@ -15,15 +20,13 @@ import com.example.parser.ChinaPaymentCatalog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import android.net.Uri
-import android.provider.OpenableColumns
-import com.example.model.CustomLocalModelInfo
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
@@ -117,11 +120,8 @@ data class LocalModelInstallStatus(
 
 class AiUnderstandingManager {
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(35, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient
+        get() = sharedClient
 
     fun modelDirectory(context: Context, modelId: String): File {
         val root = File(context.filesDir, "local_ai_models")
@@ -281,13 +281,12 @@ class AiUnderstandingManager {
 
     private fun extractPrintableChineseVocabCount(file: File, ext: String): Int {
         if (ext == "txt" || ext == "vocab") {
-            return runCatching { file.useLines { it.count() } }.getOrDefault(0)
+            return runCatching {
+                file.bufferedReader(Charsets.UTF_8).useLines { lines -> lines.count() }
+            }.getOrDefault(0)
         }
         if (ext == "json") {
-            return runCatching {
-                val obj = JSONObject(file.readText(Charsets.UTF_8))
-                obj.optJSONObject("model")?.optJSONObject("vocab")?.length() ?: 0
-            }.getOrDefault(0)
+            return countTokenizerJsonVocabStreaming(file)
         }
         return 0
     }
@@ -424,8 +423,10 @@ class AiUnderstandingManager {
         packageName: String,
         title: String,
         content: String,
-        fallbackParsed: ParsedNotificationResult?
+        fallbackParsed: ParsedNotificationResult?,
+        availableRules: List<CustomParsingRule> = emptyList()
     ): Result<ParsedNotificationResult> {
+        val selectedRules = resolveSelectedRules(config, availableRules)
         return when (config.providerMode) {
             AiProviderMode.DISABLED -> {
                 fallbackParsed?.let { Result.success(it) }
@@ -436,7 +437,8 @@ class AiUnderstandingManager {
                     config = config,
                     packageName = packageName,
                     title = title,
-                    content = content
+                    content = content,
+                    selectedRules = selectedRules
                 )
             }
             AiProviderMode.LOCAL_SMALL_MODEL -> {
@@ -445,7 +447,9 @@ class AiUnderstandingManager {
                     modelId = config.localModelId,
                     packageName = packageName,
                     title = title,
-                    content = content
+                    content = content,
+                    selectedRules = selectedRules,
+                    customPrompt = config.customSystemPrompt
                 )
             }
         }
@@ -456,7 +460,9 @@ class AiUnderstandingManager {
         modelId: String,
         packageName: String,
         title: String,
-        content: String
+        content: String,
+        selectedRules: List<CustomParsingRule> = emptyList(),
+        customPrompt: String = ""
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.Default) {
         val isCustom = LocalModelCatalog.isCustomModelId(modelId)
         val resolvedId = if (isCustom) modelId else LocalModelCatalog.resolve(modelId).id
@@ -474,17 +480,27 @@ class AiUnderstandingManager {
         }
 
         val dir = modelDirectory(context, resolvedId)
-        val vocabTokens = loadVocabTokens(dir)
         val amountCents = ChinaNotificationParser.extractAmountCents(
             text = combined,
             allowLooseStandaloneNumber = true
         ) ?: return@withContext Result.failure(IllegalStateException("本地小模型未能在文本中检测到有效金额"))
 
-        val matchedVocabHits = tokenizeWithVocab(combined, vocabTokens)
+        val (matchedVocabHits, totalVocabCount) = scanVocabMatchesStreaming(dir, combined)
+        val matchedPromptRule = matchPromptReferenceRule(selectedRules, packageName, title, content)
+        if (matchedPromptRule != null && matchedPromptRule.isIgnoreRule) {
+            return@withContext Result.failure(
+                IllegalStateException("参考规则「${matchedPromptRule.name}」将其判定为非账单忽略通知")
+            )
+        }
         val currencyCode = ChinaNotificationParser.detectCurrencyCode(combined)
-        val type = inferTypeWithVocab(combined)
+        val type = when {
+            matchedPromptRule != null && !matchedPromptRule.defaultType.equals("AUTO", ignoreCase = true) ->
+                TransactionType.fromRaw(matchedPromptRule.defaultType)
+            else -> inferTypeWithVocab(combined)
+        }
         val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
-        val channel = ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
+        val channel = matchedPromptRule?.channelName?.takeIf { it.isNotBlank() }
+            ?: ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
             ?: ChinaPaymentCatalog.channels.firstOrNull { ch ->
                 combined.contains(ch.name) || ch.smsCodes.any { combined.contains(it) }
             }?.name
@@ -492,18 +508,29 @@ class AiUnderstandingManager {
             ?: "未知渠道"
 
         val baseParsed = ChinaNotificationParser.parse(packageName, title, content, emptyList(), true)
-        val merchant = baseParsed?.merchant
-            ?.takeIf { !it.endsWith("消费") && !it.endsWith("收款") && it != "未知渠道消费" }
+        val merchant = matchedPromptRule?.merchantOverride?.takeIf { it.isNotBlank() }
+            ?: baseParsed?.merchant
+                ?.takeIf { !it.endsWith("消费") && !it.endsWith("收款") && it != "未知渠道消费" }
             ?: extractEntityFromVocabTokens(combined, matchedVocabHits, channel, type)
-        val category = inferCategoryScored(merchant, combined, type)
+        val category = matchedPromptRule?.defaultCategory?.takeIf { it.isNotBlank() && it != "自动" }
+            ?: inferCategoryScored(merchant, combined, type)
 
-        val confidence = if ((matchedVocabHits.isNotEmpty() || isCustom) && channel != "未知渠道") 0.90f else 0.84f
+        val confidence = if ((matchedVocabHits.isNotEmpty() || matchedPromptRule != null || isCustom) && channel != "未知渠道") {
+            0.91f
+        } else {
+            0.84f
+        }
         val modelTag = resolveModelDisplayName(context, resolvedId).substringBefore(" ")
         val customInfo = if (isCustom) getCustomModelInfo(context, resolvedId) else null
+        val ruleSuffix = buildString {
+            if (matchedPromptRule != null) append(" · 参考规则「${matchedPromptRule.name}」")
+            else if (selectedRules.isNotEmpty()) append(" · 附${selectedRules.size}条规则参考")
+            if (customPrompt.isNotBlank()) append(" · 自定义提示词")
+        }
         val modelDesc = if (customInfo != null) {
-            "本地自导权重 [$modelTag · ${customInfo.formatLabel}] 离线理解"
+            "本地自导权重 [$modelTag · ${customInfo.formatLabel}]$ruleSuffix"
         } else {
-            "本地模型 [$modelTag · ${vocabTokens.size} 词表] 离线理解"
+            "本地模型 [$modelTag · $totalVocabCount 词表]$ruleSuffix"
         }
         val occurredAt = ChinaNotificationParser.extractOccurredAtMillis(combined)
         Result.success(
@@ -531,7 +558,8 @@ class AiUnderstandingManager {
         config: AiConfig,
         packageName: String,
         title: String,
-        content: String
+        content: String,
+        selectedRules: List<CustomParsingRule> = emptyList()
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.IO) {
         val rawEndpoint = config.apiBaseUrl.trim()
         val apiKey = config.apiKey.trim()
@@ -541,11 +569,7 @@ class AiUnderstandingManager {
         }
 
         val chatUrl = normalizeChatCompletionsUrl(rawEndpoint)
-        val systemPrompt = """
-            你是一个精准的中国大陆账单与支付通知结构化解析引擎。请判断通知是否为真实动账交易，并仅输出一行严格合法的 JSON 对象（不要包含 Markdown 代码块或额外解释）：
-            {"isFinancial":boolean,"amount":number,"currency":"CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD","type":"EXPENSE|INCOME|TRANSFER","category":"餐饮美食|交通出行|购物消费|居家生活|休闲娱乐|医疗健康|工资奖金|理财收益|退款返现|转账收款|转账红包|其他","merchant":"交易对方或商户名","channel":"支付渠道或银行名称","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm或MM-dd HH:mm或HH:mm或null","confidence":0.0到1.0之间数字}
-            注意：验证码、快递、营销广告通知必须返回 isFinancial=false；退款或返现 type 应为 INCOME；若文本包含实际消费/入账时间请填入 occurredTime；不可编造未出现的金额。
-        """.trimIndent()
+        val systemPrompt = buildEffectiveSystemPrompt(config, selectedRules)
 
         val userPrompt = buildString {
             appendLine("应用包名: ${packageName.ifBlank { "unknown" }}")
@@ -678,90 +702,131 @@ class AiUnderstandingManager {
         return runCatching { JSONObject(cleaned.substring(start, end + 1)) }.getOrNull()
     }
 
-    private fun loadVocabTokens(modelDir: File): Set<String> {
+    private fun scanVocabMatchesStreaming(modelDir: File, text: String): Pair<List<String>, Int> {
+        val candidates = extractCandidateTokens(text)
+        if (candidates.isEmpty()) return emptyList<String>() to 0
+
+        val matchedSet = HashSet<String>(candidates.size)
+        var totalCount = 0
+
         val vocabTxt = File(modelDir, "vocab.txt")
-        if (vocabTxt.exists()) {
-            val tokens = HashSet<String>(24000)
-            vocabTxt.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                lines.forEach { line ->
-                    val token = line.trim()
-                    if (token.isNotEmpty() && !token.startsWith("[")) {
-                        tokens.add(token)
-                    }
-                }
-            }
-            return tokens
-        }
         val tokenizerJson = File(modelDir, "tokenizer.json")
-        if (tokenizerJson.exists()) {
-            return runCatching {
-                val obj = JSONObject(tokenizerJson.readText(Charsets.UTF_8))
-                val vocabObj = obj.optJSONObject("model")?.optJSONObject("vocab")
-                val tokens = HashSet<String>(32000)
-                vocabObj?.keys()?.forEachRemaining { k ->
-                    if (k.isNotBlank()) tokens.add(k)
+        when {
+            vocabTxt.exists() -> {
+                totalCount = scanVocabLines(vocabTxt, candidates, matchedSet)
+            }
+            tokenizerJson.exists() -> {
+                totalCount = scanTokenizerJsonVocab(tokenizerJson, candidates, matchedSet)
+            }
+            else -> {
+                val anyVocabTxt = modelDir.listFiles()?.firstOrNull {
+                    it.isFile && (it.name.endsWith(".txt", true) || it.name.endsWith(".vocab", true))
                 }
-                tokens
-            }.getOrDefault(emptySet())
-        }
-        // Fallback: if custom weight file has .txt / .vocab / .json directly inside modelDir
-        val anyVocabTxt = modelDir.listFiles()?.firstOrNull {
-            it.isFile && (it.name.endsWith(".txt", true) || it.name.endsWith(".vocab", true))
-        }
-        if (anyVocabTxt != null) {
-            val tokens = HashSet<String>(16000)
-            runCatching {
-                anyVocabTxt.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                    lines.forEach { line ->
-                        val t = line.trim()
-                        if (t.isNotEmpty() && !t.startsWith("[")) tokens.add(t)
-                    }
+                val anyTokenizerJson = modelDir.listFiles()?.firstOrNull {
+                    it.isFile && it.name.endsWith(".json", true) && it.name != "custom_meta.json"
+                }
+                when {
+                    anyVocabTxt != null -> totalCount = scanVocabLines(anyVocabTxt, candidates, matchedSet)
+                    anyTokenizerJson != null -> totalCount = scanTokenizerJsonVocab(anyTokenizerJson, candidates, matchedSet)
                 }
             }
-            return tokens
         }
-        val anyTokenizerJson = modelDir.listFiles()?.firstOrNull {
-            it.isFile && it.name.endsWith(".json", true) && it.name != "custom_meta.json"
-        }
-        if (anyTokenizerJson != null) {
-            return runCatching {
-                val obj = JSONObject(anyTokenizerJson.readText(Charsets.UTF_8))
-                val vocabObj = obj.optJSONObject("model")?.optJSONObject("vocab")
-                val tokens = HashSet<String>(24000)
-                vocabObj?.keys()?.forEachRemaining { k ->
-                    if (k.isNotBlank()) tokens.add(k)
-                }
-                tokens
-            }.getOrDefault(emptySet())
-        }
-        return emptySet()
+        return greedyOrderMatchedTokens(text, matchedSet) to totalCount
     }
 
-    private fun tokenizeWithVocab(text: String, vocab: Set<String>): List<String> {
-        if (vocab.isEmpty()) return emptyList()
-        val found = mutableListOf<String>()
-        val clean = text.replace(Regex("""[\s，。、：:；;!！?？()（）【】\[\]「」"“”]+"""), " ")
-        clean.split(" ").forEach { chunk ->
-            var i = 0
-            while (i < chunk.length) {
-                var matched: String? = null
-                val maxLen = minOf(6, chunk.length - i)
-                for (len in maxLen downTo 2) {
-                    val sub = chunk.substring(i, i + len)
-                    if (sub in vocab) {
-                        matched = sub
-                        break
+    private fun scanVocabLines(
+        file: File,
+        candidates: Set<String>,
+        matchedOut: MutableSet<String>
+    ): Int {
+        var count = 0
+        runCatching {
+            file.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                lines.forEach { raw ->
+                    val token = raw.trim()
+                    if (token.isNotEmpty() && !token.startsWith("[")) {
+                        count++
+                        if (token in candidates) matchedOut.add(token)
                     }
-                }
-                if (matched != null) {
-                    found.add(matched)
-                    i += matched.length
-                } else {
-                    i += 1
                 }
             }
         }
-        return found.distinct()
+        return count
+    }
+
+    private fun countTokenizerJsonVocabStreaming(file: File): Int {
+        return scanTokenizerJsonVocab(file, emptySet(), HashSet(0))
+    }
+
+    private fun scanTokenizerJsonVocab(
+        file: File,
+        candidates: Set<String>,
+        matchedOut: MutableSet<String>
+    ): Int {
+        var count = 0
+        runCatching {
+            JsonReader(file.bufferedReader(Charsets.UTF_8)).use { reader ->
+                reader.isLenient = true
+                if (reader.peek() != JsonToken.BEGIN_OBJECT) return@runCatching
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    val topKey = reader.nextName()
+                    if (topKey == "model" && reader.peek() == JsonToken.BEGIN_OBJECT) {
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            val modelKey = reader.nextName()
+                            if (modelKey == "vocab" && reader.peek() == JsonToken.BEGIN_OBJECT) {
+                                reader.beginObject()
+                                while (reader.hasNext()) {
+                                    val token = reader.nextName()
+                                    if (reader.peek() != JsonToken.NULL) {
+                                        reader.skipValue()
+                                    } else {
+                                        reader.nextNull()
+                                    }
+                                    if (token.isNotBlank()) {
+                                        count++
+                                        if (token in candidates) matchedOut.add(token)
+                                    }
+                                }
+                                reader.endObject()
+                            } else {
+                                reader.skipValue()
+                            }
+                        }
+                        reader.endObject()
+                    } else {
+                        reader.skipValue()
+                    }
+                }
+                reader.endObject()
+            }
+        }
+        return count
+    }
+
+    private fun matchPromptReferenceRule(
+        selectedRules: List<CustomParsingRule>,
+        packageName: String,
+        title: String,
+        content: String
+    ): CustomParsingRule? {
+        if (selectedRules.isEmpty()) return null
+        val combined = "$title\n$content"
+        return selectedRules
+            .sortedByDescending { it.priority }
+            .firstOrNull { rule ->
+                val pkgOk = rule.packageFilter == "*" ||
+                    rule.packageFilter.isBlank() ||
+                    rule.packageFilter.equals(packageName, ignoreCase = true)
+                val kwOk = rule.keywordPattern.isBlank() ||
+                    rule.keywordPattern.split("|", ",", "，")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .any { kw -> combined.contains(kw, ignoreCase = true) }
+                val channelOk = rule.channelName.isNotBlank() && combined.contains(rule.channelName, ignoreCase = true)
+                pkgOk && (kwOk || channelOk)
+            }
     }
 
     private fun inferTypeWithVocab(text: String): TransactionType {
@@ -803,6 +868,125 @@ class AiUnderstandingManager {
             TransactionType.INCOME -> "${channel}收款"
             TransactionType.TRANSFER -> "${channel}转账"
             TransactionType.EXPENSE -> "${channel}消费"
+        }
+    }
+
+    companion object {
+        val DEFAULT_SYSTEM_PROMPT = """
+            你是一个精准的中国大陆账单与支付通知结构化解析引擎。请判断通知是否为真实动账交易，并仅输出一行严格合法的 JSON 对象（不要包含 Markdown 代码块或额外解释）：
+            {"isFinancial":boolean,"amount":number,"currency":"CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD","type":"EXPENSE|INCOME|TRANSFER","category":"餐饮美食|交通出行|购物消费|居家生活|休闲娱乐|医疗健康|工资奖金|理财收益|退款返现|转账收款|转账红包|其他","merchant":"交易对方或商户名","channel":"支付渠道或银行名称","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm或MM-dd HH:mm或HH:mm或null","confidence":0.0到1.0之间数字}
+            注意：验证码、快递、营销广告通知必须返回 isFinancial=false；退款或返现 type 应为 INCOME；若文本包含实际消费/入账时间请填入 occurredTime；不可编造未出现的金额。
+        """.trimIndent()
+
+        private val sharedConnectionPool = ConnectionPool(2, 30, TimeUnit.SECONDS)
+        private val sharedClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectionPool(sharedConnectionPool)
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(35, TimeUnit.SECONDS)
+                .writeTimeout(20, TimeUnit.SECONDS)
+                .build()
+        }
+
+        fun trimMemory(evictConnections: Boolean = true) {
+            if (evictConnections) {
+                runCatching { sharedConnectionPool.evictAll() }
+            }
+        }
+
+        fun resolveSelectedRules(
+            config: AiConfig,
+            availableRules: List<CustomParsingRule>
+        ): List<CustomParsingRule> {
+            if (config.selectedPromptRuleIds.isEmpty() || availableRules.isEmpty()) return emptyList()
+            val idSet = config.selectedPromptRuleIds.toSet()
+            return availableRules.filter { it.id in idSet }
+        }
+
+        fun formatRulesPromptBlock(selectedRules: List<CustomParsingRule>): String {
+            if (selectedRules.isEmpty()) return ""
+            return buildString {
+                appendLine("【用户选定参考识别规则（解析时优先参考下列规则映射）】")
+                selectedRules.take(24).forEachIndexed { idx, rule ->
+                    val typeDesc = when {
+                        rule.isIgnoreRule -> "忽略(非动账通知)"
+                        rule.defaultType.equals("EXPENSE", true) -> "支出"
+                        rule.defaultType.equals("INCOME", true) -> "收入"
+                        rule.defaultType.equals("TRANSFER", true) -> "转账"
+                        else -> "自动判断"
+                    }
+                    append("${idx + 1}. 规则「${rule.name.ifBlank { rule.channelName }}」")
+                    append("｜包名:${rule.packageFilter.ifBlank { "*" }}")
+                    if (rule.keywordPattern.isNotBlank()) append("｜关键词:${rule.keywordPattern}")
+                    if (rule.channelName.isNotBlank()) append("｜渠道:${rule.channelName}")
+                    append("｜类型:$typeDesc")
+                    if (rule.defaultCategory.isNotBlank() && rule.defaultCategory != "自动") {
+                        append("｜分类:${rule.defaultCategory}")
+                    }
+                    if (rule.merchantOverride.isNotBlank()) {
+                        append("｜商户名:${rule.merchantOverride}")
+                    }
+                    if (rule.templateSignature.isNotBlank()) {
+                        append("｜模板:${rule.templateSignature.take(60)}")
+                    }
+                    appendLine()
+                }
+            }.trimEnd()
+        }
+
+        fun buildEffectiveSystemPrompt(
+            config: AiConfig,
+            selectedRules: List<CustomParsingRule> = emptyList()
+        ): String {
+            val basePrompt = config.customSystemPrompt.trim().ifBlank { DEFAULT_SYSTEM_PROMPT }
+            val rulesBlock = formatRulesPromptBlock(selectedRules)
+            return if (rulesBlock.isBlank()) {
+                basePrompt
+            } else {
+                "$basePrompt\n\n$rulesBlock"
+            }
+        }
+
+        internal fun extractCandidateTokens(text: String): Set<String> {
+            if (text.isBlank()) return emptySet()
+            val clean = text.replace(Regex("""[\s，。、：:；;!！?？()（）【】\[\]「」"“”]+"""), " ")
+            val candidates = LinkedHashSet<String>(128)
+            clean.split(" ").forEach { chunk ->
+                for (i in 0 until chunk.length) {
+                    val maxLen = minOf(6, chunk.length - i)
+                    for (len in 2..maxLen) {
+                        candidates.add(chunk.substring(i, i + len))
+                    }
+                }
+            }
+            return candidates
+        }
+
+        internal fun greedyOrderMatchedTokens(text: String, matchedSet: Set<String>): List<String> {
+            if (matchedSet.isEmpty()) return emptyList()
+            val found = mutableListOf<String>()
+            val clean = text.replace(Regex("""[\s，。、：:；;!！?？()（）【】\[\]「」"“”]+"""), " ")
+            clean.split(" ").forEach { chunk ->
+                var i = 0
+                while (i < chunk.length) {
+                    var matched: String? = null
+                    val maxLen = minOf(6, chunk.length - i)
+                    for (len in maxLen downTo 2) {
+                        val sub = chunk.substring(i, i + len)
+                        if (sub in matchedSet) {
+                            matched = sub
+                            break
+                        }
+                    }
+                    if (matched != null) {
+                        found.add(matched)
+                        i += matched.length
+                    } else {
+                        i += 1
+                    }
+                }
+            }
+            return found.distinct()
         }
     }
 }

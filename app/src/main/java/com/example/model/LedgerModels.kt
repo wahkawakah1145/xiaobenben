@@ -184,7 +184,9 @@ data class AiConfig(
     val apiBaseUrl: String = "",
     val apiKey: String = "",
     val apiModelName: String = "",
-    val useAiAsFallbackOnly: Boolean = true
+    val useAiAsFallbackOnly: Boolean = true,
+    val customSystemPrompt: String = "",
+    val selectedPromptRuleIds: List<String> = emptyList()
 )
 
 enum class TabClickAnimationStyle(val label: String) {
@@ -300,10 +302,19 @@ data class AppearanceSettings(
     val homeBrandTitleBold: Boolean = true,
     val homeBrandSubtitleSizeSp: Int = 11,
     val analyticsPieSizeDp: Int = 220,
-    val analyticsPullCalendarDistanceDp: Int = 128,
+    val analyticsPullCalendarDistanceDp: Int = 260,
     val appIconStyleId: String = AppIconStyle.EMERALD.id,
     val iconVisualStyle: IconVisualStyle = IconVisualStyle.FILLED
 )
+
+enum class HomeStatsDimension(val label: String, val shortLabel: String) {
+    TODAY("今天收支", "今日"),
+    THIS_WEEK("本周收支", "本周"),
+    THIS_MONTH("本月收支", "本月"),
+    LAST_MONTH("上月收支", "上月"),
+    THIS_YEAR("本年收支", "本年"),
+    ALL_TIME("全部账单", "全部")
+}
 
 data class StorageFootprintInfo(
     val databaseBytes: Long = 0L,

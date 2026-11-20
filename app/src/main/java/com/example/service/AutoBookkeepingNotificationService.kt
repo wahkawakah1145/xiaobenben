@@ -21,6 +21,8 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val recentFingerprints = ConcurrentHashMap<String, Long>()
+    private val repository by lazy(LazyThreadSafetyMode.NONE) { LedgerRepository(applicationContext) }
+    private val aiManager by lazy(LazyThreadSafetyMode.NONE) { com.example.data.AiUnderstandingManager() }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -34,8 +36,17 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         Log.d(TAG, "AutoBookkeepingNotificationService disconnected.")
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_BACKGROUND) {
+            val now = System.currentTimeMillis()
+            recentFingerprints.entries.removeIf { now - it.value > DEDUP_WINDOW_MS * 2 }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        recentFingerprints.clear()
         serviceScope.cancel()
     }
 
@@ -69,7 +80,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             return
         }
         recentFingerprints[fingerprint] = now
-        if (recentFingerprints.size > 100) {
+        if (recentFingerprints.size > 24) {
             recentFingerprints.entries.removeIf { now - it.value > DEDUP_WINDOW_MS * 4 }
         }
 
@@ -94,7 +105,6 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         content: String,
         occurredAt: Long
     ) {
-        val repository = LedgerRepository(applicationContext)
         repository.ensureDefaultRulesSeeded()
         val settings = repository.getSettingsOnce()
         if (!settings.autoRecordEnabled) {
@@ -144,13 +154,14 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 ruleParsed.needsInquiry
             )
         val parsed = if (shouldInvokeAi) {
-            val aiResult = com.example.data.AiUnderstandingManager().enhanceOrParseNotification(
+            val aiResult = aiManager.enhanceOrParseNotification(
                 context = applicationContext,
                 config = aiConfig,
                 packageName = packageName,
                 title = title,
                 content = content,
-                fallbackParsed = ruleParsed
+                fallbackParsed = ruleParsed,
+                availableRules = customRules
             ).getOrNull()
             aiResult ?: ruleParsed
         } else {

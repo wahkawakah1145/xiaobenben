@@ -72,6 +72,7 @@ import com.example.ui.theme.IncomeJade
 import com.example.viewmodel.AiModelDownloadState
 import com.example.viewmodel.AiTestState
 import com.example.viewmodel.LedgerViewModel
+import com.example.viewmodel.UiState
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -85,7 +86,9 @@ fun AiSettingsScreen(
     val downloadState by viewModel.aiModelDownloadState.collectAsStateWithLifecycle()
     val customModels by viewModel.customModelsState.collectAsStateWithLifecycle()
     val aiTestState by viewModel.aiTestState.collectAsStateWithLifecycle()
+    val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
     val aiManager = remember { AiUnderstandingManager() }
+    val allRules = (rulesState as? UiState.Success)?.data ?: emptyList()
 
     LaunchedEffect(Unit) {
         viewModel.refreshCustomModels(context)
@@ -106,9 +109,21 @@ fun AiSettingsScreen(
     var apiKeyInput by remember(aiConfig.apiKey) { mutableStateOf(aiConfig.apiKey) }
     var apiModelInput by remember(aiConfig.apiModelName) { mutableStateOf(aiConfig.apiModelName) }
     var fallbackOnly by remember(aiConfig.useAiAsFallbackOnly) { mutableStateOf(aiConfig.useAiAsFallbackOnly) }
+    var promptEditorInput by remember(aiConfig.customSystemPrompt) {
+        mutableStateOf(aiConfig.customSystemPrompt.ifBlank { AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT })
+    }
+    var selectedPromptRuleIds by remember(aiConfig.selectedPromptRuleIds) {
+        mutableStateOf(aiConfig.selectedPromptRuleIds)
+    }
+    var showPromptPreview by remember { mutableStateOf(false) }
     var showApiKey by remember { mutableStateOf(false) }
 
     var testSampleInput by remember { mutableStateOf("") }
+
+    fun normalizedCustomPromptValue(raw: String): String {
+        val trimmed = raw.trim()
+        return if (trimmed == AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT.trim()) "" else trimmed
+    }
 
     fun currentEditedConfig(): AiConfig = AiConfig(
         providerMode = selectedMode,
@@ -117,7 +132,9 @@ fun AiSettingsScreen(
         apiBaseUrl = apiUrlInput.trim(),
         apiKey = apiKeyInput.trim(),
         apiModelName = apiModelInput.trim(),
-        useAiAsFallbackOnly = fallbackOnly
+        useAiAsFallbackOnly = fallbackOnly,
+        customSystemPrompt = normalizedCustomPromptValue(promptEditorInput),
+        selectedPromptRuleIds = selectedPromptRuleIds
     )
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -604,6 +621,206 @@ fun AiSettingsScreen(
                                 Icon(AppIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("保存 API 配置")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3.5 Prompt Customization & Rules Reference Card
+            if (selectedMode != AiProviderMode.DISABLED) {
+                item(key = "ai_prompt_card") {
+                    val editedConfig = currentEditedConfig()
+                    val selectedRuleObjects = AiUnderstandingManager.resolveSelectedRules(editedConfig, allRules)
+                    val effectivePromptPreview = AiUnderstandingManager.buildEffectiveSystemPrompt(
+                        config = editedConfig,
+                        selectedRules = selectedRuleObjects
+                    )
+                    val isUsingCustomPrompt = normalizedCustomPromptValue(promptEditorInput).isNotEmpty()
+
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("ai_prompt_settings_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("提示词与规则参考", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        text = if (isUsingCustomPrompt) {
+                                            "当前使用自定义提示词 · 已选 ${selectedRuleObjects.size} 条规则作为参考"
+                                        } else {
+                                            "当前使用内置预设提示词 · 已选 ${selectedRuleObjects.size} 条规则作为参考"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        promptEditorInput = AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT
+                                        viewModel.saveAiConfig(currentEditedConfig().copy(customSystemPrompt = ""))
+                                        onShowMessage("已重置为默认预设提示词")
+                                    },
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("ai_reset_prompt_button")
+                                ) {
+                                    Icon(AppIcons.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("重置预设")
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = promptEditorInput,
+                                onValueChange = { promptEditorInput = it.take(2000) },
+                                label = { Text("系统提示词（System Prompt）") },
+                                minLines = 5,
+                                maxLines = 10,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("ai_prompt_editor_input")
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        viewModel.saveAiConfig(currentEditedConfig())
+                                        onShowMessage("已保存提示词与规则参考配置")
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("ai_save_prompt_button")
+                                ) {
+                                    Icon(AppIcons.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("保存提示词")
+                                }
+                                OutlinedButton(
+                                    onClick = { showPromptPreview = !showPromptPreview },
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("ai_toggle_prompt_preview_button")
+                                ) {
+                                    Text(if (showPromptPreview) "收起预览" else "查看最终提示词")
+                                }
+                            }
+
+                            HorizontalDivider()
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("选择识别规则作为 AI 提示词参考", style = MaterialTheme.typography.labelLarge)
+                                    Text(
+                                        text = "选中的规则会注入系统提示词并在本地/在线推理时优先参考",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (allRules.isNotEmpty()) {
+                                    AssistChip(
+                                        onClick = {
+                                            selectedPromptRuleIds = if (selectedPromptRuleIds.size >= allRules.size) {
+                                                emptyList()
+                                            } else {
+                                                allRules.map { it.id }
+                                            }
+                                            viewModel.saveAiConfig(
+                                                currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
+                                            )
+                                        },
+                                        label = {
+                                            Text(if (selectedPromptRuleIds.size >= allRules.size) "全不选" else "全选")
+                                        },
+                                        modifier = Modifier.testTag("ai_prompt_rules_select_all")
+                                    )
+                                }
+                            }
+
+                            if (allRules.isEmpty()) {
+                                Text(
+                                    text = "暂无自定义或内置识别规则，前往「识别规则」添加后即可在此勾选。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    allRules.forEach { rule ->
+                                        val isChecked = rule.id in selectedPromptRuleIds
+                                        val ruleLabel = buildString {
+                                            append(rule.name.ifBlank { rule.channelName.ifBlank { "规则" } })
+                                            if (rule.isIgnoreRule) append("(忽略)")
+                                            else if (rule.defaultCategory.isNotBlank() && rule.defaultCategory != "自动") {
+                                                append("·${rule.defaultCategory}")
+                                            }
+                                        }
+                                        FilterChip(
+                                            selected = isChecked,
+                                            onClick = {
+                                                selectedPromptRuleIds = if (isChecked) {
+                                                    selectedPromptRuleIds - rule.id
+                                                } else {
+                                                    selectedPromptRuleIds + rule.id
+                                                }
+                                                viewModel.saveAiConfig(
+                                                    currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
+                                                )
+                                            },
+                                            label = { Text(ruleLabel) },
+                                            modifier = Modifier.testTag("ai_prompt_rule_chip_${rule.id}")
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (showPromptPreview) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("ai_effective_prompt_preview")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "最终发送给模型的完整系统提示词预览",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = effectivePromptPreview,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

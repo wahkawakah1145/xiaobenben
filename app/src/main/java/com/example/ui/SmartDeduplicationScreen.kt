@@ -1,7 +1,8 @@
 package com.example.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,17 +52,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.LedgerTransaction
 import com.example.parser.DeduplicationChannelFilter
 import com.example.parser.DeduplicationTimeWindow
 import com.example.parser.DuplicateGroup
 import com.example.parser.SmartDeduplicator
 import com.example.ui.components.ChannelBadge
+import com.example.ui.components.TransactionDetailSheet
+import com.example.ui.components.TransactionEditorDialog
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatDateTimeFull
 import com.example.ui.components.transactionTypeColor
@@ -77,6 +84,8 @@ fun SmartDeduplicationScreen(
     viewModel: LedgerViewModel,
     modifier: Modifier = Modifier
 ) {
+    val settings by viewModel.settingsState.collectAsStateWithLifecycle()
+    val haptic = LocalHapticFeedback.current
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
     var customWindowMinutes by rememberSaveable { mutableIntStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_MINUTES) }
     var customValueInput by rememberSaveable { mutableStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_MINUTES.toString()) }
@@ -85,6 +94,8 @@ fun SmartDeduplicationScreen(
     var channelFilter by remember { mutableStateOf(DeduplicationChannelFilter.ALL) }
     var searchQuery by remember { mutableStateOf("") }
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
+    var inspectingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
+    var editingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
 
     val candidateGroups by remember(allTransactions, customWindowMinutes, channelFilter) {
         derivedStateOf {
@@ -174,7 +185,7 @@ fun SmartDeduplicationScreen(
                                 Text("短时智能去重筛选", style = MaterialTheme.typography.titleMedium)
                             }
                             Text(
-                                text = "仅识别短时间窗口内金额相同且交易对象相似的重复入账，自动排除跨周期的长期重复消费（当前窗口：${SmartDeduplicator.formatWindowLabel(customWindowMinutes)}）。",
+                                text = "仅识别短时间窗口内金额相同且交易对象相似的重复入账，自动排除跨周期的长期重复消费（当前窗口：${SmartDeduplicator.formatWindowLabel(customWindowMinutes)}；点击勾选，长按条目可弹窗查看详情）。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -378,6 +389,10 @@ fun SmartDeduplicationScreen(
                                     selectedDeleteIds + txId
                                 }
                             },
+                            onInspectItem = { tx ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                inspectingTransaction = tx
+                            },
                             onKeepOnlyThis = { keepId ->
                                 val otherIds = group.items.map { it.id }.filter { it != keepId }.toSet()
                                 selectedDeleteIds = (selectedDeleteIds - keepId) + otherIds
@@ -460,14 +475,63 @@ fun SmartDeduplicationScreen(
             }
         )
     }
+
+    inspectingTransaction?.let { tx ->
+        val (recordedBase, recordedRate, recordedCents) = viewModel.recordedSnapshotDisplay(tx)
+        TransactionDetailSheet(
+            transaction = tx,
+            baseCurrencyCode = settings.baseCurrencyCode,
+            liveRateToBase = viewModel.liveRateToBase(tx),
+            liveConvertedBaseCents = viewModel.convertToBaseCents(tx),
+            recordedBaseCurrencyCode = recordedBase,
+            recordedRateToBase = recordedRate,
+            recordedConvertedBaseCents = recordedCents,
+            onDismiss = { inspectingTransaction = null },
+            onEdit = {
+                editingTransaction = tx
+                inspectingTransaction = null
+            },
+            onDelete = {
+                viewModel.deleteTransaction(tx.id)
+                selectedDeleteIds = selectedDeleteIds - tx.id
+                inspectingTransaction = null
+            }
+        )
+    }
+
+    editingTransaction?.let { tx ->
+        TransactionEditorDialog(
+            initialTransaction = tx,
+            defaultCurrencyCode = settings.baseCurrencyCode,
+            onDismiss = { editingTransaction = null },
+            onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
+                viewModel.updateTransaction(
+                    txId = tx.id,
+                    amountCents = amountCents,
+                    currencyCode = currencyCode,
+                    type = type,
+                    category = category,
+                    merchant = merchant,
+                    channel = channel,
+                    cardLastFour = tail,
+                    note = note,
+                    occurredAtMillis = occurredAtMillis,
+                    confirmed = true
+                )
+                editingTransaction = null
+            }
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DuplicateGroupCard(
     group: DuplicateGroup,
     selectedDeleteIds: Set<String>,
     numberFont: androidx.compose.ui.text.font.FontFamily,
     onToggleItem: (String) -> Unit,
+    onInspectItem: (LedgerTransaction) -> Unit,
     onKeepOnlyThis: (String) -> Unit,
     onIgnoreGroup: () -> Unit
 ) {
@@ -532,7 +596,11 @@ private fun DuplicateGroupCard(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onToggleItem(tx.id) }
+                        .clip(RoundedCornerShape(12.dp))
+                        .combinedClickable(
+                            onClick = { onToggleItem(tx.id) },
+                            onLongClick = { onInspectItem(tx) }
+                        )
                         .testTag("dedup_item_${tx.id}")
                 ) {
                     Row(

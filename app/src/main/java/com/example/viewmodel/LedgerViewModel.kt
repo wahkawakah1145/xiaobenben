@@ -20,6 +20,7 @@ import com.example.model.CustomLocalModelInfo
 import com.example.model.CustomParsingRule
 import com.example.model.ExchangeRateAutoUpdateFrequency
 import com.example.model.ExchangeRateState
+import com.example.model.HomeStatsDimension
 import com.example.model.LedgerTransaction
 import com.example.model.NotificationInquiry
 import com.example.model.ParseMethod
@@ -600,13 +601,15 @@ class LedgerViewModel(
                 _parseBenchState.value = ParseBenchState.Error("尚未启用 AI理解，请先前往「设置 -> AI理解」选择本地小模型或填写在线 API")
                 return@launch
             }
+            val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
             val result = aiManager.enhanceOrParseNotification(
                 context = context,
                 config = config,
                 packageName = packageName,
                 title = title,
                 content = content,
-                fallbackParsed = null
+                fallbackParsed = null,
+                availableRules = rules
             )
             result
                 .onSuccess { parsed ->
@@ -859,13 +862,15 @@ class LedgerViewModel(
         viewModelScope.launch {
             repository.saveAiConfig(config)
             _aiTestState.value = AiTestState.Loading
+            val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
             aiManager.enhanceOrParseNotification(
                 context = context,
                 config = config,
                 packageName = "manual.ai.test",
                 title = sampleTitle,
                 content = sampleContent,
-                fallbackParsed = null
+                fallbackParsed = null,
+                availableRules = rules
             )
                 .onSuccess { parsed -> _aiTestState.value = AiTestState.Success(parsed) }
                 .onFailure { err -> _aiTestState.value = AiTestState.Error(err.message ?: "AI理解测试失败") }
@@ -1195,6 +1200,25 @@ class LedgerViewModel(
                 AnalyticsGranularity.DAY -> {
                     "${cal.get(Calendar.YEAR)}年${cal.get(Calendar.MONTH) + 1}月${cal.get(Calendar.DAY_OF_MONTH)}日"
                 }
+            }
+        }
+
+        fun filterByHomeDimension(
+            list: List<LedgerTransaction>,
+            dimension: HomeStatsDimension,
+            nowMillis: Long = System.currentTimeMillis()
+        ): List<LedgerTransaction> {
+            val cal = Calendar.getInstance().apply { timeInMillis = nowMillis }
+            return when (dimension) {
+                HomeStatsDimension.TODAY -> filterByDay(list, nowMillis)
+                HomeStatsDimension.THIS_WEEK -> filterByWeek(list, nowMillis)
+                HomeStatsDimension.THIS_MONTH -> filterByMonth(list, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH))
+                HomeStatsDimension.LAST_MONTH -> {
+                    cal.add(Calendar.MONTH, -1)
+                    filterByMonth(list, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH))
+                }
+                HomeStatsDimension.THIS_YEAR -> filterByYear(list, cal.get(Calendar.YEAR))
+                HomeStatsDimension.ALL_TIME -> list
             }
         }
     }

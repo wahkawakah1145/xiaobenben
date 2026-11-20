@@ -26,6 +26,7 @@ import com.example.model.WebDavConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
 import org.json.JSONObject
 
 private val Context.smartLedgerDataStore by preferencesDataStore(name = "smart_ledger_settings")
@@ -98,6 +99,8 @@ class SettingsDataStore(private val context: Context) {
         val AI_API_KEY = stringPreferencesKey("ai_api_key")
         val AI_API_MODEL_NAME = stringPreferencesKey("ai_api_model_name")
         val AI_FALLBACK_ONLY = booleanPreferencesKey("ai_fallback_only")
+        val AI_CUSTOM_SYSTEM_PROMPT = stringPreferencesKey("ai_custom_system_prompt")
+        val AI_PROMPT_RULE_IDS_JSON = stringPreferencesKey("ai_prompt_rule_ids_json")
     }
 
     val budgetSettingsFlow: Flow<BudgetSettings> = context.smartLedgerDataStore.data.map { prefs ->
@@ -159,7 +162,7 @@ class SettingsDataStore(private val context: Context) {
             homeBrandTitleBold = prefs[Keys.HOME_BRAND_TITLE_BOLD] ?: true,
             homeBrandSubtitleSizeSp = (prefs[Keys.HOME_BRAND_SUBTITLE_SIZE_SP] ?: 11).coerceIn(9, 16),
             analyticsPieSizeDp = (prefs[Keys.ANALYTICS_PIE_SIZE_DP] ?: 220).coerceIn(140, 300),
-            analyticsPullCalendarDistanceDp = (prefs[Keys.ANALYTICS_PULL_CALENDAR_DISTANCE_DP] ?: 128).coerceIn(72, 220),
+            analyticsPullCalendarDistanceDp = (prefs[Keys.ANALYTICS_PULL_CALENDAR_DISTANCE_DP] ?: 260).coerceIn(80, 560),
             appIconStyleId = AppIconStyle.fromId(prefs[Keys.APP_ICON_STYLE_ID]).id,
             iconVisualStyle = IconVisualStyle.fromRaw(prefs[Keys.ICON_VISUAL_STYLE])
         )
@@ -173,7 +176,9 @@ class SettingsDataStore(private val context: Context) {
             apiBaseUrl = prefs[Keys.AI_API_BASE_URL] ?: "",
             apiKey = prefs[Keys.AI_API_KEY] ?: "",
             apiModelName = prefs[Keys.AI_API_MODEL_NAME] ?: "",
-            useAiAsFallbackOnly = prefs[Keys.AI_FALLBACK_ONLY] ?: true
+            useAiAsFallbackOnly = prefs[Keys.AI_FALLBACK_ONLY] ?: true,
+            customSystemPrompt = prefs[Keys.AI_CUSTOM_SYSTEM_PROMPT] ?: "",
+            selectedPromptRuleIds = decodeStringListJson(prefs[Keys.AI_PROMPT_RULE_IDS_JSON])
         )
     }
 
@@ -282,13 +287,16 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.HOME_BRAND_TITLE_BOLD] = settings.homeBrandTitleBold
             prefs[Keys.HOME_BRAND_SUBTITLE_SIZE_SP] = settings.homeBrandSubtitleSizeSp.coerceIn(9, 16)
             prefs[Keys.ANALYTICS_PIE_SIZE_DP] = settings.analyticsPieSizeDp.coerceIn(140, 300)
-            prefs[Keys.ANALYTICS_PULL_CALENDAR_DISTANCE_DP] = settings.analyticsPullCalendarDistanceDp.coerceIn(72, 220)
+            prefs[Keys.ANALYTICS_PULL_CALENDAR_DISTANCE_DP] = settings.analyticsPullCalendarDistanceDp.coerceIn(80, 560)
             prefs[Keys.APP_ICON_STYLE_ID] = AppIconStyle.fromId(settings.appIconStyleId).id
             prefs[Keys.ICON_VISUAL_STYLE] = settings.iconVisualStyle.name
         }
     }
 
     suspend fun saveAiConfig(config: com.example.model.AiConfig) {
+        val ruleIdsJson = JSONArray().apply {
+            config.selectedPromptRuleIds.distinct().filter { it.isNotBlank() }.forEach { put(it) }
+        }.toString()
         context.smartLedgerDataStore.edit { prefs ->
             prefs[Keys.AI_PROVIDER_MODE] = config.providerMode.name
             prefs[Keys.AI_LOCAL_MODEL_ID] = config.localModelId.trim().ifBlank { "bge-small-zh-v15" }
@@ -297,6 +305,8 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.AI_API_KEY] = config.apiKey.trim()
             prefs[Keys.AI_API_MODEL_NAME] = config.apiModelName.trim()
             prefs[Keys.AI_FALLBACK_ONLY] = config.useAiAsFallbackOnly
+            prefs[Keys.AI_CUSTOM_SYSTEM_PROMPT] = config.customSystemPrompt.trim().take(2000)
+            prefs[Keys.AI_PROMPT_RULE_IDS_JSON] = ruleIdsJson
         }
     }
 
@@ -333,5 +343,18 @@ class SettingsDataStore(private val context: Context) {
         }
         merged["CNY"] = 1.0
         return merged
+    }
+
+    private fun decodeStringListJson(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList(arr.length()) {
+                for (i in 0 until arr.length()) {
+                    val value = arr.optString(i).trim()
+                    if (value.isNotEmpty()) add(value)
+                }
+            }.distinct()
+        }.getOrDefault(emptyList())
     }
 }

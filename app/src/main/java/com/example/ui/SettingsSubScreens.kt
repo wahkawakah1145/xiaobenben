@@ -1600,7 +1600,8 @@ fun AppearanceSettingsScreen(
 
                         HorizontalDivider()
 
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val clampedPullDp = appearance.analyticsPullCalendarDistanceDp.coerceIn(80, 560)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1608,26 +1609,48 @@ fun AppearanceSettingsScreen(
                             ) {
                                 Text("收支分析下拉打开全屏日历距离", style = MaterialTheme.typography.labelLarge)
                                 Text(
-                                    text = "${appearance.analyticsPullCalendarDistanceDp.coerceIn(72, 220)} dp",
+                                    text = "$clampedPullDp dp",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
                             Text(
-                                text = "增大触发距离可减少分析页面滚动回弹时误触打开全屏日历（默认 128 dp，同时可在分析页顶部快捷调节）",
+                                text = "增大触发距离可明显减少分析页面滚动回弹时误触打开全屏日历（默认 260 dp，支持 80 ~ 560 dp 调节）",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Slider(
-                                value = appearance.analyticsPullCalendarDistanceDp.coerceIn(72, 220).toFloat(),
+                                value = clampedPullDp.toFloat(),
                                 onValueChange = { raw ->
                                     viewModel.saveAppearanceSettings(
-                                        appearance.copy(analyticsPullCalendarDistanceDp = raw.roundToInt().coerceIn(72, 220))
+                                        appearance.copy(analyticsPullCalendarDistanceDp = raw.roundToInt().coerceIn(80, 560))
                                     )
                                 },
-                                valueRange = 72f..220f,
+                                valueRange = 80f..560f,
                                 modifier = Modifier.testTag("analytics_pull_distance_slider")
                             )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf(
+                                    160 to "160dp (灵敏)",
+                                    260 to "260dp (默认)",
+                                    380 to "380dp (防误触)",
+                                    500 to "500dp (超长)"
+                                ).forEach { (presetDp, label) ->
+                                    FilterChip(
+                                        selected = clampedPullDp == presetDp,
+                                        onClick = {
+                                            viewModel.saveAppearanceSettings(
+                                                appearance.copy(analyticsPullCalendarDistanceDp = presetDp)
+                                            )
+                                        },
+                                        label = { Text(label) },
+                                        modifier = Modifier.testTag("analytics_pull_preset_$presetDp")
+                                    )
+                                }
+                            }
                         }
                     }
                 }

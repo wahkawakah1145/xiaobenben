@@ -54,14 +54,19 @@ import com.example.ui.theme.AppIcons
 import java.text.SimpleDateFormat
 import java.util.Date
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -74,6 +79,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -112,6 +118,7 @@ import com.example.model.CurrencyCatalog
 import com.example.model.ExchangeRateState
 import com.example.model.FabPlacement
 import com.example.model.HomeHeaderOrder
+import com.example.model.HomeStatsDimension
 import com.example.model.IconVisualStyle
 import com.example.model.LedgerTransaction
 import com.example.model.NotificationInquiry
@@ -128,6 +135,7 @@ import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatDateHeader
+import com.example.ui.components.formatItemTimeCompact
 import com.example.ui.components.formatTimeShort
 import com.example.ui.components.transactionTypeColor
 import com.example.ui.theme.ExpenseCoral
@@ -137,6 +145,7 @@ import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
 import java.util.Calendar
 import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.roundToLong
 import kotlin.random.Random
 
@@ -221,24 +230,68 @@ fun LedgerHomeScreen(
     val currentMonth = nowCal.get(Calendar.MONTH)
     val baseCurrency = settings.baseCurrencyCode
 
-    val monthlyStats by remember(confirmedTransactions, exchangeRates.ratesToCny, baseCurrency) {
+    var statsDimension by remember { mutableStateOf(HomeStatsDimension.THIS_MONTH) }
+    var showStatsDimensionDialog by remember { mutableStateOf(false) }
+    var syncStatsSelectionToList by remember { mutableStateOf(true) }
+
+    var listTimeDimension by remember { mutableStateOf(HomeStatsDimension.ALL_TIME) }
+    var showAdvancedFilters by remember { mutableStateOf(false) }
+    var customStartDateText by remember { mutableStateOf("") }
+    var customEndDateText by remember { mutableStateOf("") }
+    var pickingDateTarget by remember { mutableStateOf<String?>(null) } // "start" | "end"
+    var minAmountInput by remember { mutableStateOf("") }
+    var maxAmountInput by remember { mutableStateOf("") }
+
+    val statsSummary by remember(confirmedTransactions, statsDimension, exchangeRates.ratesToCny, baseCurrency) {
         derivedStateOf {
-            val monthItems = LedgerViewModel.filterByMonth(confirmedTransactions, currentYear, currentMonth)
+            val dimItems = LedgerViewModel.filterByHomeDimension(confirmedTransactions, statsDimension)
             fun toBase(tx: LedgerTransaction) = CurrencyExchangeManager.convertCents(
                 tx.amountCents,
                 tx.currencyCode,
                 baseCurrency,
                 exchangeRates.ratesToCny
             )
-            val expense = monthItems.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBase(it) }
-            val income = monthItems.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
-            Triple(expense, income, monthItems.size)
+            val expense = dimItems.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBase(it) }
+            val income = dimItems.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
+            Triple(expense, income, dimItems.size)
         }
     }
 
-    val filteredTransactions by remember(confirmedTransactions, searchQuery, selectedFilter) {
+    val minAmountCents = remember(minAmountInput) {
+        minAmountInput.trim().toDoubleOrNull()?.takeIf { it >= 0.0 }?.let { (it * 100.0).roundToLong() }
+    }
+    val maxAmountCents = remember(maxAmountInput) {
+        maxAmountInput.trim().toDoubleOrNull()?.takeIf { it >= 0.0 }?.let { (it * 100.0).roundToLong() }
+    }
+    val customStartMillis = remember(customStartDateText) {
+        if (customStartDateText.isBlank()) null else parseDateTimeInputMillis(customStartDateText, "00:00")
+    }
+    val customEndMillis = remember(customEndDateText) {
+        if (customEndDateText.isBlank()) null else parseDateTimeInputMillis(customEndDateText, "23:59")?.plus(59_999L)
+    }
+    val activeRangeFilterCount = remember(listTimeDimension, customStartDateText, customEndDateText, minAmountInput, maxAmountInput) {
+        var count = 0
+        if (listTimeDimension != HomeStatsDimension.ALL_TIME) count++
+        if (customStartDateText.isNotBlank() || customEndDateText.isNotBlank()) count++
+        if (minAmountInput.isNotBlank() || maxAmountInput.isNotBlank()) count++
+        count
+    }
+
+    val filteredTransactions by remember(
+        confirmedTransactions,
+        searchQuery,
+        selectedFilter,
+        listTimeDimension,
+        customStartMillis,
+        customEndMillis,
+        minAmountCents,
+        maxAmountCents,
+        exchangeRates.ratesToCny,
+        baseCurrency
+    ) {
         derivedStateOf {
-            confirmedTransactions.filter { tx ->
+            val timeScoped = LedgerViewModel.filterByHomeDimension(confirmedTransactions, listTimeDimension)
+            timeScoped.filter { tx ->
                 val matchesFilter = when (selectedFilter) {
                     "全部" -> true
                     "支出" -> tx.txType == TransactionType.EXPENSE
@@ -257,14 +310,36 @@ fun LedgerHomeScreen(
                     tx.channel.contains(q, ignoreCase = true) ||
                     tx.currencyCode.contains(q, ignoreCase = true) ||
                     (tx.note?.contains(q, ignoreCase = true) == true)
-                matchesFilter && matchesSearch
+                val matchesStart = customStartMillis == null || tx.occurredAtMillis >= customStartMillis
+                val matchesEnd = customEndMillis == null || tx.occurredAtMillis <= customEndMillis
+                val matchesAmount = if (minAmountCents != null || maxAmountCents != null) {
+                    val baseCents = CurrencyExchangeManager.convertCents(
+                        tx.amountCents,
+                        tx.currencyCode,
+                        baseCurrency,
+                        exchangeRates.ratesToCny
+                    )
+                    (minAmountCents == null || baseCents >= minAmountCents) &&
+                        (maxAmountCents == null || baseCents <= maxAmountCents)
+                } else {
+                    true
+                }
+                matchesFilter && matchesSearch && matchesStart && matchesEnd && matchesAmount
             }
         }
     }
 
-    val groupedByDate by remember(filteredTransactions) {
+    val hasAnyListFilter = searchQuery.isNotBlank() ||
+        selectedFilter != "全部" ||
+        listTimeDimension != HomeStatsDimension.ALL_TIME ||
+        customStartDateText.isNotBlank() ||
+        customEndDateText.isNotBlank() ||
+        minAmountInput.isNotBlank() ||
+        maxAmountInput.isNotBlank()
+
+    val groupedByDate by remember(filteredTransactions, currentYear) {
         derivedStateOf {
-            filteredTransactions.groupBy { formatDateHeader(it.occurredAtMillis) }
+            filteredTransactions.groupBy { formatDateHeader(it.occurredAtMillis, currentYear) }
         }
     }
 
@@ -355,14 +430,29 @@ fun LedgerHomeScreen(
             }
 
             item(key = "summary_card") {
-                MonthlySummaryCard(
-                    monthTitle = "${currentYear}年${currentMonth + 1}月",
+                val periodHeader = remember(statsDimension, currentYear, currentMonth) {
+                    when (statsDimension) {
+                        HomeStatsDimension.TODAY -> "${nowCal.get(Calendar.MONTH) + 1}月${nowCal.get(Calendar.DAY_OF_MONTH)}日"
+                        HomeStatsDimension.THIS_WEEK -> "本周统计"
+                        HomeStatsDimension.THIS_MONTH -> "${currentYear}年${currentMonth + 1}月"
+                        HomeStatsDimension.LAST_MONTH -> {
+                            val c = Calendar.getInstance().apply { add(Calendar.MONTH, -1) }
+                            "${c.get(Calendar.YEAR)}年${c.get(Calendar.MONTH) + 1}月"
+                        }
+                        HomeStatsDimension.THIS_YEAR -> "${currentYear}年全年"
+                        HomeStatsDimension.ALL_TIME -> "全部历史"
+                    }
+                }
+                HomeStatsSummaryCard(
+                    dimension = statsDimension,
+                    periodTitle = periodHeader,
                     baseCurrencyCode = baseCurrency,
-                    expenseCents = monthlyStats.first,
-                    incomeCents = monthlyStats.second,
-                    txCount = monthlyStats.third,
-                    budgetCents = settings.monthlyBudgetCents,
-                    density = appearance.cardDensity
+                    expenseCents = statsSummary.first,
+                    incomeCents = statsSummary.second,
+                    txCount = statsSummary.third,
+                    monthlyBudgetCents = settings.monthlyBudgetCents,
+                    density = appearance.cardDensity,
+                    onClick = { showStatsDimensionDialog = true }
                 )
             }
 
@@ -404,8 +494,26 @@ fun LedgerHomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        FilterChip(
+                            selected = showAdvancedFilters || activeRangeFilterCount > 0,
+                            onClick = { showAdvancedFilters = !showAdvancedFilters },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = AppIcons.Tune,
+                                    contentDescription = "时间与金额范围筛选",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    if (activeRangeFilterCount > 0) "范围($activeRangeFilterCount)" else "时间/金额"
+                                )
+                            },
+                            modifier = Modifier.testTag("home_range_filter_toggle")
+                        )
                         filterOptions.forEach { option ->
                             FilterChip(
                                 selected = selectedFilter == option,
@@ -416,7 +524,42 @@ fun LedgerHomeScreen(
                         }
                     }
 
-                    if ((searchQuery.isNotBlank() || selectedFilter != "全部") && filteredTransactions.isNotEmpty()) {
+                    AnimatedVisibility(visible = showAdvancedFilters) {
+                        HomeRangeFilterPanel(
+                            baseCurrencyCode = baseCurrency,
+                            listTimeDimension = listTimeDimension,
+                            customStartDateText = customStartDateText,
+                            customEndDateText = customEndDateText,
+                            minAmountInput = minAmountInput,
+                            maxAmountInput = maxAmountInput,
+                            onSelectTimeDimension = { dim ->
+                                listTimeDimension = dim
+                                customStartDateText = ""
+                                customEndDateText = ""
+                            },
+                            onStartDateChange = {
+                                customStartDateText = it
+                                if (it.isNotBlank()) listTimeDimension = HomeStatsDimension.ALL_TIME
+                            },
+                            onEndDateChange = {
+                                customEndDateText = it
+                                if (it.isNotBlank()) listTimeDimension = HomeStatsDimension.ALL_TIME
+                            },
+                            onPickStartDate = { pickingDateTarget = "start" },
+                            onPickEndDate = { pickingDateTarget = "end" },
+                            onMinAmountChange = { minAmountInput = it },
+                            onMaxAmountChange = { maxAmountInput = it },
+                            onResetAll = {
+                                listTimeDimension = HomeStatsDimension.ALL_TIME
+                                customStartDateText = ""
+                                customEndDateText = ""
+                                minAmountInput = ""
+                                maxAmountInput = ""
+                            }
+                        )
+                    }
+
+                    if (hasAnyListFilter && filteredTransactions.isNotEmpty()) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -480,7 +623,7 @@ fun LedgerHomeScreen(
                     if (filteredTransactions.isEmpty()) {
                         item(key = "empty") {
                             EmptyLedgerCard(
-                                hasSearch = searchQuery.isNotBlank() || selectedFilter != "全部",
+                                hasSearch = hasAnyListFilter,
                                 onOpenParser = onNavigateToParser,
                                 onAddManual = { showCreateDialog = true }
                             )
@@ -918,6 +1061,43 @@ fun LedgerHomeScreen(
                     Text("开心收下")
                 }
             }
+        )
+    }
+
+    if (showStatsDimensionDialog) {
+        HomeStatsDimensionPickerDialog(
+            currentDimension = statsDimension,
+            syncWithList = syncStatsSelectionToList,
+            confirmedTransactions = confirmedTransactions,
+            baseCurrencyCode = baseCurrency,
+            ratesToCny = exchangeRates.ratesToCny,
+            onToggleSyncWithList = { syncStatsSelectionToList = it },
+            onSelectDimension = { picked ->
+                statsDimension = picked
+                if (syncStatsSelectionToList) {
+                    listTimeDimension = picked
+                    customStartDateText = ""
+                    customEndDateText = ""
+                }
+                showStatsDimensionDialog = false
+            },
+            onDismiss = { showStatsDimensionDialog = false }
+        )
+    }
+
+    if (pickingDateTarget != null) {
+        HomeFilterDatePickerDialog(
+            initialDateText = if (pickingDateTarget == "start") customStartDateText else customEndDateText,
+            onConfirmDate = { formatted ->
+                if (pickingDateTarget == "start") {
+                    customStartDateText = formatted
+                } else {
+                    customEndDateText = formatted
+                }
+                listTimeDimension = HomeStatsDimension.ALL_TIME
+                pickingDateTarget = null
+            },
+            onDismiss = { pickingDateTarget = null }
         )
     }
 }
@@ -1652,28 +1832,51 @@ private fun ListenerStatusBanner(
 }
 
 @Composable
-private fun MonthlySummaryCard(
-    monthTitle: String,
+private fun HomeStatsSummaryCard(
+    dimension: HomeStatsDimension,
+    periodTitle: String,
     baseCurrencyCode: String,
     expenseCents: Long,
     incomeCents: Long,
     txCount: Int,
-    budgetCents: Long,
-    density: CardDensity
+    monthlyBudgetCents: Long,
+    density: CardDensity,
+    onClick: () -> Unit
 ) {
     val numberFont = LocalNumberFontFamily.current
-    val progress = if (budgetCents > 0L) (expenseCents.toFloat() / budgetCents.toFloat()).coerceIn(0f, 1f) else 0f
-    val isOverBudget = budgetCents > 0L && expenseCents > budgetCents
+    val scaledBudgetCents = remember(monthlyBudgetCents, dimension) {
+        val m = monthlyBudgetCents.coerceAtLeast(0L)
+        when (dimension) {
+            HomeStatsDimension.TODAY -> (m / 30L).coerceAtLeast(if (m > 0L) 1L else 0L)
+            HomeStatsDimension.THIS_WEEK -> ((m * 7L) / 30L).coerceAtLeast(if (m > 0L) 1L else 0L)
+            HomeStatsDimension.THIS_MONTH, HomeStatsDimension.LAST_MONTH -> m
+            HomeStatsDimension.THIS_YEAR -> m * 12L
+            HomeStatsDimension.ALL_TIME -> 0L
+        }
+    }
+    val progress = if (scaledBudgetCents > 0L) (expenseCents.toFloat() / scaledBudgetCents.toFloat()).coerceIn(0f, 1f) else 0f
+    val isOverBudget = scaledBudgetCents > 0L && expenseCents > scaledBudgetCents
     val cardPadding = when (density) {
         CardDensity.COMPACT -> 14.dp
         CardDensity.STANDARD -> 20.dp
         CardDensity.COMFORTABLE -> 24.dp
     }
+    val budgetLabel = when (dimension) {
+        HomeStatsDimension.TODAY -> "日预算进度"
+        HomeStatsDimension.THIS_WEEK -> "周预算进度"
+        HomeStatsDimension.THIS_MONTH, HomeStatsDimension.LAST_MONTH -> "月预算进度"
+        HomeStatsDimension.THIS_YEAR -> "年预算进度"
+        HomeStatsDimension.ALL_TIME -> "预算进度"
+    }
 
     Card(
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(onClick = onClick)
+            .testTag("home_stats_summary_card")
     ) {
         Box(
             modifier = Modifier
@@ -1695,20 +1898,35 @@ private fun MonthlySummaryCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "$monthTitle · 本月支出 ($baseCurrencyCode)",
+                        text = "$periodTitle · ${dimension.label} ($baseCurrencyCode)",
                         style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.88f),
+                        modifier = Modifier.weight(1f)
                     )
-                    Surface(
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.16f),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            text = "${txCount} 笔",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = "${txCount} 笔",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.22f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = "${dimension.shortLabel} ▾",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
                     }
                 }
 
@@ -1725,7 +1943,7 @@ private fun MonthlySummaryCard(
                 ) {
                     Column {
                         Text(
-                            text = "本月收入",
+                            text = "${dimension.shortLabel}收入",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f)
                         )
@@ -1737,7 +1955,7 @@ private fun MonthlySummaryCard(
                     }
                     Column {
                         Text(
-                            text = "本月结余",
+                            text = "${dimension.shortLabel}结余",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f)
                         )
@@ -1750,19 +1968,19 @@ private fun MonthlySummaryCard(
                     }
                 }
 
-                if (budgetCents > 0L) {
+                if (scaledBudgetCents > 0L) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = if (isOverBudget) "已超出预算" else "预算进度",
+                                text = if (isOverBudget) "已超出$budgetLabel" else budgetLabel,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                             )
                             Text(
-                                text = "${(progress * 100).toInt()}% / ${formatCurrency(budgetCents, baseCurrencyCode)}",
+                                text = "${(progress * 100).toInt()}% / ${formatCurrency(scaledBudgetCents, baseCurrencyCode)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onPrimary
                             )
@@ -1780,6 +1998,322 @@ private fun MonthlySummaryCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HomeStatsDimensionPickerDialog(
+    currentDimension: HomeStatsDimension,
+    syncWithList: Boolean,
+    confirmedTransactions: List<LedgerTransaction>,
+    baseCurrencyCode: String,
+    ratesToCny: Map<String, Double>,
+    onToggleSyncWithList: (Boolean) -> Unit,
+    onSelectDimension: (HomeStatsDimension) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val numberFont = LocalNumberFontFamily.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择统计卡片时间维度") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "同步筛选下方账单列表",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = syncWithList,
+                        onCheckedChange = onToggleSyncWithList,
+                        modifier = Modifier.testTag("stats_dimension_sync_list_switch")
+                    )
+                }
+                HorizontalDivider()
+                HomeStatsDimension.entries.forEach { dim ->
+                    val items = remember(confirmedTransactions, dim) {
+                        LedgerViewModel.filterByHomeDimension(confirmedTransactions, dim)
+                    }
+                    val expense = remember(items, ratesToCny, baseCurrencyCode) {
+                        items.filter { it.txType == TransactionType.EXPENSE }.sumOf { tx ->
+                            CurrencyExchangeManager.convertCents(tx.amountCents, tx.currencyCode, baseCurrencyCode, ratesToCny)
+                        }
+                    }
+                    val income = remember(items, ratesToCny, baseCurrencyCode) {
+                        items.filter { it.txType == TransactionType.INCOME }.sumOf { tx ->
+                            CurrencyExchangeManager.convertCents(tx.amountCents, tx.currencyCode, baseCurrencyCode, ratesToCny)
+                        }
+                    }
+                    val selected = dim == currentDimension
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        },
+                        border = BorderStroke(
+                            width = if (selected) 1.5.dp else 1.dp,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onSelectDimension(dim) }
+                            .testTag("home_stats_dimension_option_${dim.name}")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = dim.label,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                )
+                                Text(
+                                    text = "${items.size} 笔记录",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "支 ${formatCurrency(expense, baseCurrencyCode)}",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = numberFont),
+                                    color = ExpenseCoral,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "收 ${formatCurrency(income, baseCurrencyCode)}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = numberFont),
+                                    color = IncomeJade
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun HomeRangeFilterPanel(
+    baseCurrencyCode: String,
+    listTimeDimension: HomeStatsDimension,
+    customStartDateText: String,
+    customEndDateText: String,
+    minAmountInput: String,
+    maxAmountInput: String,
+    onSelectTimeDimension: (HomeStatsDimension) -> Unit,
+    onStartDateChange: (String) -> Unit,
+    onEndDateChange: (String) -> Unit,
+    onPickStartDate: () -> Unit,
+    onPickEndDate: () -> Unit,
+    onMinAmountChange: (String) -> Unit,
+    onMaxAmountChange: (String) -> Unit,
+    onResetAll: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("home_range_filter_panel")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("时间与金额范围筛选", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                TextButton(
+                    onClick = onResetAll,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier.testTag("home_range_filter_reset")
+                ) {
+                    Text("重置条件", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+
+            Text("快捷时段", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                HomeStatsDimension.entries.forEach { dim ->
+                    val isPresetSelected = listTimeDimension == dim &&
+                        customStartDateText.isBlank() &&
+                        customEndDateText.isBlank()
+                    FilterChip(
+                        selected = isPresetSelected,
+                        onClick = { onSelectTimeDimension(dim) },
+                        label = { Text(dim.shortLabel) },
+                        modifier = Modifier.testTag("list_time_preset_${dim.name}")
+                    )
+                }
+            }
+
+            Text("自定义日期区间", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = customStartDateText,
+                    onValueChange = { onStartDateChange(it.take(10)) },
+                    label = { Text("起始日期") },
+                    placeholder = { Text("yyyy-MM-dd") },
+                    trailingIcon = {
+                        IconButton(onClick = onPickStartDate) {
+                            Icon(AppIcons.CalendarMonth, contentDescription = "选择起始日期", modifier = Modifier.size(18.dp))
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("filter_start_date_input")
+                )
+                OutlinedTextField(
+                    value = customEndDateText,
+                    onValueChange = { onEndDateChange(it.take(10)) },
+                    label = { Text("结束日期") },
+                    placeholder = { Text("yyyy-MM-dd") },
+                    trailingIcon = {
+                        IconButton(onClick = onPickEndDate) {
+                            Icon(AppIcons.CalendarMonth, contentDescription = "选择结束日期", modifier = Modifier.size(18.dp))
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("filter_end_date_input")
+                )
+            }
+
+            Text("金额区间 (折合 $baseCurrencyCode)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = minAmountInput,
+                    onValueChange = { next ->
+                        onMinAmountChange(next.filter { it.isDigit() || it == '.' }.take(10))
+                    },
+                    label = { Text("最低金额") },
+                    placeholder = { Text("不限") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("filter_min_amount_input")
+                )
+                OutlinedTextField(
+                    value = maxAmountInput,
+                    onValueChange = { next ->
+                        onMaxAmountChange(next.filter { it.isDigit() || it == '.' }.take(10))
+                    },
+                    label = { Text("最高金额") },
+                    placeholder = { Text("不限") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("filter_max_amount_input")
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(
+                    Triple("不限", "", ""),
+                    Triple("< 50", "", "50"),
+                    Triple("50 ~ 200", "50", "200"),
+                    Triple("200 ~ 1000", "200", "1000"),
+                    Triple("≥ 1000", "1000", "")
+                ).forEach { (label, minVal, maxVal) ->
+                    AssistChip(
+                        onClick = {
+                            onMinAmountChange(minVal)
+                            onMaxAmountChange(maxVal)
+                        },
+                        label = { Text(label) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeFilterDatePickerDialog(
+    initialDateText: String,
+    onConfirmDate: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val initialUtc = remember(initialDateText) {
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = parseDateTimeInputMillis(initialDateText, "12:00") ?: System.currentTimeMillis()
+        Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+            clear()
+            set(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
+        }.timeInMillis
+    }
+    val pickerState = rememberDatePickerState(initialSelectedDateMillis = initialUtc)
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val millis = pickerState.selectedDateMillis ?: System.currentTimeMillis()
+                    val utcCal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                        timeInMillis = millis
+                    }
+                    onConfirmDate(
+                        "%04d-%02d-%02d".format(
+                            Locale.US,
+                            utcCal.get(Calendar.YEAR),
+                            utcCal.get(Calendar.MONTH) + 1,
+                            utcCal.get(Calendar.DAY_OF_MONTH)
+                        )
+                    )
+                }
+            ) {
+                Text("确定")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    ) {
+        DatePicker(state = pickerState)
     }
 }
 
@@ -1872,7 +2406,7 @@ private fun TransactionRowCard(
                         )
                     }
                     Text(
-                        text = "${transaction.category} · ${formatTimeShort(transaction.occurredAtMillis)}",
+                        text = "${transaction.category} · ${formatItemTimeCompact(transaction.occurredAtMillis)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

@@ -134,8 +134,30 @@ fun formatTimeShort(millis: Long): String {
     return SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(millis))
 }
 
-fun formatDateHeader(millis: Long): String {
-    return SimpleDateFormat("MM月dd日 EEEE", Locale.CHINA).format(Date(millis))
+fun formatDateHeader(
+    millis: Long,
+    nowYear: Int = Calendar.getInstance().get(Calendar.YEAR)
+): String {
+    val txCal = Calendar.getInstance().apply { timeInMillis = millis }
+    val pattern = if (txCal.get(Calendar.YEAR) != nowYear) {
+        "yyyy年MM月dd日 EEEE"
+    } else {
+        "MM月dd日 EEEE"
+    }
+    return SimpleDateFormat(pattern, Locale.CHINA).format(Date(millis))
+}
+
+fun formatItemTimeCompact(
+    millis: Long,
+    nowYear: Int = Calendar.getInstance().get(Calendar.YEAR)
+): String {
+    val txCal = Calendar.getInstance().apply { timeInMillis = millis }
+    val pattern = if (txCal.get(Calendar.YEAR) != nowYear) {
+        "yyyy-MM-dd HH:mm"
+    } else {
+        "HH:mm"
+    }
+    return SimpleDateFormat(pattern, Locale.CHINA).format(Date(millis))
 }
 
 fun formatDateTimeFull(millis: Long): String {

@@ -56,15 +56,21 @@ object NotificationBridge {
     ) {
         val log = CapturedNotificationLog(
             id = UUID.randomUUID().toString(),
-            packageName = packageName,
-            appLabel = appLabel,
-            title = title,
-            content = content,
+            packageName = packageName.take(80),
+            appLabel = appLabel.take(40),
+            title = title.take(120),
+            content = content.take(220),
             capturedAtMillis = System.currentTimeMillis(),
-            status = status,
-            summary = summary
+            status = status.take(40),
+            summary = summary.take(160)
         )
-        _capturedLogs.update { current -> (listOf(log) + current).take(30) }
+        _capturedLogs.update { current -> (listOf(log) + current).take(20) }
+    }
+
+    fun trimMemoryCaches(keepRecentLogs: Int = 6) {
+        _capturedLogs.update { current ->
+            if (current.size > keepRecentLogs) current.take(keepRecentLogs.coerceAtLeast(0)) else current
+        }
     }
 
     fun isNotificationListenerEnabled(context: Context): Boolean {
