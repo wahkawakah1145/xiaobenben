@@ -142,6 +142,47 @@ object NotificationBridge {
         context.startActivity(intent)
     }
 
+    /**
+     * Opens this app's system permission management page (prefers HyperOS / MIUI app permission
+     * editor when present, falling back cleanly to standard Android Application Details settings).
+     */
+    fun openAppSystemPermissionSettings(context: Context): Boolean {
+        val pkg = context.packageName
+        val candidateIntents = listOf(
+            Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                putExtra("extra_pkgname", pkg)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+            Intent("android.intent.action.MANAGE_APP_PERMISSIONS").apply {
+                putExtra(Intent.EXTRA_PACKAGE_NAME, pkg)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = android.net.Uri.fromParts("package", pkg, null)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+        for (intent in candidateIntents) {
+            val ok = runCatching {
+                context.startActivity(intent)
+                true
+            }.getOrDefault(false)
+            if (ok) return true
+        }
+        return false
+    }
+
+    fun openAppDetailsSettings(context: Context): Boolean {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = android.net.Uri.fromParts("package", context.packageName, null)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return runCatching {
+            context.startActivity(intent)
+            true
+        }.getOrDefault(false)
+    }
+
     fun ensureNotificationChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(NotificationManager::class.java) ?: return

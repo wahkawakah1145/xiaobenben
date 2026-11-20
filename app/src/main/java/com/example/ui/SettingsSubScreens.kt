@@ -1,6 +1,14 @@
 package com.example.ui
 
+import android.graphics.Bitmap
 import android.net.Uri
+import androidx.compose.foundation.Image
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import com.example.model.DeleteUndoDuration
+import com.example.model.GlobalToastDuration
 import android.os.Build
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -756,31 +764,39 @@ fun ManualImportScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+
 @Composable
 fun AppearanceSettingsScreen(
     appearance: AppearanceSettings,
-    viewModel: LedgerViewModel,
+    onOpenTheme: () -> Unit,
+    onOpenDisplay: () -> Unit,
+    onOpenHomeNav: () -> Unit,
+    onOpenInteraction: () -> Unit,
+    onOpenIconShortcut: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val supportsMonet = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    val scope = rememberCoroutineScope()
-    var showColorPickerDialog by remember { mutableStateOf(false) }
-    var pendingIconStyleId by remember(appearance.appIconStyleId) { mutableStateOf(appearance.appIconStyleId) }
-    var showIconApplyConfirmDialog by remember { mutableStateOf(false) }
-    var showShortcutPermissionDialog by remember { mutableStateOf(false) }
-    var showShortcutCustomDialog by remember { mutableStateOf(false) }
-    var showShortcutColorPicker by remember { mutableStateOf(false) }
-    var shortcutCustomName by remember(appearance.homeBrandCustomName) {
-        mutableStateOf(appearance.homeBrandCustomName.ifBlank { "小本本" })
+    val iconStyleLabel = AppIconStyle.fromId(appearance.appIconStyleId).label
+    val themeSummary = buildString {
+        append(if (appearance.dynamicColor) "莫奈动态取色" else "自定义主色")
+        append(" · ")
+        append(appearance.themeMode.label)
+        if (appearance.oledPureBlack && appearance.themeMode != ThemeMode.LIGHT) {
+            append(" · OLED纯黑")
+        }
     }
-    var shortcutCustomStyleId by remember(appearance.appIconStyleId) { mutableStateOf(appearance.appIconStyleId) }
-    var shortcutUseThemeColor by remember { mutableStateOf(true) }
-    var shortcutCustomColorArgb by remember(appearance.customPrimaryColorArgb) {
-        mutableStateOf(appearance.customPrimaryColorArgb)
+    val displaySummary = buildString {
+        append("${appearance.latinNumberFont.label} · DPI ${(appearance.uiDensityScale * 100).roundToInt()}%")
+        append(" · ${appearance.cardDensity.label}卡片 · ${appearance.iconVisualStyle.label}")
     }
-    var desktopSyncFeedback by remember { mutableStateOf<String?>(null) }
+    val homeNavSummary = buildString {
+        append(if (appearance.showBooksTab) "底部 4 Tab" else "已隐藏账本 Tab")
+        append(" · ${appearance.homeHeaderOrder.label} · ${appearance.fabPlacement.label} (+) 按钮")
+    }
+    val interactionSummary = buildString {
+        append("全局提示：${appearance.globalSnackbarDuration.label}")
+        append(" · 删除提示：${appearance.deleteUndoDuration.label}")
+    }
+    val iconSummary = "当前图标：$iconStyleLabel · 支持相册自定义桌面快捷方式"
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -790,7 +806,127 @@ fun AppearanceSettingsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            item(key = "color_and_font") {
+            item(key = "appearance_menu_visual") {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                        AppearanceMenuRow(
+                            icon = AppIcons.Palette,
+                            title = "主题与配色",
+                            subtitle = themeSummary,
+                            testTag = "appearance_menu_theme",
+                            onClick = onOpenTheme
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        AppearanceMenuRow(
+                            icon = AppIcons.TextFields,
+                            title = "字体、DPI 与列表样式",
+                            subtitle = displaySummary,
+                            testTag = "appearance_menu_display",
+                            onClick = onOpenDisplay
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        AppearanceMenuRow(
+                            icon = AppIcons.ViewQuilt,
+                            title = "主页、顶栏与导航",
+                            subtitle = homeNavSummary,
+                            testTag = "appearance_menu_home_nav",
+                            onClick = onOpenHomeNav
+                        )
+                    }
+                }
+            }
+
+            item(key = "appearance_menu_behavior_and_icon") {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                        AppearanceMenuRow(
+                            icon = AppIcons.TouchApp,
+                            title = "动画、手势与提示横栏",
+                            subtitle = interactionSummary,
+                            testTag = "appearance_menu_interaction",
+                            onClick = onOpenInteraction
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        AppearanceMenuRow(
+                            icon = AppIcons.AddToHomeScreen,
+                            title = "图标风格与桌面快捷方式",
+                            subtitle = iconSummary,
+                            testTag = "appearance_menu_icon_shortcut",
+                            onClick = onOpenIconShortcut
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppearanceMenuRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .minimumInteractiveComponentSize()
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AppearanceThemeSettingsScreen(
+    appearance: AppearanceSettings,
+    viewModel: LedgerViewModel,
+    modifier: Modifier = Modifier
+) {
+    val supportsMonet = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    var showColorPickerDialog by remember { mutableStateOf(false) }
+
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(
+            modifier = Modifier
+                .widthIn(max = 720.dp)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item(key = "color_and_palette") {
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -800,7 +936,7 @@ fun AppearanceSettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("色彩、调色板与字体", style = MaterialTheme.typography.titleMedium)
+                        Text("色彩与调色板", style = MaterialTheme.typography.titleMedium)
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -892,10 +1028,22 @@ fun AppearanceSettingsScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+            }
 
-                        HorizontalDivider()
+            item(key = "theme_mode_and_oled") {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text("深浅色模式与屏幕优化", style = MaterialTheme.typography.titleMedium)
 
-                        Text("深浅色模式", style = MaterialTheme.typography.labelLarge)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             ThemeMode.entries.forEach { mode ->
                                 FilterChip(
@@ -934,8 +1082,55 @@ fun AppearanceSettingsScreen(
                                 modifier = Modifier.testTag("toggle_oled_pure_black")
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
 
-                        Text("英文与数字字体", style = MaterialTheme.typography.labelLarge)
+    if (showColorPickerDialog) {
+        CustomColorPickerDialog(
+            initialColorArgb = appearance.customPrimaryColorArgb,
+            onDismiss = { showColorPickerDialog = false },
+            onConfirm = { newColorArgb ->
+                showColorPickerDialog = false
+                viewModel.saveAppearanceSettings(
+                    appearance.copy(
+                        dynamicColor = false,
+                        customPrimaryColorArgb = newColorArgb
+                    )
+                )
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AppearanceDisplaySettingsScreen(
+    appearance: AppearanceSettings,
+    viewModel: LedgerViewModel,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(
+            modifier = Modifier
+                .widthIn(max = 720.dp)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item(key = "font_selection") {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("英文与数字字体", style = MaterialTheme.typography.titleMedium)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             LatinNumberFont.entries.forEach { font ->
                                 FilterChip(
@@ -1103,10 +1298,7 @@ fun AppearanceSettingsScreen(
                 }
             }
 
-            item(key = "icon_style_settings") {
-                val pendingStyle = AppIconStyle.fromId(pendingIconStyleId)
-                val hasPendingIconChange = !pendingIconStyleId.equals(appearance.appIconStyleId, ignoreCase = true)
-
+            item(key = "card_and_badge_styles") {
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -1114,114 +1306,20 @@ fun AppearanceSettingsScreen(
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("图标风格", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            text = if (hasPendingIconChange) {
-                                "已预选「${pendingStyle.label}」，点选不会立即切换；点击下方「应用并重启」确认后再切换桌面入口图标"
-                            } else {
-                                "通过系统 activity-alias 切换桌面图标（含支持壁纸莫奈取色的「莫奈徽标」）；也可通过创建桌面快捷方式完全自定义图标与名称"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (hasPendingIconChange) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Text("账单列表与徽标样式", style = MaterialTheme.typography.titleMedium)
 
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            AppIconStyle.entries.forEach { style ->
-                                val selected = pendingIconStyleId.equals(style.id, ignoreCase = true)
-                                val isApplied = appearance.appIconStyleId.equals(style.id, ignoreCase = true)
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = if (selected) {
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                                    } else {
-                                        MaterialTheme.colorScheme.surfaceContainer
-                                    },
-                                    border = BorderStroke(
-                                        width = if (selected) 2.dp else 1.dp,
-                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                                    ),
-                                    modifier = Modifier
-                                        .width(96.dp)
-                                        .clickable {
-                                            pendingIconStyleId = style.id
-                                            desktopSyncFeedback = null
-                                        }
-                                        .testTag("app_icon_style_${style.id}")
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(10.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        AppBrandIconAvatar(
-                                            styleId = style.id,
-                                            size = 46.dp,
-                                            cornerDp = 12.dp
-                                        )
-                                        Text(
-                                            text = style.label,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                            maxLines = 1
-                                        )
-                                        if (isApplied) {
-                                            Text(
-                                                text = "当前使用",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-                                }
+                        Text("卡片大小 / 列表密度", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CardDensity.entries.forEach { density ->
+                                FilterChip(
+                                    selected = appearance.cardDensity == density,
+                                    onClick = { viewModel.saveAppearanceSettings(appearance.copy(cardDensity = density)) },
+                                    label = { Text(density.label) },
+                                    modifier = Modifier.testTag("density_chip_${density.name}")
+                                )
                             }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    shortcutCustomName = appearance.homeBrandCustomName.ifBlank { "小本本" }
-                                    shortcutCustomStyleId = pendingIconStyleId
-                                    val permState = DesktopIconSyncManager.checkPinShortcutPermission(context)
-                                    if (permState == ShortcutPermissionState.GRANTED) {
-                                        showShortcutCustomDialog = true
-                                    } else {
-                                        showShortcutPermissionDialog = true
-                                    }
-                                },
-                                modifier = Modifier
-                                    .weight(1.1f)
-                                    .testTag("create_desktop_shortcut_button")
-                            ) {
-                                Icon(AppIcons.AddToHomeScreen, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("创建桌面快捷方式", maxLines = 1)
-                            }
-                            Button(
-                                onClick = { showIconApplyConfirmDialog = true },
-                                modifier = Modifier
-                                    .weight(0.95f)
-                                    .testTag("apply_icon_and_restart_button")
-                            ) {
-                                Text("应用并重启", maxLines = 1)
-                            }
-                        }
-
-                        desktopSyncFeedback?.let { feedback ->
-                            Text(
-                                text = feedback,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
                         }
 
                         HorizontalDivider()
@@ -1245,10 +1343,58 @@ fun AppearanceSettingsScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+
+                        HorizontalDivider()
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("账单行显示支付渠道标签", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = appearance.showChannelBadge,
+                                onCheckedChange = {
+                                    viewModel.saveAppearanceSettings(appearance.copy(showChannelBadge = it))
+                                }
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("账单行显示识别方式标签", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = appearance.showParseBadge,
+                                onCheckedChange = {
+                                    viewModel.saveAppearanceSettings(appearance.copy(showParseBadge = it))
+                                }
+                            )
+                        }
                     }
                 }
             }
+        }
+    }
+}
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AppearanceHomeNavSettingsScreen(
+    appearance: AppearanceSettings,
+    viewModel: LedgerViewModel,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(
+            modifier = Modifier
+                .widthIn(max = 720.dp)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
             item(key = "bottom_tab_bar_customization") {
                 val normalizedOrder = remember(appearance.bottomTabOrder) {
                     MainBottomTab.normalizeOrder(appearance.bottomTabOrder)
@@ -1380,6 +1526,45 @@ fun AppearanceSettingsScreen(
                 }
             }
 
+            item(key = "home_element_positions") {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text("主页元素位置", style = MaterialTheme.typography.titleMedium)
+
+                        Text("主页金融 Tips 位置", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            HomeHeaderOrder.entries.forEach { order ->
+                                FilterChip(
+                                    selected = appearance.homeHeaderOrder == order,
+                                    onClick = { viewModel.saveAppearanceSettings(appearance.copy(homeHeaderOrder = order)) },
+                                    label = { Text(order.label) },
+                                    modifier = Modifier.testTag("header_order_chip_${order.name}")
+                                )
+                            }
+                        }
+
+                        Text("主页多功能 (+) 按钮位置", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FabPlacement.entries.forEach { placement ->
+                                FilterChip(
+                                    selected = appearance.fabPlacement == placement,
+                                    onClick = { viewModel.saveAppearanceSettings(appearance.copy(fabPlacement = placement)) },
+                                    label = { Text(placement.label) },
+                                    modifier = Modifier.testTag("fab_placement_chip_${placement.name}")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             item(key = "home_brand_header_customization") {
                 var nameInput by remember(appearance.homeBrandCustomName) {
                     mutableStateOf(appearance.homeBrandCustomName)
@@ -1400,7 +1585,6 @@ fun AppearanceSettingsScreen(
                     ) {
                         Text("主页顶部品牌栏自定义", style = MaterialTheme.typography.titleMedium)
 
-                        // Live left-aligned TopAppBar preview
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainer,
                             shape = RoundedCornerShape(14.dp),
@@ -1630,7 +1814,101 @@ fun AppearanceSettingsScreen(
                 }
             }
 
-            item(key = "layout_customization") {
+            item(key = "home_tips_customization") {
+                var tagInput by remember(appearance.tipTagText) { mutableStateOf(appearance.tipTagText) }
+                var tipsContentInput by remember(appearance.customTipsRaw) { mutableStateOf(appearance.customTipsRaw) }
+
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("首页顶部 Tips 文案与轮换内容", style = MaterialTheme.typography.titleMedium)
+
+                        OutlinedTextField(
+                            value = tagInput,
+                            onValueChange = { next ->
+                                tagInput = next.take(16)
+                                viewModel.saveAppearanceSettings(appearance.copy(tipTagText = tagInput))
+                            },
+                            label = { Text("Tag 标签文案（留空默认显示“我告诉你”）") },
+                            placeholder = { Text("默认显示：我告诉你") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("tips_tag_input")
+                        )
+
+                        OutlinedTextField(
+                            value = tipsContentInput,
+                            onValueChange = { next ->
+                                tipsContentInput = next
+                                viewModel.saveAppearanceSettings(appearance.copy(customTipsRaw = next))
+                            },
+                            label = { Text("自定义轮换内容（每行一条，留空则使用默认词库）") },
+                            placeholder = { Text("每行一条句子，点击首页横幅即可轮换展示") },
+                            minLines = 4,
+                            maxLines = 8,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("tips_custom_content_input")
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    val defaultText = com.example.parser.FinanceHumorTips.defaultTipsMultiline()
+                                    tipsContentInput = defaultText
+                                    viewModel.saveAppearanceSettings(appearance.copy(customTipsRaw = defaultText))
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("填入内置内容编辑")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    tagInput = ""
+                                    tipsContentInput = ""
+                                    viewModel.saveAppearanceSettings(
+                                        appearance.copy(tipTagText = "", customTipsRaw = "")
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("恢复默认")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AppearanceInteractionSettingsScreen(
+    appearance: AppearanceSettings,
+    viewModel: LedgerViewModel,
+    onShowMessage: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(
+            modifier = Modifier
+                .widthIn(max = 720.dp)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item(key = "bottom_banner_durations") {
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -1640,72 +1918,86 @@ fun AppearanceSettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("卡片大小与元素位置", style = MaterialTheme.typography.titleMedium)
+                        Text("底部提示横栏停留时间", style = MaterialTheme.typography.titleMedium)
 
-                        Text("卡片大小 / 列表密度", style = MaterialTheme.typography.labelLarge)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            CardDensity.entries.forEach { density ->
-                                FilterChip(
-                                    selected = appearance.cardDensity == density,
-                                    onClick = { viewModel.saveAppearanceSettings(appearance.copy(cardDensity = density)) },
-                                    label = { Text(density.label) },
-                                    modifier = Modifier.testTag("density_chip_${density.name}")
-                                )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("全局提示型底部横栏停留时间", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                text = "控制保存、复制、同步等普通底部提示横栏的自动消失时长（当前：${appearance.globalSnackbarDuration.label}）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                GlobalToastDuration.entries.forEach { dur ->
+                                    FilterChip(
+                                        selected = appearance.globalSnackbarDuration == dur,
+                                        onClick = {
+                                            viewModel.saveAppearanceSettings(appearance.copy(globalSnackbarDuration = dur))
+                                        },
+                                        label = { Text(dur.label) },
+                                        modifier = Modifier.testTag("global_snackbar_duration_${dur.name}")
+                                    )
+                                }
                             }
-                        }
-
-                        Text("主页金融 Tips 位置", style = MaterialTheme.typography.labelLarge)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            HomeHeaderOrder.entries.forEach { order ->
-                                FilterChip(
-                                    selected = appearance.homeHeaderOrder == order,
-                                    onClick = { viewModel.saveAppearanceSettings(appearance.copy(homeHeaderOrder = order)) },
-                                    label = { Text(order.label) },
-                                    modifier = Modifier.testTag("header_order_chip_${order.name}")
-                                )
-                            }
-                        }
-
-                        Text("主页多功能 (+) 按钮位置", style = MaterialTheme.typography.labelLarge)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FabPlacement.entries.forEach { placement ->
-                                FilterChip(
-                                    selected = appearance.fabPlacement == placement,
-                                    onClick = { viewModel.saveAppearanceSettings(appearance.copy(fabPlacement = placement)) },
-                                    label = { Text(placement.label) },
-                                    modifier = Modifier.testTag("fab_placement_chip_${placement.name}")
-                                )
+                            OutlinedButton(
+                                onClick = {
+                                    onShowMessage("当前全局提示横栏停留时间：${appearance.globalSnackbarDuration.label}")
+                                },
+                                modifier = Modifier.testTag("test_global_snackbar_button")
+                            ) {
+                                Text("预览全局提示横栏")
                             }
                         }
 
                         HorizontalDivider()
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("账单行显示支付渠道标签", style = MaterialTheme.typography.bodyMedium)
-                            Switch(
-                                checked = appearance.showChannelBadge,
-                                onCheckedChange = {
-                                    viewModel.saveAppearanceSettings(appearance.copy(showChannelBadge = it))
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("删除后提示横栏「仅手动关闭」", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        text = "默认开启：删除账单后的底部撤销横栏不会自动消失，直到点击「撤销」、关闭按钮或左右滑关",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
-                            )
-                        }
+                                Switch(
+                                    checked = appearance.deleteUndoDuration == DeleteUndoDuration.MANUAL_ONLY,
+                                    onCheckedChange = { manualOnly ->
+                                        val nextDur = if (manualOnly) {
+                                            DeleteUndoDuration.MANUAL_ONLY
+                                        } else {
+                                            DeleteUndoDuration.STANDARD
+                                        }
+                                        viewModel.saveAppearanceSettings(appearance.copy(deleteUndoDuration = nextDur))
+                                    },
+                                    modifier = Modifier.testTag("toggle_delete_undo_manual_only")
+                                )
+                            }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("账单行显示识别方式标签", style = MaterialTheme.typography.bodyMedium)
-                            Switch(
-                                checked = appearance.showParseBadge,
-                                onCheckedChange = {
-                                    viewModel.saveAppearanceSettings(appearance.copy(showParseBadge = it))
+                            Text("删除后提示横栏停留时间选项", style = MaterialTheme.typography.labelLarge)
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                DeleteUndoDuration.entries.forEach { dur ->
+                                    FilterChip(
+                                        selected = appearance.deleteUndoDuration == dur,
+                                        onClick = {
+                                            viewModel.saveAppearanceSettings(appearance.copy(deleteUndoDuration = dur))
+                                        },
+                                        label = { Text(dur.label) },
+                                        modifier = Modifier.testTag("delete_undo_duration_${dur.name}")
+                                    )
                                 }
-                            )
+                            }
                         }
                     }
                 }
@@ -1840,10 +2132,60 @@ fun AppearanceSettingsScreen(
                     }
                 }
             }
+        }
+    }
+}
 
-            item(key = "home_tips_customization") {
-                var tagInput by remember(appearance.tipTagText) { mutableStateOf(appearance.tipTagText) }
-                var tipsContentInput by remember(appearance.customTipsRaw) { mutableStateOf(appearance.customTipsRaw) }
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AppearanceIconShortcutSettingsScreen(
+    appearance: AppearanceSettings,
+    viewModel: LedgerViewModel,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingIconStyleId by remember(appearance.appIconStyleId) { mutableStateOf(appearance.appIconStyleId) }
+    var showIconApplyConfirmDialog by remember { mutableStateOf(false) }
+    var showShortcutPermissionDialog by remember { mutableStateOf(false) }
+    var showShortcutCustomDialog by remember { mutableStateOf(false) }
+    var showShortcutColorPicker by remember { mutableStateOf(false) }
+    var shortcutCustomName by remember(appearance.homeBrandCustomName) {
+        mutableStateOf(appearance.homeBrandCustomName.ifBlank { "小本本" })
+    }
+    var shortcutCustomStyleId by remember(appearance.appIconStyleId) { mutableStateOf(appearance.appIconStyleId) }
+    var shortcutUseThemeColor by remember { mutableStateOf(true) }
+    var shortcutCustomColorArgb by remember(appearance.customPrimaryColorArgb) {
+        mutableStateOf(appearance.customPrimaryColorArgb)
+    }
+    var shortcutCustomPhotoBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var shortcutPhotoError by remember { mutableStateOf<String?>(null) }
+    var desktopSyncFeedback by remember { mutableStateOf<String?>(null) }
+
+    val shortcutImagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val decoded = DesktopIconSyncManager.decodeSquareShortcutBitmap(context, uri, sizePx = 192)
+        if (decoded != null) {
+            shortcutCustomPhotoBitmap = decoded
+            shortcutPhotoError = null
+        } else {
+            shortcutPhotoError = "未能解码所选图片，请更换其他相册图片重试"
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(
+            modifier = Modifier
+                .widthIn(max = 720.dp)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item(key = "icon_style_settings") {
+                val pendingStyle = AppIconStyle.fromId(pendingIconStyleId)
+                val hasPendingIconChange = !pendingIconStyleId.equals(appearance.appIconStyleId, ignoreCase = true)
 
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -1854,36 +2196,72 @@ fun AppearanceSettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("首页顶部 Tips 文案与轮换内容", style = MaterialTheme.typography.titleMedium)
-
-                        OutlinedTextField(
-                            value = tagInput,
-                            onValueChange = { next ->
-                                tagInput = next.take(16)
-                                viewModel.saveAppearanceSettings(appearance.copy(tipTagText = tagInput))
+                        Text("图标风格", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = if (hasPendingIconChange) {
+                                "已预选「${pendingStyle.label}」，点选不会立即切换；点击下方「应用并重启」确认后再切换桌面入口图标"
+                            } else {
+                                "通过系统 activity-alias 切换桌面图标（含支持壁纸莫奈取色的「莫奈徽标」）；也可通过创建桌面快捷方式自行选择相册图片或自定义配色名称"
                             },
-                            label = { Text("Tag 标签文案（留空默认显示“我告诉你”）") },
-                            placeholder = { Text("默认显示：我告诉你") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("tips_tag_input")
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (hasPendingIconChange) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        OutlinedTextField(
-                            value = tipsContentInput,
-                            onValueChange = { next ->
-                                tipsContentInput = next
-                                viewModel.saveAppearanceSettings(appearance.copy(customTipsRaw = next))
-                            },
-                            label = { Text("自定义轮换内容（每行一条，留空则使用默认词库）") },
-                            placeholder = { Text("每行一条句子，点击首页横幅即可轮换展示") },
-                            minLines = 4,
-                            maxLines = 8,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("tips_custom_content_input")
-                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            AppIconStyle.entries.forEach { style ->
+                                val selected = pendingIconStyleId.equals(style.id, ignoreCase = true)
+                                val isApplied = appearance.appIconStyleId.equals(style.id, ignoreCase = true)
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainer
+                                    },
+                                    border = BorderStroke(
+                                        width = if (selected) 2.dp else 1.dp,
+                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                    ),
+                                    modifier = Modifier
+                                        .width(96.dp)
+                                        .clickable {
+                                            pendingIconStyleId = style.id
+                                            desktopSyncFeedback = null
+                                        }
+                                        .testTag("app_icon_style_${style.id}")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        AppBrandIconAvatar(
+                                            styleId = style.id,
+                                            size = 46.dp,
+                                            cornerDp = 12.dp
+                                        )
+                                        Text(
+                                            text = style.label,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            maxLines = 1
+                                        )
+                                        if (isApplied) {
+                                            Text(
+                                                text = "当前使用",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1891,47 +2269,45 @@ fun AppearanceSettingsScreen(
                         ) {
                             OutlinedButton(
                                 onClick = {
-                                    val defaultText = com.example.parser.FinanceHumorTips.defaultTipsMultiline()
-                                    tipsContentInput = defaultText
-                                    viewModel.saveAppearanceSettings(appearance.copy(customTipsRaw = defaultText))
+                                    shortcutCustomName = appearance.homeBrandCustomName.ifBlank { "小本本" }
+                                    shortcutCustomStyleId = pendingIconStyleId
+                                    shortcutPhotoError = null
+                                    val permState = DesktopIconSyncManager.checkPinShortcutPermission(context)
+                                    if (permState == ShortcutPermissionState.GRANTED) {
+                                        showShortcutCustomDialog = true
+                                    } else {
+                                        showShortcutPermissionDialog = true
+                                    }
                                 },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1.1f)
+                                    .testTag("create_desktop_shortcut_button")
                             ) {
-                                Text("填入内置内容编辑")
+                                Icon(AppIcons.AddToHomeScreen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("创建桌面快捷方式", maxLines = 1)
                             }
-                            OutlinedButton(
-                                onClick = {
-                                    tagInput = ""
-                                    tipsContentInput = ""
-                                    viewModel.saveAppearanceSettings(
-                                        appearance.copy(tipTagText = "", customTipsRaw = "")
-                                    )
-                                },
-                                modifier = Modifier.weight(1f)
+                            Button(
+                                onClick = { showIconApplyConfirmDialog = true },
+                                modifier = Modifier
+                                    .weight(0.95f)
+                                    .testTag("apply_icon_and_restart_button")
                             ) {
-                                Text("恢复默认")
+                                Text("应用并重启", maxLines = 1)
                             }
+                        }
+
+                        desktopSyncFeedback?.let { feedback ->
+                            Text(
+                                text = feedback,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
                     }
                 }
             }
         }
-    }
-
-    if (showColorPickerDialog) {
-        CustomColorPickerDialog(
-            initialColorArgb = appearance.customPrimaryColorArgb,
-            onDismiss = { showColorPickerDialog = false },
-            onConfirm = { newColorArgb ->
-                showColorPickerDialog = false
-                viewModel.saveAppearanceSettings(
-                    appearance.copy(
-                        dynamicColor = false,
-                        customPrimaryColorArgb = newColorArgb
-                    )
-                )
-            }
-        )
     }
 
     if (showIconApplyConfirmDialog) {
@@ -1979,7 +2355,7 @@ fun AppearanceSettingsScreen(
             title = { Text("需要桌面快捷方式权限") },
             text = {
                 Text(
-                    "当前系统未授予本应用「桌面快捷方式」权限或桌面限制了静默创建。请前往应用权限设置开启「桌面快捷方式」后，即可创建完全自定义名称、风格与配色的桌面图标。"
+                    "当前系统未授予本应用「桌面快捷方式」权限或桌面限制了静默创建。请前往应用权限设置开启「桌面快捷方式」后，即可创建完全自定义名称、相册图片或矢量配色的桌面图标。"
                 )
             },
             dismissButton = {
@@ -2042,7 +2418,7 @@ fun AppearanceSettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "保留原有桌面图标的同时，额外添加一个可完全自定义名称、风格与配色的桌面快捷方式。",
+                        text = "保留原有桌面图标的同时，额外添加一个可自定义名称、相册图片或矢量风格的桌面快捷方式。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2058,58 +2434,134 @@ fun AppearanceSettingsScreen(
                             .testTag("shortcut_custom_name_input")
                     )
 
-                    Text("选择快捷方式图标风格", style = MaterialTheme.typography.labelLarge)
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    // Gallery photo icon picker + preview
+                    Text("自定义图标图片（相册选图）", style = MaterialTheme.typography.labelLarge)
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        AppIconStyle.entries.forEach { st ->
-                            FilterChip(
-                                selected = shortcutCustomStyleId.equals(st.id, ignoreCase = true),
-                                onClick = { shortcutCustomStyleId = st.id },
-                                label = { Text(st.label) }
-                            )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            val pickedBmp = shortcutCustomPhotoBitmap
+                            if (pickedBmp != null) {
+                                Image(
+                                    bitmap = pickedBmp.asImageBitmap(),
+                                    contentDescription = "已选快捷方式图片预览",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(52.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .testTag("shortcut_gallery_preview_image")
+                                )
+                            } else {
+                                AppBrandIconAvatar(
+                                    styleId = shortcutCustomStyleId,
+                                    size = 52.dp,
+                                    cornerDp = 12.dp
+                                )
+                            }
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = if (pickedBmp != null) "已选用相册自定义图片" else "当前使用矢量风格图标",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    OutlinedButton(
+                                        onClick = { shortcutImagePickerLauncher.launch("image/*") },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.testTag("shortcut_pick_gallery_image_button")
+                                    ) {
+                                        Icon(AppIcons.PhotoLibrary, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(if (pickedBmp != null) "更换图片" else "选择相册图片", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    if (pickedBmp != null) {
+                                        TextButton(
+                                            onClick = {
+                                                shortcutCustomPhotoBitmap = null
+                                                shortcutPhotoError = null
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                                            modifier = Modifier.testTag("shortcut_clear_gallery_image_button")
+                                        ) {
+                                            Text("改用矢量", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    Text("快捷方式图标配色", style = MaterialTheme.typography.labelLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = shortcutUseThemeColor,
-                            onClick = { shortcutUseThemeColor = true },
-                            label = { Text("跟随当前主题色") }
-                        )
-                        FilterChip(
-                            selected = !shortcutUseThemeColor,
-                            onClick = { shortcutUseThemeColor = false },
-                            label = { Text("自定义图标色") }
-                        )
+                    shortcutPhotoError?.let { err ->
+                        Text(err, color = ExpenseCoral, style = MaterialTheme.typography.bodySmall)
                     }
 
-                    if (!shortcutUseThemeColor) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                    if (shortcutCustomPhotoBitmap == null) {
+                        Text("选择快捷方式图标风格", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(30.dp)
-                                        .clip(CircleShape)
-                                        .background(customSeedColor)
-                                        .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
-                                )
-                                Text(
-                                    text = "#%06X".format(shortcutCustomColorArgb.toInt() and 0xFFFFFF),
-                                    style = MaterialTheme.typography.labelLarge
+                            AppIconStyle.entries.forEach { st ->
+                                FilterChip(
+                                    selected = shortcutCustomStyleId.equals(st.id, ignoreCase = true),
+                                    onClick = { shortcutCustomStyleId = st.id },
+                                    label = { Text(st.label) }
                                 )
                             }
-                            OutlinedButton(onClick = { showShortcutColorPicker = true }) {
-                                Text("选取颜色")
+                        }
+
+                        Text("快捷方式图标配色", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = shortcutUseThemeColor,
+                                onClick = { shortcutUseThemeColor = true },
+                                label = { Text("跟随当前主题色") }
+                            )
+                            FilterChip(
+                                selected = !shortcutUseThemeColor,
+                                onClick = { shortcutUseThemeColor = false },
+                                label = { Text("自定义图标色") }
+                            )
+                        }
+
+                        if (!shortcutUseThemeColor) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(CircleShape)
+                                            .background(customSeedColor)
+                                            .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                                    )
+                                    Text(
+                                        text = "#%06X".format(shortcutCustomColorArgb.toInt() and 0xFFFFFF),
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
+                                OutlinedButton(onClick = { showShortcutColorPicker = true }) {
+                                    Text("选取颜色")
+                                }
                             }
                         }
                     }
@@ -2131,7 +2583,8 @@ fun AppearanceSettingsScreen(
                             primaryColor = effectivePrimary,
                             primaryContainerColor = effectiveContainer,
                             onPrimaryColor = effectiveOnPrimary,
-                            tertiaryColor = effectiveTertiary
+                            tertiaryColor = effectiveTertiary,
+                            customImageBitmap = shortcutCustomPhotoBitmap
                         )
                         desktopSyncFeedback = msg
                         if (!ok) {

@@ -740,4 +740,72 @@ class ExampleRobolectricTest {
     assertEquals(androidx.compose.ui.graphics.Color.Black, oledScheme.background)
     assertEquals(androidx.compose.ui.graphics.Color.Black, oledScheme.surface)
   }
+
+  @Test
+  fun `snackbar durations default delete-undo to manual-only and persist cleanly`() = kotlinx.coroutines.runBlocking {
+    val defaultAppearance = com.example.model.AppearanceSettings()
+    assertEquals(com.example.model.GlobalToastDuration.STANDARD, defaultAppearance.globalSnackbarDuration)
+    assertEquals(com.example.model.DeleteUndoDuration.MANUAL_ONLY, defaultAppearance.deleteUndoDuration)
+
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+    val saved = defaultAppearance.copy(
+      globalSnackbarDuration = com.example.model.GlobalToastDuration.LONG,
+      deleteUndoDuration = com.example.model.DeleteUndoDuration.STANDARD
+    )
+    repository.saveAppearanceSettings(saved).getOrThrow()
+    val loaded = repository.observeAppearanceSettings().first()
+    assertEquals(com.example.model.GlobalToastDuration.LONG, loaded.globalSnackbarDuration)
+    assertEquals(com.example.model.DeleteUndoDuration.STANDARD, loaded.deleteUndoDuration)
+  }
+
+  @Test
+  fun `github release update manager compares versions and parses release json accurately`() {
+    org.junit.Assert.assertTrue(
+      com.example.data.GitHubReleaseUpdateManager.isRemoteVersionNewer("v1.2.0", "1.1.9")
+    )
+    org.junit.Assert.assertTrue(
+      com.example.data.GitHubReleaseUpdateManager.isRemoteVersionNewer("v1.0.1", "1.0")
+    )
+    org.junit.Assert.assertFalse(
+      com.example.data.GitHubReleaseUpdateManager.isRemoteVersionNewer("v1.0.0", "1.0")
+    )
+    org.junit.Assert.assertFalse(
+      com.example.data.GitHubReleaseUpdateManager.isRemoteVersionNewer("v0.9.9", "1.0.0")
+    )
+
+    val sampleJson = """
+      {
+        "tag_name": "v2.1.0",
+        "name": "小本本 v2.1.0 (ARMv8)",
+        "body": "新增手动检查更新与相册快捷方式图标",
+        "html_url": "https://github.com/wahkawakah1145/xiaobenben/releases/tag/v2.1.0",
+        "published_at": "2026-11-21T00:00:00Z",
+        "assets": [
+          {
+            "name": "xiaobenben-v2.1.0-arm64-v8a.apk",
+            "size": 4567890,
+            "browser_download_url": "https://github.com/wahkawakah1145/xiaobenben/releases/download/v2.1.0/xiaobenben-v2.1.0-arm64-v8a.apk"
+          }
+        ]
+      }
+    """.trimIndent()
+    val parsed = com.example.data.GitHubReleaseUpdateManager.parseLatestReleaseJson(
+      jsonText = sampleJson,
+      repoPath = "wahkawakah1145/xiaobenben",
+      currentVersionName = "1.0"
+    )
+    org.junit.Assert.assertTrue(parsed.hasNewerVersion)
+    assertEquals("v2.1.0", parsed.tagName)
+    assertEquals("xiaobenben-v2.1.0-arm64-v8a.apk", parsed.apkAssetName)
+    assertEquals(4567890L, parsed.apkSizeBytes)
+  }
+
+  @Test
+  fun `desktop shortcut center square bitmap crop produces exact square dimensions`() {
+    val wide = android.graphics.Bitmap.createBitmap(320, 180, android.graphics.Bitmap.Config.ARGB_8888)
+    val cropped = com.example.util.DesktopIconSyncManager.cropCenterSquareBitmap(wide, sizePx = 192)
+    assertEquals(192, cropped.width)
+    assertEquals(192, cropped.height)
+  }
 }

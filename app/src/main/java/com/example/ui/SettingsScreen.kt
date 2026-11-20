@@ -143,7 +143,7 @@ fun SettingsScreen(
                         SettingsNavRow(
                             icon = AppIcons.Palette,
                             title = "外观与布局",
-                            subtitle = "动态取色、OLED纯黑、底部Tab排序、DPI密度、图标与快捷方式",
+                            subtitle = "主题配色、DPI 密度、主页与导航、提示横栏时长、图标与快捷方式",
                             testTag = "menu_appearance",
                             onClick = onOpenAppearance
                         )
@@ -159,7 +159,7 @@ fun SettingsScreen(
                         SettingsNavRow(
                             icon = Icons.Rounded.Info,
                             title = "关于",
-                            subtitle = "版本 v${BuildConfig.VERSION_NAME} · MIT 开源协议 · GitHub 与构建工具",
+                            subtitle = "版本 v${BuildConfig.VERSION_NAME} · 手动检查更新 · GitHub 仓库与协议",
                             testTag = "menu_about",
                             onClick = onOpenAbout
                         )

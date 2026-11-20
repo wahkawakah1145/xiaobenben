@@ -872,21 +872,15 @@ fun AnalyticsCalendarSection(
                             }
                             .testTag("calendar_exit_fullscreen_pill")
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        Box(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.KeyboardArrowUp,
-                                contentDescription = "上划退出全屏",
+                                contentDescription = "退出全屏",
                                 tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = "上划或点击退出全屏",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }

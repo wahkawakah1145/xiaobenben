@@ -6,9 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Process
@@ -289,7 +291,76 @@ object DesktopIconSyncManager {
     }
 
     /**
-     * Requests pinning a launcher shortcut with fully customizable label, icon style, and icon colors.
+     * Center-crops and scales any [Bitmap] into a rounded square shortcut icon of [sizePx] x [sizePx].
+     */
+    fun cropCenterSquareBitmap(
+        source: Bitmap,
+        sizePx: Int = 192
+    ): Bitmap {
+        val targetSize = sizePx.coerceIn(64, 512)
+        val srcW = source.width.coerceAtLeast(1)
+        val srcH = source.height.coerceAtLeast(1)
+        val cropSide = minOf(srcW, srcH)
+        val left = (srcW - cropSide) / 2
+        val top = (srcH - cropSide) / 2
+        val srcRect = Rect(left, top, left + cropSide, top + cropSide)
+
+        val output = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val clipPath = Path().apply {
+            val radius = targetSize * 0.22f
+            addRoundRect(RectF(0f, 0f, targetSize.toFloat(), targetSize.toFloat()), radius, radius, Path.Direction.CW)
+        }
+        canvas.save()
+        canvas.clipPath(clipPath)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        canvas.drawBitmap(source, srcRect, Rect(0, 0, targetSize, targetSize), paint)
+        canvas.restore()
+        return output
+    }
+
+    /**
+     * Safely decodes a user-selected gallery image [uri] using subsampling to prevent OOM,
+     * then center-crops into a launcher-ready square bitmap.
+     */
+    fun decodeSquareShortcutBitmap(
+        context: Context,
+        uri: Uri,
+        sizePx: Int = 192
+    ): Bitmap? {
+        val targetSize = sizePx.coerceIn(64, 512)
+        return runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, bounds)
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+            var sampleSize = 1
+            val minDim = minOf(bounds.outWidth, bounds.outHeight)
+            while (minDim / (sampleSize * 2) >= targetSize) {
+                sampleSize *= 2
+            }
+
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            val decoded = context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, decodeOpts)
+            } ?: return null
+
+            val cropped = cropCenterSquareBitmap(decoded, targetSize)
+            if (cropped !== decoded && !decoded.isRecycled) {
+                decoded.recycle()
+            }
+            cropped
+        }.getOrNull()
+    }
+
+    /**
+     * Requests pinning a launcher shortcut with fully customizable label, icon style, icon colors,
+     * or a user-selected gallery image bitmap.
      * Returns (success, statusMessage).
      */
     fun pinCustomDesktopShortcut(
@@ -300,18 +371,20 @@ object DesktopIconSyncManager {
         primaryContainerColor: Color,
         onPrimaryColor: Color,
         tertiaryColor: Color,
+        customImageBitmap: Bitmap? = null,
         shortcutIdSuffix: String? = null
     ): Pair<Boolean, String> {
         val label = customName.trim().ifBlank { "小本本" }
         val style = AppIconStyle.fromId(styleId)
-        val bitmap = renderThemedSvgBitmap(
-            styleId = style.id,
-            primaryArgb = primaryColor.toArgb(),
-            primaryContainerArgb = primaryContainerColor.toArgb(),
-            onPrimaryArgb = onPrimaryColor.toArgb(),
-            tertiaryArgb = tertiaryColor.toArgb(),
-            sizePx = 192
-        )
+        val bitmap = customImageBitmap?.let { cropCenterSquareBitmap(it, 192) }
+            ?: renderThemedSvgBitmap(
+                styleId = style.id,
+                primaryArgb = primaryColor.toArgb(),
+                primaryContainerArgb = primaryContainerColor.toArgb(),
+                onPrimaryArgb = onPrimaryColor.toArgb(),
+                tertiaryArgb = tertiaryColor.toArgb(),
+                sizePx = 192
+            )
         if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
             return false to "当前系统桌面不支持直接创建快捷方式，请检查桌面权限设置"
         }
@@ -320,7 +393,13 @@ object DesktopIconSyncManager {
         }
         val shortcutId = buildString {
             append("xiao_ben_ben_custom_")
-            append(shortcutIdSuffix ?: "${style.id}_${label.hashCode().toUInt()}_${(primaryColor.toArgb() and 0xFFFFFF).toString(16)}")
+            if (shortcutIdSuffix != null) {
+                append(shortcutIdSuffix)
+            } else if (customImageBitmap != null) {
+                append("photo_${label.hashCode().toUInt()}_${System.currentTimeMillis()}")
+            } else {
+                append("${style.id}_${label.hashCode().toUInt()}_${(primaryColor.toArgb() and 0xFFFFFF).toString(16)}")
+            }
         }
         val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
             .setShortLabel(label.take(18))

@@ -129,11 +129,13 @@ jobs:
         env:
           CI_VERSION_NAME: ${{ steps.meta.outputs.version_name }}
           CI_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          CI_GITHUB_REPO: ${{ github.repository }}
         run: |
           gradle :app:assembleRelease \
             -Parmv8Only \
             -PciVersionName="${CI_VERSION_NAME}" \
             -PciVersionCode="${CI_VERSION_CODE}" \
+            -PciGithubRepo="${CI_GITHUB_REPO}" \
             --stacktrace
 
       - name: Package ARMv8 APK artifact
@@ -166,6 +168,7 @@ jobs:
           {
             echo "## 小本本 ${TAG} (ARMv8 / arm64-v8a)"
             echo ""
+            echo "- 仓库：https://github.com/${GITHUB_REPOSITORY:-wahkawakah1145/xiaobenben}"
             echo "- 包名：\`com.live150yo.lvshuiqingshan\`"
             echo "- 架构：\`arm64-v8a\` (ARMv8)"
             if [ -n "${APK_SIZE_HR:-}" ]; then

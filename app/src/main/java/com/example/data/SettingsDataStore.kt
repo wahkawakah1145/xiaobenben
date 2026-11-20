@@ -15,7 +15,9 @@ import com.example.model.CardDensity
 import com.example.model.CurrencyCatalog
 import com.example.model.CustomPaletteStyle
 import com.example.model.ExchangeRateState
+import com.example.model.DeleteUndoDuration
 import com.example.model.FabPlacement
+import com.example.model.GlobalToastDuration
 import com.example.model.HomeHeaderOrder
 import com.example.model.IconVisualStyle
 import com.example.model.LatinNumberFont
@@ -88,6 +90,8 @@ class SettingsDataStore(private val context: Context) {
         val OLED_PURE_BLACK = booleanPreferencesKey("appearance_oled_pure_black")
         val SHOW_BOOKS_TAB = booleanPreferencesKey("appearance_show_books_tab")
         val BOTTOM_TAB_ORDER = stringPreferencesKey("appearance_bottom_tab_order")
+        val GLOBAL_SNACKBAR_DURATION = stringPreferencesKey("appearance_global_snackbar_duration")
+        val DELETE_UNDO_DURATION = stringPreferencesKey("appearance_delete_undo_duration")
 
         val EXCHANGE_RATES_JSON = stringPreferencesKey("exchange_rates_json")
         val EXCHANGE_RATES_UPDATED_AT = longPreferencesKey("exchange_rates_updated_at")
@@ -171,7 +175,9 @@ class SettingsDataStore(private val context: Context) {
             iconVisualStyle = IconVisualStyle.fromRaw(prefs[Keys.ICON_VISUAL_STYLE]),
             oledPureBlack = prefs[Keys.OLED_PURE_BLACK] ?: false,
             showBooksTab = prefs[Keys.SHOW_BOOKS_TAB] ?: true,
-            bottomTabOrder = MainBottomTab.decodeOrder(prefs[Keys.BOTTOM_TAB_ORDER])
+            bottomTabOrder = MainBottomTab.decodeOrder(prefs[Keys.BOTTOM_TAB_ORDER]),
+            globalSnackbarDuration = GlobalToastDuration.fromRaw(prefs[Keys.GLOBAL_SNACKBAR_DURATION]),
+            deleteUndoDuration = DeleteUndoDuration.fromRaw(prefs[Keys.DELETE_UNDO_DURATION])
         )
     }
 
@@ -300,6 +306,8 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.OLED_PURE_BLACK] = settings.oledPureBlack
             prefs[Keys.SHOW_BOOKS_TAB] = settings.showBooksTab
             prefs[Keys.BOTTOM_TAB_ORDER] = MainBottomTab.encodeOrder(settings.bottomTabOrder)
+            prefs[Keys.GLOBAL_SNACKBAR_DURATION] = settings.globalSnackbarDuration.name
+            prefs[Keys.DELETE_UNDO_DURATION] = settings.deleteUndoDuration.name
         }
     }
 

@@ -14,6 +14,11 @@ android {
     targetSdk = 37
     versionCode = (project.findProperty("ciVersionCode") as? String)?.toIntOrNull() ?: 1
     versionName = (project.findProperty("ciVersionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.0"
+    val ciGithubRepo = (project.findProperty("ciGithubRepo") as? String)
+      ?.trim()
+      ?.takeIf { it.contains("/") }
+      ?: "wahkawakah1145/xiaobenben"
+    buildConfigField("String", "GITHUB_REPO", "\"${ciGithubRepo}\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     if (project.hasProperty("armv8Only")) {
@@ -80,6 +85,9 @@ android {
         "META-INF/*.kotlin_module",
         "META-INF/com/android/build/gradle/app-metadata.properties",
         "META-INF/version-control-info.textproto",
+        "META-INF/*.version",
+        "kotlin/**",
+        "kotlin-tooling-metadata.json",
         "DebugProbesKt.bin"
       )
     }

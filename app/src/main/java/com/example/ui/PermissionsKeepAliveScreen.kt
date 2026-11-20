@@ -100,6 +100,49 @@ fun PermissionsKeepAliveScreen(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val opened = NotificationBridge.openAppSystemPermissionSettings(context)
+                                    if (!opened) {
+                                        onShowMessage("未能自动打开系统权限管理页，请在系统设置 -> 应用管理中手动查找小本本")
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(1.25f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("settings_open_app_permissions_button")
+                            ) {
+                                Icon(AppIcons.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("系统权限管理页", maxLines = 1)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    val opened = NotificationBridge.openAppDetailsSettings(context)
+                                    if (!opened) {
+                                        onShowMessage("未能打开应用详情页")
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(0.95f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("settings_open_app_details_button")
+                            ) {
+                                Text("应用信息", maxLines = 1)
+                            }
+                        }
+                        Text(
+                            text = "快捷进入本软件的系统权限与后台设置页，集中管理通知、桌面快捷方式、自启动与省电策略",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        HorizontalDivider()
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {

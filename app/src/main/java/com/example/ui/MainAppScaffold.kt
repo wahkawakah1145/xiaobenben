@@ -59,6 +59,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -113,6 +114,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.R
 import com.example.data.LedgerRepository
+import com.example.model.DeleteUndoDuration
+import com.example.model.GlobalToastDuration
 import com.example.model.MainBottomTab
 import com.example.model.PredictiveBackStyle
 import com.example.model.ThemeMode
@@ -124,6 +127,7 @@ import com.example.ui.theme.SmartLedgerTheme
 import com.example.viewmodel.DeleteUndoBanner
 import com.example.viewmodel.LedgerViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -148,6 +152,11 @@ const val ROUTE_SETTINGS_LOCAL_BACKUP = "settings/local_backup"
 const val ROUTE_SETTINGS_DEDUP = "settings/dedup"
 const val ROUTE_SETTINGS_STORAGE_OPT = "settings/storage_opt"
 const val ROUTE_SETTINGS_APPEARANCE = "settings/appearance"
+const val ROUTE_SETTINGS_APPEARANCE_THEME = "settings/appearance/theme"
+const val ROUTE_SETTINGS_APPEARANCE_DISPLAY = "settings/appearance/display"
+const val ROUTE_SETTINGS_APPEARANCE_HOME_NAV = "settings/appearance/home_nav"
+const val ROUTE_SETTINGS_APPEARANCE_INTERACTION = "settings/appearance/interaction"
+const val ROUTE_SETTINGS_APPEARANCE_ICON = "settings/appearance/icon"
 const val ROUTE_SETTINGS_PERMISSIONS = "settings/permissions"
 const val ROUTE_SETTINGS_ABOUT = "settings/about"
 
@@ -268,11 +277,35 @@ fun AppNavigation(
 
             val snackbarHostState = remember { SnackbarHostState() }
             val scope = rememberCoroutineScope()
+            var snackbarTimerJob by remember { mutableStateOf<Job?>(null) }
+
+            val showGlobalSnackbar: (String) -> Unit = { message ->
+                snackbarTimerJob?.cancel()
+                snackbarHostState.currentSnackbarData?.dismiss()
+                val durationChoice = appearance.globalSnackbarDuration
+                snackbarTimerJob = scope.launch {
+                    val showJob = launch {
+                        snackbarHostState.showSnackbar(
+                            message = message,
+                            actionLabel = if (durationChoice == GlobalToastDuration.MANUAL_ONLY) "关闭" else null,
+                            withDismissAction = true,
+                            duration = SnackbarDuration.Indefinite
+                        )
+                    }
+                    if (durationChoice.durationMillis > 0L) {
+                        delay(durationChoice.durationMillis)
+                        snackbarHostState.currentSnackbarData?.dismiss()
+                        showJob.cancel()
+                    } else {
+                        showJob.join()
+                    }
+                }
+            }
 
             LaunchedEffect(actionMessage) {
                 val msg = actionMessage
                 if (msg != null) {
-                    snackbarHostState.showSnackbar(msg)
+                    showGlobalSnackbar(msg)
                     viewModel.clearActionMessage()
                 }
             }
@@ -421,6 +454,11 @@ fun AppNavigation(
                 ROUTE_SETTINGS_AI -> "AI理解"
                 ROUTE_SETTINGS_DATA_HUB, ROUTE_SETTINGS_LOCAL_BACKUP -> "备份与恢复"
                 ROUTE_SETTINGS_APPEARANCE -> "外观与布局"
+                ROUTE_SETTINGS_APPEARANCE_THEME -> "主题与配色"
+                ROUTE_SETTINGS_APPEARANCE_DISPLAY -> "字体、DPI 与列表样式"
+                ROUTE_SETTINGS_APPEARANCE_HOME_NAV -> "主页、顶栏与导航"
+                ROUTE_SETTINGS_APPEARANCE_INTERACTION -> "动画、手势与提示横栏"
+                ROUTE_SETTINGS_APPEARANCE_ICON -> "图标风格与桌面快捷方式"
                 ROUTE_SETTINGS_PERMISSIONS -> "权限管理"
                 ROUTE_SETTINGS_ABOUT -> "关于"
                 else -> stringResource(R.string.app_name)
@@ -561,7 +599,7 @@ fun AppNavigation(
                     ROUTE_SETTINGS_BILL_BEHAVIOR -> BookkeepingBehaviorScreen(
                         settings = settings,
                         viewModel = viewModel,
-                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_CURRENCY -> CurrencySettingsScreen(
                         settings = settings,
@@ -576,25 +614,50 @@ fun AppNavigation(
                     ROUTE_SETTINGS_PARSER -> ParserHubScreen(
                         viewModel = viewModel,
                         isListenerEnabled = isListenerEnabled,
-                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_AI -> AiSettingsScreen(
                         viewModel = viewModel,
-                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_DATA_HUB -> DataHubScreen(
                         settings = settings,
                         viewModel = viewModel,
                         initialTab = DataHubTab.IMPORT,
-                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_LOCAL_BACKUP -> DataHubScreen(
                         settings = settings,
                         viewModel = viewModel,
                         initialTab = DataHubTab.LOCAL_BACKUP,
-                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_APPEARANCE -> AppearanceSettingsScreen(
+                        appearance = appearance,
+                        onOpenTheme = { navController.navigate(ROUTE_SETTINGS_APPEARANCE_THEME) },
+                        onOpenDisplay = { navController.navigate(ROUTE_SETTINGS_APPEARANCE_DISPLAY) },
+                        onOpenHomeNav = { navController.navigate(ROUTE_SETTINGS_APPEARANCE_HOME_NAV) },
+                        onOpenInteraction = { navController.navigate(ROUTE_SETTINGS_APPEARANCE_INTERACTION) },
+                        onOpenIconShortcut = { navController.navigate(ROUTE_SETTINGS_APPEARANCE_ICON) }
+                    )
+                    ROUTE_SETTINGS_APPEARANCE_THEME -> AppearanceThemeSettingsScreen(
+                        appearance = appearance,
+                        viewModel = viewModel
+                    )
+                    ROUTE_SETTINGS_APPEARANCE_DISPLAY -> AppearanceDisplaySettingsScreen(
+                        appearance = appearance,
+                        viewModel = viewModel
+                    )
+                    ROUTE_SETTINGS_APPEARANCE_HOME_NAV -> AppearanceHomeNavSettingsScreen(
+                        appearance = appearance,
+                        viewModel = viewModel
+                    )
+                    ROUTE_SETTINGS_APPEARANCE_INTERACTION -> AppearanceInteractionSettingsScreen(
+                        appearance = appearance,
+                        viewModel = viewModel,
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
+                    )
+                    ROUTE_SETTINGS_APPEARANCE_ICON -> AppearanceIconShortcutSettingsScreen(
                         appearance = appearance,
                         viewModel = viewModel
                     )
@@ -604,11 +667,11 @@ fun AppNavigation(
                         isAccessibilityEnabled = isAccessibilityEnabled,
                         isIgnoringBattery = isIgnoringBattery,
                         viewModel = viewModel,
-                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_ABOUT -> AboutScreen(
                         appIconStyleId = appearance.appIconStyleId,
-                        onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                 }
             }
@@ -936,6 +999,11 @@ fun AppNavigation(
                                 ROUTE_SETTINGS_DATA_HUB,
                                 ROUTE_SETTINGS_LOCAL_BACKUP,
                                 ROUTE_SETTINGS_APPEARANCE,
+                                ROUTE_SETTINGS_APPEARANCE_THEME,
+                                ROUTE_SETTINGS_APPEARANCE_DISPLAY,
+                                ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
+                                ROUTE_SETTINGS_APPEARANCE_INTERACTION,
+                                ROUTE_SETTINGS_APPEARANCE_ICON,
                                 ROUTE_SETTINGS_PERMISSIONS,
                                 ROUTE_SETTINGS_ABOUT
                             ).forEach { subRoute ->
@@ -972,6 +1040,7 @@ fun AppNavigation(
                     deleteUndoBanner?.let { banner ->
                         DeleteUndoFloatingBar(
                             banner = banner,
+                            duration = appearance.deleteUndoDuration,
                             onUndo = { viewModel.undoLastDelete() },
                             onDismiss = { viewModel.dismissDeleteUndoBanner() }
                         )
@@ -1179,6 +1248,7 @@ private fun SwipeBackContainer(
 @Composable
 private fun DeleteUndoFloatingBar(
     banner: DeleteUndoBanner,
+    duration: DeleteUndoDuration,
     onUndo: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1186,9 +1256,11 @@ private fun DeleteUndoFloatingBar(
     val offsetX = remember(banner.id) { Animatable(0f) }
     var barWidthPx by remember { mutableFloatStateOf(720f) }
 
-    LaunchedEffect(banner.id) {
-        delay(8500L)
-        onDismiss()
+    LaunchedEffect(banner.id, duration) {
+        if (duration.durationMillis > 0L) {
+            delay(duration.durationMillis)
+            onDismiss()
+        }
     }
 
     val dismissProgress = (abs(offsetX.value) / barWidthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
@@ -1253,7 +1325,11 @@ private fun DeleteUndoFloatingBar(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "左右滑动此横栏可关闭",
+                    text = if (duration == DeleteUndoDuration.MANUAL_ONLY) {
+                        "仅手动关闭 · 左右滑动或点击关闭"
+                    } else {
+                        "${duration.label}后自动关闭 · 左右滑动可关闭"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.68f)
                 )

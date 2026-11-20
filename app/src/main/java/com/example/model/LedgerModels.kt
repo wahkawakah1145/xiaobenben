@@ -211,6 +211,31 @@ enum class PredictiveBackStyle(val label: String, val description: String) {
     }
 }
 
+enum class GlobalToastDuration(val label: String, val durationMillis: Long) {
+    SHORT("较短 (2 秒)", 2000L),
+    STANDARD("标准 (4 秒)", 4000L),
+    LONG("较长 (7 秒)", 7000L),
+    EXTRA_LONG("超长 (12 秒)", 12000L),
+    MANUAL_ONLY("仅手动关闭", -1L);
+
+    companion object {
+        fun fromRaw(raw: String?): GlobalToastDuration =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: STANDARD
+    }
+}
+
+enum class DeleteUndoDuration(val label: String, val durationMillis: Long) {
+    MANUAL_ONLY("仅手动关闭", -1L),
+    SHORT("较短 (4 秒)", 4000L),
+    STANDARD("标准 (8 秒)", 8000L),
+    LONG("较长 (15 秒)", 15000L);
+
+    companion object {
+        fun fromRaw(raw: String?): DeleteUndoDuration =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: MANUAL_ONLY
+    }
+}
+
 enum class CustomPaletteStyle(val label: String, val description: String) {
     TONAL_SPOT("Tonal Spot（经典色调）", "柔和平衡的 Material You 主次协调配色"),
     EXPRESSIVE("Expressive（鲜明表现）", "互补高活力对比配色，视觉张力更强"),
@@ -357,7 +382,9 @@ data class AppearanceSettings(
     val iconVisualStyle: IconVisualStyle = IconVisualStyle.FILLED,
     val oledPureBlack: Boolean = false,
     val showBooksTab: Boolean = true,
-    val bottomTabOrder: List<MainBottomTab> = MainBottomTab.defaultOrder
+    val bottomTabOrder: List<MainBottomTab> = MainBottomTab.defaultOrder,
+    val globalSnackbarDuration: GlobalToastDuration = GlobalToastDuration.STANDARD,
+    val deleteUndoDuration: DeleteUndoDuration = DeleteUndoDuration.MANUAL_ONLY
 ) {
     fun visibleBottomTabs(): List<MainBottomTab> {
         val normalized = MainBottomTab.normalizeOrder(bottomTabOrder)

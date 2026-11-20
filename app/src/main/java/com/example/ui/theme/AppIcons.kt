@@ -2052,4 +2052,164 @@ object AppIcons {
             }
         }
     }
+
+    val PhotoLibrary: ImageVector by lazy {
+        icon("PhotoLibrary") {
+            path(fill = fill) {
+                moveTo(22f, 16f)
+                verticalLineTo(4f)
+                curveToRelative(0f, -1.1f, -0.9f, -2f, -2f, -2f)
+                horizontalLineTo(8f)
+                curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
+                verticalLineToRelative(12f)
+                curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+                horizontalLineToRelative(12f)
+                curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+                close()
+                moveTo(11f, 12f)
+                lineToRelative(2.03f, 2.71f)
+                lineTo(16f, 11f)
+                lineToRelative(4f, 5f)
+                horizontalLineTo(8f)
+                lineToRelative(3f, -4f)
+                close()
+                moveTo(2f, 6f)
+                verticalLineToRelative(14f)
+                curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+                horizontalLineToRelative(14f)
+                verticalLineToRelative(-2f)
+                horizontalLineTo(4f)
+                verticalLineTo(6f)
+                horizontalLineTo(2f)
+                close()
+            }
+        }
+    }
+
+    val SystemUpdate: ImageVector by lazy {
+        icon("SystemUpdate") {
+            path(fill = fill) {
+                moveTo(17f, 1.01f)
+                lineTo(7f, 1f)
+                curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
+                verticalLineToRelative(18f)
+                curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+                horizontalLineToRelative(10f)
+                curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+                verticalLineTo(3f)
+                curveToRelative(0f, -1.1f, -0.9f, -1.99f, -2f, -1.99f)
+                close()
+                moveTo(17f, 19f)
+                horizontalLineTo(7f)
+                verticalLineTo(5f)
+                horizontalLineToRelative(10f)
+                verticalLineToRelative(14f)
+                close()
+                moveTo(16f, 13f)
+                horizontalLineToRelative(-3f)
+                verticalLineTo(8f)
+                horizontalLineToRelative(-2f)
+                verticalLineToRelative(5f)
+                horizontalLineTo(8f)
+                lineToRelative(4f, 4f)
+                lineToRelative(4f, -4f)
+                close()
+            }
+        }
+    }
+
+    val TouchApp: ImageVector by lazy {
+        icon("TouchApp") {
+            path(fill = fill) {
+                moveTo(9f, 11.24f)
+                verticalLineTo(7.5f)
+                curveTo(9f, 6.12f, 10.12f, 5f, 11.5f, 5f)
+                reflectiveCurveTo(14f, 6.12f, 14f, 7.5f)
+                verticalLineToRelative(3.74f)
+                curveToRelative(1.21f, -0.81f, 2f, -2.18f, 2f, -3.74f)
+                curveTo(16f, 5.01f, 13.99f, 3f, 11.5f, 3f)
+                reflectiveCurveTo(7f, 5.01f, 7f, 7.5f)
+                curveToRelative(0f, 1.56f, 0.79f, 2.93f, 2f, 3.74f)
+                close()
+                moveTo(18.84f, 15.87f)
+                lineToRelative(-4.54f, -2.26f)
+                curveToRelative(-0.17f, -0.07f, -0.35f, -0.11f, -0.54f, -0.11f)
+                horizontalLineTo(13f)
+                verticalLineToRelative(-6f)
+                curveToRelative(0f, -0.83f, -0.67f, -1.5f, -1.5f, -1.5f)
+                reflectiveCurveTo(10f, 6.67f, 10f, 7.5f)
+                verticalLineToRelative(10.74f)
+                lineToRelative(-3.43f, -0.72f)
+                curveToRelative(-0.08f, -0.01f, -0.15f, -0.03f, -0.24f, -0.03f)
+                curveToRelative(-0.31f, 0f, -0.59f, 0.13f, -0.79f, 0.33f)
+                lineToRelative(-0.79f, 0.8f)
+                lineToRelative(4.94f, 4.94f)
+                curveToRelative(0.27f, 0.27f, 0.65f, 0.44f, 1.06f, 0.44f)
+                horizontalLineToRelative(6.79f)
+                curveToRelative(0.75f, 0f, 1.33f, -0.55f, 1.44f, -1.28f)
+                lineToRelative(0.75f, -5.27f)
+                curveToRelative(0.01f, -0.07f, 0.02f, -0.14f, 0.02f, -0.2f)
+                curveToRelative(0f, -0.62f, -0.38f, -1.16f, -0.91f, -1.38f)
+                close()
+            }
+        }
+    }
+
+    val TextFields: ImageVector by lazy {
+        icon("TextFields") {
+            path(fill = fill) {
+                moveTo(2.5f, 4f)
+                verticalLineToRelative(3f)
+                horizontalLineToRelative(5f)
+                verticalLineToRelative(12f)
+                horizontalLineToRelative(3f)
+                verticalLineTo(7f)
+                horizontalLineToRelative(5f)
+                verticalLineTo(4f)
+                horizontalLineTo(2.5f)
+                close()
+                moveTo(21.5f, 9f)
+                horizontalLineToRelative(-9f)
+                verticalLineToRelative(3f)
+                horizontalLineToRelative(3f)
+                verticalLineToRelative(7f)
+                horizontalLineToRelative(3f)
+                verticalLineToRelative(-7f)
+                horizontalLineToRelative(3f)
+                verticalLineTo(9f)
+                close()
+            }
+        }
+    }
+
+    val ViewQuilt: ImageVector by lazy {
+        icon("ViewQuilt") {
+            path(fill = fill) {
+                moveTo(10f, 18f)
+                horizontalLineToRelative(5f)
+                verticalLineToRelative(-6f)
+                horizontalLineToRelative(-5f)
+                verticalLineToRelative(6f)
+                close()
+                moveTo(4f, 18f)
+                horizontalLineToRelative(5f)
+                verticalLineTo(5f)
+                horizontalLineTo(4f)
+                verticalLineToRelative(13f)
+                close()
+                moveTo(16f, 18f)
+                horizontalLineToRelative(5f)
+                verticalLineToRelative(-6f)
+                horizontalLineToRelative(-5f)
+                verticalLineToRelative(6f)
+                close()
+                moveTo(10f, 5f)
+                verticalLineToRelative(6f)
+                horizontalLineToRelative(11f)
+                verticalLineTo(5f)
+                horizontalLineTo(10f)
+                close()
+            }
+        }
+    }
 }
