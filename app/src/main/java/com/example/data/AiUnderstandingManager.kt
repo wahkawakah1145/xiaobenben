@@ -20,7 +20,6 @@ import com.example.parser.ChinaPaymentCatalog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -630,7 +629,12 @@ class AiUnderstandingManager {
             }
 
             val currency = CurrencyCatalog.resolve(parsedJson.optString("currency", "CNY")).code
-            val txType = TransactionType.fromRaw(parsedJson.optString("type", "EXPENSE"))
+            val rawAiType = TransactionType.fromRaw(parsedJson.optString("type", "EXPENSE"))
+            val txType = if (ChinaNotificationParser.isSelfTransferOrWithdraw("$title $content")) {
+                TransactionType.TRANSFER
+            } else {
+                rawAiType
+            }
             val category = parsedJson.optString("category")
                 .trim()
                 .ifBlank { ChinaNotificationParser.inferCategory("", "$title $content", txType) }
@@ -873,24 +877,43 @@ class AiUnderstandingManager {
 
     companion object {
         val DEFAULT_SYSTEM_PROMPT = """
-            你是一个精准的中国大陆账单与支付通知结构化解析引擎。请判断通知是否为真实动账交易，并仅输出一行严格合法的 JSON 对象（不要包含 Markdown 代码块或额外解释）：
-            {"isFinancial":boolean,"amount":number,"currency":"CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD","type":"EXPENSE|INCOME|TRANSFER","category":"餐饮美食|交通出行|购物消费|居家生活|休闲娱乐|医疗健康|工资奖金|理财收益|退款返现|转账收款|转账红包|其他","merchant":"交易对方或商户名","channel":"支付渠道或银行名称","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm或MM-dd HH:mm或HH:mm或null","confidence":0.0到1.0之间数字}
-            注意：验证码、快递、营销广告通知必须返回 isFinancial=false；退款或返现 type 应为 INCOME；若文本包含实际消费/入账时间请填入 occurredTime；不可编造未出现的金额。
+            你是一个精准的中国大陆账单与支付通知结构化解析引擎。请判断通知或账单文本是否为真实动账记录，并仅输出一行严格合法的 JSON 对象（不要包含 Markdown 代码块或额外解释）：
+            {"isFinancial":boolean,"amount":number,"currency":"ISO4217三位币种代码(如CNY/USD/HKD/EUR/JPY/GBP/CHF/SGD/KRW/AUD/CAD/THB/MYR等)","type":"EXPENSE|INCOME|TRANSFER","category":"餐饮美食|交通出行|购物消费|居家生活|休闲娱乐|医疗健康|工资奖金|理财收益|退款返现|转账收款|转账红包|不计收支|账户互转|其他","merchant":"交易对方或商户名","channel":"支付渠道或银行名称","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm:ss或MM-dd HH:mm:ss或HH:mm:ss或null","confidence":0.0到1.0之间数字}
+            严格遵守以下判定规则：
+            1. 验证码、快递物流、登录提醒、营销广告、免息分期邀约等非动账消息必须返回 isFinancial=false，不可编造未出现的金额。
+            2. 【不计收支规则】微信/支付宝零钱提现、余额提现、提现到银行卡、银行卡收到提现到账、零钱充值、转入/转出零钱通或余额宝、本人名下账户互转、本人转账/同名转账、信用卡还款均属于内部资金划转，不计入日常支出与收入，必须返回 "type":"TRANSFER"，且 category 设为 "不计收支" 或 "账户互转"。
+            3. 消费退款、退货返现、冲正退回的 type 应为 INCOME（category 设为 "退款返现"）；他人向我转账收款 type 为 INCOME，向他人消费付款或发红包 type 为 EXPENSE。
+            4. occurredTime 尽量保留到秒（yyyy-MM-dd HH:mm:ss）；未出现时间则返回 null。
         """.trimIndent()
 
-        private val sharedConnectionPool = ConnectionPool(2, 30, TimeUnit.SECONDS)
+        private val LEGACY_DEFAULT_PROMPT_MARKERS = listOf(
+            "CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD",
+            "yyyy-MM-dd HH:mm或MM-dd HH:mm或HH:mm或null"
+        )
+
+        fun isLegacyOrDefaultPrompt(raw: String): Boolean {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty() || trimmed == DEFAULT_SYSTEM_PROMPT.trim()) return true
+            return LEGACY_DEFAULT_PROMPT_MARKERS.all { trimmed.contains(it) } &&
+                !trimmed.contains("零钱提现")
+        }
+
+        fun sanitizeStoredCustomPrompt(raw: String): String {
+            val trimmed = raw.trim()
+            return if (isLegacyOrDefaultPrompt(trimmed)) "" else trimmed
+        }
+
         private val sharedClient: OkHttpClient by lazy {
-            OkHttpClient.Builder()
-                .connectionPool(sharedConnectionPool)
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(35, TimeUnit.SECONDS)
-                .writeTimeout(20, TimeUnit.SECONDS)
-                .build()
+            AppHttpClient.derived(
+                connectTimeoutSec = 15,
+                readTimeoutSec = 35,
+                writeTimeoutSec = 20
+            )
         }
 
         fun trimMemory(evictConnections: Boolean = true) {
             if (evictConnections) {
-                runCatching { sharedConnectionPool.evictAll() }
+                AppHttpClient.trimIdleResources()
             }
         }
 
@@ -938,7 +961,7 @@ class AiUnderstandingManager {
             config: AiConfig,
             selectedRules: List<CustomParsingRule> = emptyList()
         ): String {
-            val basePrompt = config.customSystemPrompt.trim().ifBlank { DEFAULT_SYSTEM_PROMPT }
+            val basePrompt = sanitizeStoredCustomPrompt(config.customSystemPrompt).ifBlank { DEFAULT_SYSTEM_PROMPT }
             val rulesBlock = formatRulesPromptBlock(selectedRules)
             return if (rulesBlock.isBlank()) {
                 basePrompt

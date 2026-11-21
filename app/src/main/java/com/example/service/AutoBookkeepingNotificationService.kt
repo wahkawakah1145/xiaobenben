@@ -38,7 +38,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_BACKGROUND) {
+        if (level >= TRIM_MEMORY_UI_HIDDEN || level >= TRIM_MEMORY_BACKGROUND) {
             val now = System.currentTimeMillis()
             recentFingerprints.entries.removeIf { now - it.value > DEDUP_WINDOW_MS * 2 }
         }
@@ -80,7 +80,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             return
         }
         recentFingerprints[fingerprint] = now
-        if (recentFingerprints.size > 24) {
+        if (recentFingerprints.size > 16) {
             recentFingerprints.entries.removeIf { now - it.value > DEDUP_WINDOW_MS * 4 }
         }
 

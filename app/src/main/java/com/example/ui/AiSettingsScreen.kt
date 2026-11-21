@@ -109,8 +109,11 @@ fun AiSettingsScreen(
     var apiKeyInput by remember(aiConfig.apiKey) { mutableStateOf(aiConfig.apiKey) }
     var apiModelInput by remember(aiConfig.apiModelName) { mutableStateOf(aiConfig.apiModelName) }
     var fallbackOnly by remember(aiConfig.useAiAsFallbackOnly) { mutableStateOf(aiConfig.useAiAsFallbackOnly) }
-    var promptEditorInput by remember(aiConfig.customSystemPrompt) {
-        mutableStateOf(aiConfig.customSystemPrompt.ifBlank { AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT })
+    val sanitizedStoredPrompt = remember(aiConfig.customSystemPrompt) {
+        AiUnderstandingManager.sanitizeStoredCustomPrompt(aiConfig.customSystemPrompt)
+    }
+    var promptEditorInput by remember(sanitizedStoredPrompt) {
+        mutableStateOf(sanitizedStoredPrompt.ifBlank { AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT })
     }
     var selectedPromptRuleIds by remember(aiConfig.selectedPromptRuleIds) {
         mutableStateOf(aiConfig.selectedPromptRuleIds)
@@ -120,10 +123,8 @@ fun AiSettingsScreen(
 
     var testSampleInput by remember { mutableStateOf("") }
 
-    fun normalizedCustomPromptValue(raw: String): String {
-        val trimmed = raw.trim()
-        return if (trimmed == AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT.trim()) "" else trimmed
-    }
+    fun normalizedCustomPromptValue(raw: String): String =
+        AiUnderstandingManager.sanitizeStoredCustomPrompt(raw)
 
     fun currentEditedConfig(): AiConfig = AiConfig(
         providerMode = selectedMode,
@@ -670,7 +671,7 @@ fun AiSettingsScreen(
                                     onClick = {
                                         promptEditorInput = AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT
                                         viewModel.saveAiConfig(currentEditedConfig().copy(customSystemPrompt = ""))
-                                        onShowMessage("已重置为默认预设提示词")
+                                        onShowMessage("已重置为最新默认预设提示词（含零钱提现/本人转账不计收支规则）")
                                     },
                                     modifier = Modifier
                                         .minimumInteractiveComponentSize()
@@ -684,7 +685,7 @@ fun AiSettingsScreen(
 
                             OutlinedTextField(
                                 value = promptEditorInput,
-                                onValueChange = { promptEditorInput = it.take(2000) },
+                                onValueChange = { promptEditorInput = it.take(4000) },
                                 label = { Text("系统提示词（System Prompt）") },
                                 minLines = 5,
                                 maxLines = 10,

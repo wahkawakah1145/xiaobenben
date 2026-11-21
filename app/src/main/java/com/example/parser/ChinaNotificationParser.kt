@@ -32,9 +32,36 @@ object ChinaNotificationParser {
         "收益", "分红", "利息", "收到来自", "已收款", "成功收款", "收款", "贷记", "向你转账"
     )
 
+    private val selfTransferAndWithdrawKeywords = listOf(
+        "零钱提现", "余额提现", "微信提现", "支付宝提现", "提现到银行卡", "提现至银行卡",
+        "提现到账", "提现成功", "提现申请", "提现至", "提现到",
+        "零钱充值", "充值到零钱", "零钱通转入", "零钱通转出", "转入零钱通", "转出零钱通",
+        "余额宝转入", "余额宝转出", "转入余额宝", "转出余额宝",
+        "本人转账", "向本人转账", "转给本人", "本人账户", "本人名下", "本人银行卡",
+        "同名账户", "同名转账", "自己转账", "自转", "账户互转", "内部转账",
+        "资金归集", "信用卡还款", "自动还款", "还信用卡", "不计收支", "中性交易"
+    )
+
+    private val selfTransferAndWithdrawRegexes = listOf(
+        Regex("""(?:微信|支付宝|零钱|余额).{0,6}提现"""),
+        Regex("""提现.{0,8}(?:到账|成功|银行卡|储蓄卡|尾号|至|到)"""),
+        Regex("""(?:本人|同名|自己).{0,6}(?:转账|转入|转出|汇款|账户|银行卡)"""),
+        Regex("""(?:零钱通|余额宝|朝朝宝).{0,6}(?:转入|转出|申购|赎回)""")
+    )
+
     private val transferKeywords = listOf(
         "信用卡还款", "自动还款", "零钱通转入", "余额宝转入", "资金归集", "账户互转", "提现", "转账"
     )
+
+    fun isSelfTransferOrWithdraw(text: String): Boolean {
+        if (text.isBlank()) return false
+        val hasRefund = refundKeywords.any { text.contains(it) }
+        if (hasRefund && !text.contains("提现") && !text.contains("本人") && !text.contains("同名")) {
+            return false
+        }
+        return selfTransferAndWithdrawKeywords.any { text.contains(it) } ||
+            selfTransferAndWithdrawRegexes.any { it.containsMatchIn(text) }
+    }
 
     private val expenseKeywords = listOf(
         "支出", "扣款", "扣费", "代扣", "刷卡", "消费", "付款", "已支付", "成功支付",
@@ -247,7 +274,7 @@ object ChinaNotificationParser {
         val currencyCode = detectCurrencyCode(combined)
 
         val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
-        val channel = matchedCustomRule?.channelName?.takeIf { it.isNotBlank() }
+        val channel = matchedCustomRule?.channelName?.takeIf { it.isNotBlank() && it != "自动" }
             ?: detectChannel(packageName, combined)
         val type = if (matchedCustomRule != null &&
             !matchedCustomRule.defaultType.equals("AUTO", ignoreCase = true) &&
@@ -736,6 +763,11 @@ object ChinaNotificationParser {
             .replace("消费金融", " ")
             .replace("消费积分", " ")
 
+        // Internal cash movement (零钱提现 / 本人转账 / 账户互转 / 信用卡还款) must not count as income or expense
+        if (isSelfTransferOrWithdraw(text) || isSelfTransferOrWithdraw(cleaned)) {
+            return TransactionType.TRANSFER
+        }
+
         val hasPositiveSign = Regex("""(?:^|[\s:：])\+ ?(?:人民币|RMB|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*\d""").containsMatchIn(cleaned)
         val hasNegativeSign = Regex("""(?:^|[\s:：])- ?(?:人民币|RMB|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*\d""").containsMatchIn(cleaned)
         if (hasPositiveSign && !hasNegativeSign) return TransactionType.INCOME
@@ -836,7 +868,7 @@ object ChinaNotificationParser {
                 else -> "转账收款"
             }
         }
-        if (type == TransactionType.TRANSFER) return "转账红包"
+        if (type == TransactionType.TRANSFER) return if (isSelfTransferOrWithdraw(combined)) "不计收支" else "转账红包"
 
         return when {
             listOf("星巴克", "瑞幸", "喜茶", "奈雪", "麦当劳", "肯德基", "美团", "饿了么", "外卖", "餐饮", "火锅", "海底捞", "咖啡", "奶茶", "烧烤", "面馆", "食堂", "霸王茶姬", "蜜雪")

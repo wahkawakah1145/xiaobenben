@@ -508,7 +508,32 @@ class ChinaNotificationParserTest {
         org.junit.Assert.assertTrue(yearSummary.contains("2026年"))
         org.junit.Assert.assertTrue(yearSummary.contains("年度参考预算"))
     }
+
+    @Test
+    fun classifiesCashWithdrawalAndSelfTransfersAsTransferExcludedFromIncomeExpense() {
+        val wechatWithdraw = ChinaNotificationParser.parse(
+            packageName = "com.tencent.mm",
+            title = "微信支付",
+            content = "零钱提现申请已提交，提现到招商银行尾号8812 人民币500.00元。"
+        )
+        assertNotNull(wechatWithdraw)
+        assertEquals(TransactionType.TRANSFER, wechatWithdraw!!.type)
+        assertEquals("不计收支", wechatWithdraw.category)
+
+        val bankWithdrawArrival = ChinaNotificationParser.parse(
+            packageName = "com.cmbchina.pb",
+            title = "招商银行动账提醒",
+            content = "【招商银行】您尾号8812账户收到微信零钱提现到账500.00元。"
+        )
+        assertNotNull(bankWithdrawArrival)
+        assertEquals(TransactionType.TRANSFER, bankWithdrawArrival!!.type)
+
+        val selfTransfer = ChinaNotificationParser.parse(
+            packageName = "com.icbc",
+            title = "工商银行",
+            content = "您尾号1234账户向本人账户转账1000.00元，账户互转完成。"
+        )
+        assertNotNull(selfTransfer)
+        assertEquals(TransactionType.TRANSFER, selfTransfer!!.type)
+    }
 }
-
-
-

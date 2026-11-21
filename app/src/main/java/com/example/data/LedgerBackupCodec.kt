@@ -45,6 +45,9 @@ object LedgerBackupCodec {
                     put("customExchangeRateUrl", settings.customExchangeRateUrl)
                 }
                 put("githubUpdateMirror", settings.githubUpdateMirror)
+                put("enabledCurrencyCodes", JSONArray().apply {
+                    settings.enabledCurrencyCodes.forEach { put(it) }
+                })
             })
             put("transactions", JSONArray().apply {
                 transactions.forEach { tx ->
@@ -256,7 +259,15 @@ object LedgerBackupCodec {
                     .ifBlank { currentSettings.exchangeRateSource },
                 customExchangeRateUrl = s.optString("customExchangeRateUrl", currentSettings.customExchangeRateUrl),
                 githubUpdateMirror = s.optString("githubUpdateMirror", currentSettings.githubUpdateMirror)
-                    .ifBlank { currentSettings.githubUpdateMirror }
+                    .ifBlank { currentSettings.githubUpdateMirror },
+                enabledCurrencyCodes = s.optJSONArray("enabledCurrencyCodes")?.let { arr ->
+                    buildList(arr.length()) {
+                        for (i in 0 until arr.length()) {
+                            val c = arr.optString(i).trim()
+                            if (c.isNotEmpty()) add(c)
+                        }
+                    }
+                } ?: currentSettings.enabledCurrencyCodes
             )
         }
 

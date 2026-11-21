@@ -94,6 +94,28 @@ object CurrencyCatalog {
 
     val defaultRatesToCny: Map<String, Double> = currencies.associate { it.code to it.defaultRateToCny }
 
+    /** Default 5 most commonly used foreign currencies for exchange rates (CNY is always active as base). */
+    val defaultEnabledForeignCodes: List<String> = listOf("USD", "HKD", "EUR", "JPY", "GBP")
+
+    fun normalizeEnabledForeignCodes(raw: List<String>, ensureCode: String? = null): List<String> {
+        val valid = raw.mapNotNull { code ->
+            val upper = code.trim().uppercase()
+            if (upper != "CNY" && byCode.containsKey(upper)) upper else null
+        }.distinct().toMutableList()
+        val extra = ensureCode?.trim()?.uppercase()
+        if (extra != null && extra != "CNY" && byCode.containsKey(extra) && extra !in valid) {
+            valid.add(extra)
+        }
+        return valid
+    }
+
+    fun enabledCurrenciesWithCny(enabledForeignCodes: List<String>, ensureCode: String? = null): List<CurrencyInfo> {
+        val normalized = normalizeEnabledForeignCodes(enabledForeignCodes, ensureCode)
+        val result = mutableListOf(byCode.getValue("CNY"))
+        normalized.forEach { code -> byCode[code]?.let { result.add(it) } }
+        return result
+    }
+
     fun resolve(code: String?): CurrencyInfo =
         byCode[code?.trim()?.uppercase()] ?: currencies.first()
 
@@ -671,7 +693,8 @@ data class BudgetSettings(
     val exchangeRateUpdateFrequency: String = ExchangeRateAutoUpdateFrequency.MANUAL.name,
     val exchangeRateSource: String = ExchangeRateSource.EXCHANGE_RATE_API.name,
     val customExchangeRateUrl: String = "",
-    val githubUpdateMirror: String = GitHubUpdateMirror.DIRECT.name
+    val githubUpdateMirror: String = GitHubUpdateMirror.DIRECT.name,
+    val enabledCurrencyCodes: List<String> = CurrencyCatalog.defaultEnabledForeignCodes
 )
 
 data class WebDavConfig(
@@ -743,5 +766,7 @@ object CategoryCatalog {
         "其他"
     )
 
-    val allCategories = (expenseCategories + incomeCategories).distinct()
+    val transferCategories = listOf("不计收支", "账户互转", "转账红包", "其他")
+
+    val allCategories = (expenseCategories + incomeCategories + transferCategories).distinct()
 }

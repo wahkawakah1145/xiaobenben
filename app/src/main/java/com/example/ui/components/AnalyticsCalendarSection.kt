@@ -1,5 +1,9 @@
 package com.example.ui.components
 
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
@@ -105,6 +109,8 @@ fun AnalyticsCalendarSection(
     val confirmedTxs = remember(transactions) { transactions.filter { it.confirmed } }
     var pinchAccumulator by remember { mutableFloatStateOf(1f) }
     val livePinchVisualScale = remember { Animatable(1f) }
+    val liveSwipeOffsetX = remember { Animatable(0f) }
+    var lastSwipeDirection by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val numberFont = LocalNumberFontFamily.current
@@ -151,6 +157,49 @@ fun AnalyticsCalendarSection(
     val scrollState = rememberScrollState()
     var swipeUpOverscrollPx by remember { mutableFloatStateOf(0f) }
     val swipeExitThresholdPx = with(density) { 64.dp.toPx() }
+    val horizontalPeriodThresholdPx = with(density) { 48.dp.toPx() }
+
+    val periodBucketKey = remember(granularity, anchorMillis) {
+        val c = Calendar.getInstance().apply { timeInMillis = anchorMillis }
+        when (granularity) {
+            AnalyticsGranularity.YEAR -> c.get(Calendar.YEAR).toLong()
+            AnalyticsGranularity.MONTH -> c.get(Calendar.YEAR).toLong() * 12L + c.get(Calendar.MONTH).toLong()
+            AnalyticsGranularity.WEEK -> LedgerViewModel.weekRangeMillis(anchorMillis).first
+            AnalyticsGranularity.DAY -> c.get(Calendar.YEAR).toLong() * 400L + c.get(Calendar.DAY_OF_YEAR).toLong()
+        }
+    }
+
+    val horizontalPeriodSwipeModifier = Modifier.pointerInput(granularity, anchorMillis) {
+        var totalDragX = 0f
+        detectHorizontalDragGestures(
+            onDragStart = { totalDragX = 0f },
+            onHorizontalDrag = { change, dragAmount ->
+                change.consume()
+                totalDragX += dragAmount
+                val visual = (totalDragX * 0.35f).coerceIn(-84f, 84f)
+                scope.launch { liveSwipeOffsetX.snapTo(visual) }
+            },
+            onDragEnd = {
+                val delta = when {
+                    totalDragX <= -horizontalPeriodThresholdPx -> +1
+                    totalDragX >= horizontalPeriodThresholdPx -> -1
+                    else -> 0
+                }
+                scope.launch { liveSwipeOffsetX.animateTo(0f, spring()) }
+                if (delta != 0) {
+                    lastSwipeDirection = delta
+                    onGranularityAndAnchorChange(
+                        granularity,
+                        LedgerViewModel.shiftPeriodAnchor(granularity, anchorMillis, delta)
+                    )
+                }
+            },
+            onDragCancel = {
+                totalDragX = 0f
+                scope.launch { liveSwipeOffsetX.animateTo(0f, spring()) }
+            }
+        )
+    }
 
     val exitNestedScrollConnection = remember(isFullScreen, onRequestExitFullScreen) {
         object : NestedScrollConnection {
@@ -254,7 +303,7 @@ fun AnalyticsCalendarSection(
                     Column {
                         Text("收支日历", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text(
-                            text = "双指缩放或点击切换 年 / 月 / 周 / 日",
+                            text = "左右横滑切周期 · 双指缩放切 年 / 月 / 周 / 日",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -317,6 +366,7 @@ fun AnalyticsCalendarSection(
             ) {
                 IconButton(
                     onClick = {
+                        lastSwipeDirection = -1
                         onGranularityAndAnchorChange(
                             granularity,
                             LedgerViewModel.shiftPeriodAnchor(granularity, anchorMillis, -1)
@@ -335,6 +385,7 @@ fun AnalyticsCalendarSection(
                 )
                 IconButton(
                     onClick = {
+                        lastSwipeDirection = +1
                         onGranularityAndAnchorChange(
                             granularity,
                             LedgerViewModel.shiftPeriodAnchor(granularity, anchorMillis, +1)
@@ -349,29 +400,48 @@ fun AnalyticsCalendarSection(
             HorizontalDivider()
 
             AnimatedContent(
-                targetState = granularity,
+                targetState = granularity to periodBucketKey,
                 transitionSpec = {
-                    val zoomInAnim = targetState.ordinal > initialState.ordinal
-                    val enterSpec = (
-                        scaleIn(
-                            initialScale = if (zoomInAnim) 0.88f else 1.09f,
-                            animationSpec = spring(dampingRatio = 0.84f, stiffness = 420f)
-                        ) + fadeIn(tween(210))
-                    )
-                    val exitSpec = (
-                        scaleOut(
-                            targetScale = if (zoomInAnim) 1.09f else 0.88f,
-                            animationSpec = tween(170)
-                        ) + fadeOut(tween(150))
-                    )
-                    enterSpec togetherWith exitSpec
+                    if (targetState.first != initialState.first) {
+                        val zoomInAnim = targetState.first.ordinal > initialState.first.ordinal
+                        val enterSpec = (
+                            scaleIn(
+                                initialScale = if (zoomInAnim) 0.88f else 1.09f,
+                                animationSpec = spring(dampingRatio = 0.84f, stiffness = 420f)
+                            ) + fadeIn(tween(210))
+                        )
+                        val exitSpec = (
+                            scaleOut(
+                                targetScale = if (zoomInAnim) 1.09f else 0.88f,
+                                animationSpec = tween(170)
+                            ) + fadeOut(tween(150))
+                        )
+                        enterSpec togetherWith exitSpec
+                    } else {
+                        val forward = if (lastSwipeDirection != 0) {
+                            lastSwipeDirection > 0
+                        } else {
+                            targetState.second >= initialState.second
+                        }
+                        val enterSpec = slideInHorizontally(tween(210)) { width ->
+                            if (forward) width / 4 else -width / 4
+                        } + fadeIn(tween(180))
+                        val exitSpec = slideOutHorizontally(tween(180)) { width ->
+                            if (forward) -width / 4 else width / 4
+                        } + fadeOut(tween(150))
+                        enterSpec togetherWith exitSpec
+                    }
                 },
-                label = "calendar_granularity_zoom_anim",
-                modifier = Modifier.graphicsLayer {
-                    scaleX = livePinchVisualScale.value
-                    scaleY = livePinchVisualScale.value
-                }
-            ) { activeGranularity ->
+                label = "calendar_granularity_and_period_anim",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(horizontalPeriodSwipeModifier)
+                    .graphicsLayer {
+                        scaleX = livePinchVisualScale.value
+                        scaleY = livePinchVisualScale.value
+                        translationX = liveSwipeOffsetX.value
+                    }
+            ) { (activeGranularity, _) ->
             when (activeGranularity) {
                 AnalyticsGranularity.YEAR -> {
                     val cal = Calendar.getInstance().apply { timeInMillis = anchorMillis }

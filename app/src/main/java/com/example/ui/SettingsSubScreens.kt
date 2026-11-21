@@ -1,5 +1,7 @@
 package com.example.ui
 
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Add
 import com.example.model.ExchangeRateSource
 import com.example.model.AiProviderMode
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -362,17 +364,29 @@ fun CurrencySettingsScreen(
     val rateUpdateState by viewModel.rateUpdateState.collectAsStateWithLifecycle()
     val numberFont = LocalNumberFontFamily.current
     var currencySearchQuery by remember { mutableStateOf("") }
+    var showAddCurrencyPanel by remember { mutableStateOf(false) }
     var customRateUrlInput by remember(settings.customExchangeRateUrl) {
         mutableStateOf(settings.customExchangeRateUrl)
     }
     var customUrlSavedHint by remember { mutableStateOf<String?>(null) }
 
     val selectedSource = ExchangeRateSource.fromRaw(settings.exchangeRateSource)
-    val filteredCurrencies = remember(currencySearchQuery) {
-        CurrencyCatalog.search(currencySearchQuery)
+    val enabledForeignCodes = remember(settings.enabledCurrencyCodes, settings.baseCurrencyCode) {
+        CurrencyCatalog.normalizeEnabledForeignCodes(
+            settings.enabledCurrencyCodes,
+            ensureCode = settings.baseCurrencyCode
+        )
     }
-    val filteredForeignCurrencies = remember(filteredCurrencies) {
-        filteredCurrencies.filter { it.code != "CNY" }
+    val enabledForeignCurrencies = remember(enabledForeignCodes) {
+        enabledForeignCodes.mapNotNull { CurrencyCatalog.byCode[it] }
+    }
+    val baseCurrencyChoices = remember(enabledForeignCodes, settings.baseCurrencyCode) {
+        CurrencyCatalog.enabledCurrenciesWithCny(enabledForeignCodes, ensureCode = settings.baseCurrencyCode)
+    }
+    val availableToAddCurrencies = remember(enabledForeignCodes, currencySearchQuery) {
+        val enabledSet = enabledForeignCodes.toSet()
+        CurrencyCatalog.search(currencySearchQuery)
+            .filter { it.code != "CNY" && it.code !in enabledSet }
     }
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -393,42 +407,23 @@ fun CurrencySettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("统计主币种（支持 ${CurrencyCatalog.currencies.size} 种货币）", style = MaterialTheme.typography.titleMedium)
+                        Text("统计主币种", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "不同币种的账单将按汇率数据库折算为主币种计入月度总计与分析，支持缩写与中文别名搜索。",
+                            text = "不同币种的账单将按汇率数据库折算为主币种计入统计（默认展示人民币及已启用的 ${enabledForeignCurrencies.size} 种常用外币）。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        OutlinedTextField(
-                            value = currencySearchQuery,
-                            onValueChange = { currencySearchQuery = it },
-                            placeholder = { Text("搜索币种，如 hkd / 港元 / 港币 / 泰铢 / CHF") },
-                            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("currency_search_input")
-                        )
-                        if (filteredCurrencies.isEmpty()) {
-                            Text(
-                                text = "未找到匹配「$currencySearchQuery」的币种",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                filteredCurrencies.forEach { info ->
-                                    FilterChip(
-                                        selected = settings.baseCurrencyCode.equals(info.code, ignoreCase = true),
-                                        onClick = { viewModel.saveSettings(settings.copy(baseCurrencyCode = info.code)) },
-                                        label = { Text("${info.code} ${info.chineseName}") },
-                                        modifier = Modifier.testTag("base_currency_chip_${info.code}")
-                                    )
-                                }
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            baseCurrencyChoices.forEach { info ->
+                                FilterChip(
+                                    selected = settings.baseCurrencyCode.equals(info.code, ignoreCase = true),
+                                    onClick = { viewModel.saveSettings(settings.copy(baseCurrencyCode = info.code)) },
+                                    label = { Text("${info.code} ${info.chineseName}") },
+                                    modifier = Modifier.testTag("base_currency_chip_${info.code}")
+                                )
                             }
                         }
                     }
@@ -590,7 +585,7 @@ fun CurrencySettingsScreen(
                             } else {
                                 Icon(AppIcons.CurrencyExchange, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("从「${selectedSource.label}」更新实时汇率")
+                                Text("从「${selectedSource.label}」更新已启用汇率")
                             }
                         }
 
@@ -638,22 +633,55 @@ fun CurrencySettingsScreen(
 
                         HorizontalDivider()
 
-                        Text(
-                            text = "外币对人民币参考牌价（显示 ${filteredForeignCurrencies.size} 项）",
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                        filteredForeignCurrencies.forEach { info ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "已启用外币汇率（${enabledForeignCurrencies.size} 项）",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                Text(
+                                    text = "默认启用最常用的 5 种外币，其余可按需添加或随时移除",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (enabledForeignCodes != CurrencyCatalog.defaultEnabledForeignCodes) {
+                                TextButton(
+                                    onClick = {
+                                        viewModel.saveSettings(
+                                            settings.copy(
+                                                enabledCurrencyCodes = CurrencyCatalog.normalizeEnabledForeignCodes(
+                                                    CurrencyCatalog.defaultEnabledForeignCodes,
+                                                    ensureCode = settings.baseCurrencyCode
+                                                )
+                                            )
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("reset_default_currencies_button")
+                                ) {
+                                    Text("恢复默认 5 项")
+                                }
+                            }
+                        }
+
+                        enabledForeignCurrencies.forEach { info ->
                             val rate = exchangeRates.ratesToCny[info.code] ?: info.defaultRateToCny
+                            val isCurrentBase = settings.baseCurrencyCode.equals(info.code, ignoreCase = true)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
+                                    .padding(vertical = 2.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     text = "1 ${info.code} (${info.chineseName})",
-                                    style = MaterialTheme.typography.bodyMedium
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f)
                                 )
                                 Text(
                                     text = "≈ ¥%.4f".format(rate),
@@ -661,6 +689,84 @@ fun CurrencySettingsScreen(
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.primary
                                 )
+                                if (!isCurrentBase && enabledForeignCodes.size > 1) {
+                                    IconButton(
+                                        onClick = {
+                                            viewModel.saveSettings(
+                                                settings.copy(enabledCurrencyCodes = enabledForeignCodes - info.code)
+                                            )
+                                        },
+                                        modifier = Modifier.testTag("remove_currency_${info.code}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Close,
+                                            contentDescription = "移除 ${info.code}",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider()
+
+                        OutlinedButton(
+                            onClick = { showAddCurrencyPanel = !showAddCurrencyPanel },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("toggle_add_currency_panel")
+                        ) {
+                            Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                if (showAddCurrencyPanel) "收起更多外币列表"
+                                else "按需添加其他外币（还有 ${CurrencyCatalog.currencies.size - 1 - enabledForeignCurrencies.size} 种可选）"
+                            )
+                        }
+
+                        if (showAddCurrencyPanel) {
+                            OutlinedTextField(
+                                value = currencySearchQuery,
+                                onValueChange = { currencySearchQuery = it },
+                                placeholder = { Text("搜索待添加外币，如 thb / 泰铢 / sgd / 新币 / 韩元") },
+                                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("currency_search_input")
+                            )
+                            if (availableToAddCurrencies.isEmpty()) {
+                                Text(
+                                    text = if (currencySearchQuery.isBlank()) "全部支持的币种均已启用" else "未找到未启用的匹配币种「$currencySearchQuery」",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    availableToAddCurrencies.forEach { info ->
+                                        AssistChip(
+                                            onClick = {
+                                                viewModel.saveSettings(
+                                                    settings.copy(enabledCurrencyCodes = enabledForeignCodes + info.code)
+                                                )
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Add,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            },
+                                            label = { Text("${info.code} ${info.chineseName}") },
+                                            modifier = Modifier.testTag("add_currency_chip_${info.code}")
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

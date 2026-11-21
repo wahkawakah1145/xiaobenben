@@ -923,7 +923,8 @@ fun AppNavigation(
                                     ) {
                                         HorizontalPager(
                                             state = pagerState,
-                                            beyondViewportPageCount = 1,
+                                            userScrollEnabled = !isAnalyticsCalendarOpen,
+                                            beyondViewportPageCount = 0,
                                             modifier = Modifier.fillMaxSize()
                                         ) { page ->
                                             when (visibleTabs.getOrNull(page)) {

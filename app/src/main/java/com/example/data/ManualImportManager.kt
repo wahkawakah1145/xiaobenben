@@ -328,7 +328,12 @@ object ManualImportManager {
             val (amountCents, inferredType) = resolvedAmountAndType
             val rawDirection = cols.getOrNull(mapping.typeCol).orEmpty()
             val tradeType = cleanOptionalCell(cols.getOrNull(mapping.tradeTypeCol))
+            val rawMerchantHint = cleanOptionalCell(cols.getOrNull(mapping.merchantCol))
+            val productHint = cleanOptionalCell(cols.getOrNull(mapping.productCol))
+            val noteHint = cleanOptionalCell(cols.getOrNull(mapping.noteCol))
+            val internalTransferContext = listOfNotNull(rawDirection, tradeType, rawMerchantHint, productHint, noteHint).joinToString(" ")
             val type = when {
+                ChinaNotificationParser.isSelfTransferOrWithdraw(internalTransferContext) -> TransactionType.TRANSFER
                 rawDirection.isNotBlank() -> mapType(rawDirection, inferredType)
                 !tradeType.isNullOrBlank() -> mapType(tradeType, inferredType)
                 else -> inferredType
@@ -727,10 +732,10 @@ object ManualImportManager {
                     .replace(Regex("""\b[A-Za-z]{3}\b|[¥￥$€£฿₱₹₽₺₪₩]|元"""), "")
                     .trim()
                     .ifBlank { "导入记录" }
-                val type = if (line.contains("收入") || line.contains("工资") || line.contains("退款")) {
-                    TransactionType.INCOME
-                } else {
-                    TransactionType.EXPENSE
+                val type = when {
+                    ChinaNotificationParser.isSelfTransferOrWithdraw(line) -> TransactionType.TRANSFER
+                    line.contains("收入") || line.contains("工资") || line.contains("退款") -> TransactionType.INCOME
+                    else -> TransactionType.EXPENSE
                 }
                 items.add(
                     LedgerTransaction(

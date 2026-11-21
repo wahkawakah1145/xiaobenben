@@ -939,6 +939,7 @@ fun LedgerHomeScreen(
         TransactionEditorDialog(
             initialTransaction = null,
             defaultCurrencyCode = baseCurrency,
+            enabledCurrencyCodes = settings.enabledCurrencyCodes,
             onDismiss = { showCreateDialog = false },
             onSaveExtended = { tt, pn, ts, tno, mno ->
                 extTradeType = tt
@@ -978,6 +979,7 @@ fun LedgerHomeScreen(
         TransactionEditorDialog(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
+            enabledCurrencyCodes = settings.enabledCurrencyCodes,
             onDismiss = { editingTransaction = null },
             onSaveExtended = { tt, pn, ts, tno, mno ->
                 extTradeType = tt

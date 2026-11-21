@@ -508,6 +508,21 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Safely releases idle SQLite page memory in background without closing DB
+         * or interrupting active NotificationListener / Accessibility background writes.
+         */
+        fun trimMemoryIfOpen() {
+            val dbInstance = INSTANCE ?: return
+            if (!dbInstance.isOpen) return
+            runCatching {
+                val sqlite = dbInstance.openHelper.writableDatabase
+                if (sqlite.isOpen) {
+                    sqlite.execSQL("PRAGMA shrink_memory")
+                }
+            }
+        }
+
         fun getInstance(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -524,7 +539,8 @@ abstract class LedgerDatabase : RoomDatabase() {
 
                         override fun onOpen(db: SupportSQLiteDatabase) {
                             super.onOpen(db)
-                            runCatching { db.execSQL("PRAGMA cache_size = -1024") }
+                            runCatching { db.execSQL("PRAGMA cache_size = -512") }
+                            runCatching { db.execSQL("PRAGMA temp_store = FILE") }
                             runCatching { db.query("PRAGMA incremental_vacuum").close() }
                         }
                     })

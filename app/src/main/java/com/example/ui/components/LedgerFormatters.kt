@@ -563,6 +563,7 @@ fun TransactionDetailSheet(
 fun TransactionEditorDialog(
     initialTransaction: LedgerTransaction?,
     defaultCurrencyCode: String = "CNY",
+    enabledCurrencyCodes: List<String> = CurrencyCatalog.defaultEnabledForeignCodes,
     onDismiss: () -> Unit,
     onSave: (
         amountCents: Long,
@@ -617,7 +618,13 @@ fun TransactionEditorDialog(
         )
     }
     var currencyQuery by remember { mutableStateOf("") }
-    val filteredCurrencies = remember(currencyQuery) { CurrencyCatalog.search(currencyQuery) }
+    val filteredCurrencies = remember(currencyQuery, enabledCurrencyCodes, selectedCurrency) {
+        if (currencyQuery.isBlank()) {
+            CurrencyCatalog.enabledCurrenciesWithCny(enabledCurrencyCodes, ensureCode = selectedCurrency)
+        } else {
+            CurrencyCatalog.search(currencyQuery)
+        }
+    }
     val initialMillis = remember(initialTransaction) {
         initialTransaction?.occurredAtMillis ?: System.currentTimeMillis()
     }
@@ -633,7 +640,7 @@ fun TransactionEditorDialog(
     val availableCategories = when (selectedType) {
         TransactionType.INCOME -> CategoryCatalog.incomeCategories
         TransactionType.EXPENSE -> CategoryCatalog.expenseCategories
-        TransactionType.TRANSFER -> listOf("转账红包", "其他")
+        TransactionType.TRANSFER -> CategoryCatalog.transferCategories
     }
 
     val quickChannels = listOf("支付宝", "微信支付", "云闪付", "招商银行", "工商银行", "建设银行", "手动记账")
@@ -720,7 +727,7 @@ fun TransactionEditorDialog(
                                 } else if (txType == TransactionType.EXPENSE && category !in CategoryCatalog.expenseCategories) {
                                     category = "餐饮美食"
                                 } else if (txType == TransactionType.TRANSFER) {
-                                    category = "转账红包"
+                                    category = "不计收支"
                                 }
                             },
                             selected = selectedType == txType

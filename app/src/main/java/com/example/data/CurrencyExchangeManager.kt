@@ -9,7 +9,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 import kotlin.math.roundToLong
 
 data class ParsedRatesPayload(
@@ -21,10 +20,8 @@ data class ParsedRatesPayload(
 
 class CurrencyExchangeManager {
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient
+        get() = AppHttpClient.derived(connectTimeoutSec = 12, readTimeoutSec = 15)
 
     suspend fun refreshRatesDatabase(
         repository: LedgerRepository,
@@ -72,13 +69,20 @@ class CurrencyExchangeManager {
                 "${selectedSource.label} (基准 CNY)"
             }
 
-            val parsed = parseRatesPayload(bodyText, defaultSourceLabel)
-                ?: return@withContext Result.failure(
-                    IllegalStateException("无法解析该接口返回的汇率 JSON 格式（需包含 rates / conversion_rates / cny 等字段）")
-                )
+            val enabledCodes = CurrencyCatalog.normalizeEnabledForeignCodes(
+                settings.enabledCurrencyCodes,
+                ensureCode = settings.baseCurrencyCode
+            )
+            val parsed = parseRatesPayload(
+                bodyText = bodyText,
+                fallbackSourceLabel = defaultSourceLabel,
+                targetForeignCodes = enabledCodes.ifEmpty { null }
+            ) ?: return@withContext Result.failure(
+                IllegalStateException("无法解析该接口返回的汇率 JSON 格式（需包含 rates / conversion_rates / cny 等字段）")
+            )
 
             val now = System.currentTimeMillis()
-            val status = "已从 ${selectedSource.label} 更新 ${parsed.updatedCount} 种货币汇率"
+            val status = "已从 ${selectedSource.label} 更新 ${parsed.updatedCount} 种已启用货币汇率"
             repository.saveExchangeRates(
                 ratesToCny = parsed.ratesToCny,
                 updatedAtMillis = now,
@@ -105,7 +109,8 @@ class CurrencyExchangeManager {
     companion object {
         fun parseRatesPayload(
             bodyText: String,
-            fallbackSourceLabel: String
+            fallbackSourceLabel: String,
+            targetForeignCodes: Collection<String>? = null
         ): ParsedRatesPayload? {
             val json = runCatching { JSONObject(bodyText) }.getOrNull() ?: return null
 
@@ -158,16 +163,19 @@ class CurrencyExchangeManager {
             val cnyPerBase = if (baseCode == "CNY") 1.0 else (perBaseMap["CNY"] ?: return null)
             if (cnyPerBase <= 0.0) return null
 
-            val updatedMap = CurrencyCatalog.defaultRatesToCny.toMutableMap()
+            val targetSet = targetForeignCodes?.map { it.uppercase() }?.toSet()
+            val updatedMap = mutableMapOf<String, Double>("CNY" to 1.0)
             var updatedCount = 0
             CurrencyCatalog.currencies.forEach { info ->
                 if (info.code == "CNY") {
                     updatedMap["CNY"] = 1.0
-                } else {
+                } else if (targetSet == null || info.code in targetSet) {
                     val unitPerBase = perBaseMap[info.code]
                     if (unitPerBase != null && unitPerBase > 0.0) {
                         updatedMap[info.code] = cnyPerBase / unitPerBase
                         updatedCount += 1
+                    } else {
+                        updatedMap[info.code] = info.defaultRateToCny
                     }
                 }
             }

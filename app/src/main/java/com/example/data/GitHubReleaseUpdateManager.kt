@@ -7,7 +7,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 data class ReleaseUpdateInfo(
     val tagName: String,
@@ -31,11 +30,7 @@ data class ReleaseUpdateInfo(
 object GitHubReleaseUpdateManager {
 
     private val client: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .followRedirects(true)
-            .build()
+        AppHttpClient.derived(connectTimeoutSec = 12, readTimeoutSec = 15, followRedirects = true)
     }
 
     fun applyMirrorPrefix(rawUrl: String, mirror: GitHubUpdateMirror): String {

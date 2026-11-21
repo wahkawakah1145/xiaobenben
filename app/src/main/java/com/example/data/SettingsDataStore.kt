@@ -102,6 +102,7 @@ class SettingsDataStore(private val context: Context) {
         val EXCHANGE_RATE_SOURCE = stringPreferencesKey("exchange_rate_source")
         val CUSTOM_EXCHANGE_RATE_URL = stringPreferencesKey("custom_exchange_rate_url")
         val GITHUB_UPDATE_MIRROR = stringPreferencesKey("github_update_mirror")
+        val ENABLED_CURRENCY_CODES_JSON = stringPreferencesKey("enabled_currency_codes_json")
 
         val AI_PROVIDER_MODE = stringPreferencesKey("ai_provider_mode")
         val AI_LOCAL_MODEL_ID = stringPreferencesKey("ai_local_model_id")
@@ -133,7 +134,16 @@ class SettingsDataStore(private val context: Context) {
                 .fromRaw(prefs[Keys.EXCHANGE_RATE_SOURCE]).name,
             customExchangeRateUrl = prefs[Keys.CUSTOM_EXCHANGE_RATE_URL] ?: "",
             githubUpdateMirror = com.example.model.GitHubUpdateMirror
-                .fromRaw(prefs[Keys.GITHUB_UPDATE_MIRROR]).name
+                .fromRaw(prefs[Keys.GITHUB_UPDATE_MIRROR]).name,
+            enabledCurrencyCodes = prefs[Keys.ENABLED_CURRENCY_CODES_JSON]?.let { rawJson ->
+                CurrencyCatalog.normalizeEnabledForeignCodes(
+                    decodeStringListJson(rawJson),
+                    ensureCode = prefs[Keys.BASE_CURRENCY_CODE]
+                )
+            } ?: CurrencyCatalog.normalizeEnabledForeignCodes(
+                CurrencyCatalog.defaultEnabledForeignCodes,
+                ensureCode = prefs[Keys.BASE_CURRENCY_CODE]
+            )
         )
     }
 
@@ -198,7 +208,7 @@ class SettingsDataStore(private val context: Context) {
             apiKey = prefs[Keys.AI_API_KEY] ?: "",
             apiModelName = prefs[Keys.AI_API_MODEL_NAME] ?: "",
             useAiAsFallbackOnly = prefs[Keys.AI_FALLBACK_ONLY] ?: true,
-            customSystemPrompt = prefs[Keys.AI_CUSTOM_SYSTEM_PROMPT] ?: "",
+            customSystemPrompt = AiUnderstandingManager.sanitizeStoredCustomPrompt(prefs[Keys.AI_CUSTOM_SYSTEM_PROMPT] ?: ""),
             selectedPromptRuleIds = decodeStringListJson(prefs[Keys.AI_PROMPT_RULE_IDS_JSON])
         )
     }
@@ -251,6 +261,13 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.CUSTOM_EXCHANGE_RATE_URL] = settings.customExchangeRateUrl.trim().take(500)
             prefs[Keys.GITHUB_UPDATE_MIRROR] = com.example.model.GitHubUpdateMirror
                 .fromRaw(settings.githubUpdateMirror).name
+            val normalizedEnabled = CurrencyCatalog.normalizeEnabledForeignCodes(
+                settings.enabledCurrencyCodes,
+                ensureCode = settings.baseCurrencyCode
+            )
+            prefs[Keys.ENABLED_CURRENCY_CODES_JSON] = JSONArray().apply {
+                normalizedEnabled.forEach { put(it) }
+            }.toString()
         }
     }
 
@@ -336,7 +353,7 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.AI_API_KEY] = config.apiKey.trim()
             prefs[Keys.AI_API_MODEL_NAME] = config.apiModelName.trim()
             prefs[Keys.AI_FALLBACK_ONLY] = config.useAiAsFallbackOnly
-            prefs[Keys.AI_CUSTOM_SYSTEM_PROMPT] = config.customSystemPrompt.trim().take(2000)
+            prefs[Keys.AI_CUSTOM_SYSTEM_PROMPT] = AiUnderstandingManager.sanitizeStoredCustomPrompt(config.customSystemPrompt).take(4000)
             prefs[Keys.AI_PROMPT_RULE_IDS_JSON] = ruleIdsJson
         }
     }

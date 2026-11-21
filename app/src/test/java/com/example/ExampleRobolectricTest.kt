@@ -870,4 +870,55 @@ class ExampleRobolectricTest {
     org.junit.Assert.assertNotNull(withoutSec)
     assertEquals(42_000L, withSec!! - withoutSec!!)
   }
+
+  @Test
+  fun `ai default system prompt is latest and migrates legacy default prompt cleanly`() {
+    val latest = com.example.data.AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT
+    org.junit.Assert.assertTrue(latest.contains("零钱提现"))
+    org.junit.Assert.assertTrue(latest.contains("本人转账"))
+    org.junit.Assert.assertTrue(latest.contains("yyyy-MM-dd HH:mm:ss"))
+    org.junit.Assert.assertTrue(latest.contains("TRANSFER"))
+
+    val legacyPrompt = """
+      你是一个精准的中国大陆账单与支付通知结构化解析引擎。
+      {"currency":"CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD","occurredTime":"yyyy-MM-dd HH:mm或MM-dd HH:mm或HH:mm或null"}
+    """.trimIndent()
+    assertEquals("", com.example.data.AiUnderstandingManager.sanitizeStoredCustomPrompt(legacyPrompt))
+
+    val effectiveFromLegacy = com.example.data.AiUnderstandingManager.buildEffectiveSystemPrompt(
+      com.example.model.AiConfig(customSystemPrompt = legacyPrompt)
+    )
+    assertEquals(latest, effectiveFromLegacy)
+  }
+
+  @Test
+  fun `currency catalog defaults to 5 common foreign currencies and allows adding on demand`() {
+    assertEquals(5, com.example.model.CurrencyCatalog.defaultEnabledForeignCodes.size)
+    assertEquals(
+      listOf("USD", "HKD", "EUR", "JPY", "GBP"),
+      com.example.model.CurrencyCatalog.defaultEnabledForeignCodes
+    )
+    val withExtra = com.example.model.CurrencyCatalog.enabledCurrenciesWithCny(
+      com.example.model.CurrencyCatalog.defaultEnabledForeignCodes + "THB"
+    )
+    assertEquals(7, withExtra.size)
+    org.junit.Assert.assertTrue(withExtra.any { it.code == "CNY" })
+    org.junit.Assert.assertTrue(withExtra.any { it.code == "THB" })
+
+    val json = """{"date":"2026-11-21","cny":{"usd":0.138,"hkd":1.08,"eur":0.128,"jpy":21.2,"gbp":0.109,"thb":4.8}}"""
+    val filteredRates = com.example.data.CurrencyExchangeManager.parseRatesPayload(
+      bodyText = json,
+      fallbackSourceLabel = "Test",
+      targetForeignCodes = com.example.model.CurrencyCatalog.defaultEnabledForeignCodes
+    )
+    org.junit.Assert.assertNotNull(filteredRates)
+    assertEquals(5, filteredRates!!.updatedCount)
+    org.junit.Assert.assertFalse(filteredRates.ratesToCny.containsKey("THB"))
+  }
+
+  @Test
+  fun `shared http client and database memory trim execute safely`() {
+    com.example.data.AppHttpClient.trimIdleResources()
+    com.example.data.LedgerDatabase.trimMemoryIfOpen()
+  }
 }

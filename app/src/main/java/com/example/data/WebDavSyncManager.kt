@@ -12,15 +12,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
 
 class WebDavSyncManager {
 
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient
+        get() = AppHttpClient.derived(connectTimeoutSec = 15, readTimeoutSec = 30, writeTimeoutSec = 30)
 
     suspend fun testConnection(config: WebDavConfig): Result<String> = withContext(Dispatchers.IO) {
         try {

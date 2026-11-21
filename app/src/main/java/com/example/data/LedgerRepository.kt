@@ -944,6 +944,19 @@ class LedgerRepository(
             val now = 1700000000000L
             return listOf(
                 CustomParsingRule(
+                    id = "builtin_self_transfer_withdraw",
+                    name = "零钱提现与本人转账（不计收支）",
+                    packageFilter = "*",
+                    keywordPattern = "零钱提现|余额提现|提现到银行卡|提现至银行卡|提现到账|零钱充值|零钱通转入|零钱通转出|余额宝转入|余额宝转出|本人转账|本人账户|同名转账|同名账户|账户互转|内部转账|信用卡还款",
+                    channelName = "",
+                    defaultCategory = "不计收支",
+                    defaultType = "TRANSFER",
+                    priority = 5,
+                    enabled = true,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                ),
+                CustomParsingRule(
                     id = "builtin_alipay",
                     name = "支付宝通用规则",
                     packageFilter = "com.eg.android.AlipayGphone",
