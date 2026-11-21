@@ -1,5 +1,6 @@
 package com.example.data
 
+import com.example.model.CurrencyCatalog
 import com.example.model.CustomParsingRule
 import com.example.model.LedgerTransaction
 import com.example.model.ParseMethod
@@ -38,6 +39,7 @@ object ManualImportManager {
         SimpleDateFormat("yyyy/M/d H:mm", Locale.CHINA),
         SimpleDateFormat("yyyy年MM月dd日 HH:mm:ss", Locale.CHINA),
         SimpleDateFormat("yyyy年MM月dd日 HH:mm", Locale.CHINA),
+        SimpleDateFormat("yyyy年M月d日 H:mm:ss", Locale.CHINA),
         SimpleDateFormat("yyyy年M月d日 H:mm", Locale.CHINA),
         SimpleDateFormat("yyyy-MM-dd", Locale.CHINA),
         SimpleDateFormat("yyyy/MM/dd", Locale.CHINA),
@@ -50,6 +52,7 @@ object ManualImportManager {
         val score: Int,
         val headers: List<String>,
         val timeCol: Int,
+        val tradeTypeCol: Int,
         val typeCol: Int,
         val merchantCol: Int,
         val productCol: Int,
@@ -58,7 +61,11 @@ object ManualImportManager {
         val expenseAmountCol: Int,
         val incomeAmountCol: Int,
         val currencyCol: Int,
-        val categoryCol: Int
+        val categoryCol: Int,
+        val statusCol: Int,
+        val transactionNoCol: Int,
+        val merchantOrderNoCol: Int,
+        val noteCol: Int
     ) {
         val hasUsableAmountColumn: Boolean
             get() = amountCol >= 0 || expenseAmountCol >= 0 || incomeAmountCol >= 0
@@ -67,40 +74,49 @@ object ManualImportManager {
     fun parseImportedBytes(
         bytes: ByteArray,
         fileNameHint: String? = null,
-        customRules: List<CustomParsingRule> = emptyList()
+        customRules: List<CustomParsingRule> = emptyList(),
+        useRuleMatching: Boolean = true
     ): Result<ImportPreviewResult> {
         if (bytes.isEmpty()) {
             return Result.failure(IllegalArgumentException("所选文件内容为空"))
         }
         val lowerName = fileNameHint?.lowercase().orEmpty()
         if (lowerName.endsWith(".xlsx") || XlsxTableReader.isXlsxBytes(bytes)) {
-            return runCatching { parseXlsxBytes(bytes) }
+            return runCatching {
+                parseXlsxBytes(
+                    bytes = bytes,
+                    customRules = if (useRuleMatching) customRules else emptyList(),
+                    useRuleMatching = useRuleMatching
+                )
+            }
         }
         val decodedText = decodeTextAutoCharset(bytes)
-        return parseImportedContent(decodedText, fileNameHint, customRules)
+        return parseImportedContent(decodedText, fileNameHint, customRules, useRuleMatching)
     }
 
     fun parseImportedContent(
         rawContent: String,
         fileNameHint: String? = null,
-        customRules: List<CustomParsingRule> = emptyList()
+        customRules: List<CustomParsingRule> = emptyList(),
+        useRuleMatching: Boolean = true
     ): Result<ImportPreviewResult> {
         val text = rawContent.trim().removePrefix("\uFEFF")
         if (text.isBlank()) {
             return Result.failure(IllegalArgumentException("导入内容为空"))
         }
 
+        val activeRules = if (useRuleMatching) customRules else emptyList()
         return runCatching {
             val lowerName = fileNameHint?.lowercase().orEmpty()
             when {
                 lowerName.endsWith(".json") || text.startsWith("{") || text.startsWith("[") -> {
-                    parseJsonContent(text)
+                    parseJsonContent(text, activeRules, useRuleMatching)
                 }
                 lowerName.endsWith(".csv") || lowerName.endsWith(".tsv") || looksLikeDelimitedTable(text) -> {
-                    parseCsvContent(text)
+                    parseCsvContent(text, activeRules, useRuleMatching)
                 }
                 else -> {
-                    parseFreeformLines(text, customRules)
+                    parseFreeformLines(text, activeRules, useRuleMatching)
                 }
             }
         }
@@ -131,7 +147,11 @@ object ManualImportManager {
         }
     }
 
-    private fun parseXlsxBytes(bytes: ByteArray): ImportPreviewResult {
+    private fun parseXlsxBytes(
+        bytes: ByteArray,
+        customRules: List<CustomParsingRule>,
+        useRuleMatching: Boolean
+    ): ImportPreviewResult {
         val sheets = XlsxTableReader.readSheets(bytes)
         require(sheets.isNotEmpty()) { "XLSX 文件中未找到可读工作表" }
 
@@ -153,11 +173,17 @@ object ManualImportManager {
             rows = chosenSheet.rows,
             mapping = chosenMapping,
             baseFormatLabel = if (sheets.size > 1) "XLSX (${chosenSheet.sheetName})" else "XLSX 表格",
-            fromExcel = true
+            fromExcel = true,
+            customRules = customRules,
+            useRuleMatching = useRuleMatching
         )
     }
 
-    private fun parseJsonContent(text: String): ImportPreviewResult {
+    private fun parseJsonContent(
+        text: String,
+        customRules: List<CustomParsingRule>,
+        useRuleMatching: Boolean
+    ): ImportPreviewResult {
         val items = mutableListOf<LedgerTransaction>()
         var skipped = 0
         val array = if (text.startsWith("{")) {
@@ -182,39 +208,53 @@ object ManualImportManager {
                 skipped++
                 continue
             }
-            val currency = o.optString("currencyCode")
-                .ifBlank { o.optString("currency", "CNY") }
-                .uppercase()
-                .ifBlank { "CNY" }
+            val currency = resolveCurrencyCode(
+                o.optString("currencyCode").ifBlank { o.optString("currency", "CNY") }
+            )
             val merchant = o.optString("merchant").ifBlank { "导入账单" }
             val rawType = o.optString("type", "EXPENSE")
             val type = mapType(rawType)
+            val productName = cleanOptionalCell(o.optString("productName").ifBlank { o.optString("product") })
+            val note = cleanOptionalCell(o.optString("note"))
             val category = o.optString("category")
-                .ifBlank { ChinaNotificationParser.inferCategory(merchant, "", type) }
+                .ifBlank { ChinaNotificationParser.inferCategory(merchant, productName ?: note.orEmpty(), type) }
             val occurredAt = when {
                 o.optLong("occurredAtMillis", 0L) > 0L -> o.optLong("occurredAtMillis")
                 o.has("time") -> parseDateMillis(o.optString("time"))
                 o.has("date") -> parseDateMillis(o.optString("date"))
                 else -> System.currentTimeMillis()
             }
-            items.add(
-                LedgerTransaction(
-                    id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
-                    amountCents = amountCents,
-                    currencyCode = currency,
-                    type = type.name,
-                    category = category,
-                    merchant = merchant,
-                    channel = o.optString("channel").ifBlank { "手动导入" },
-                    cardLastFour = o.optString("cardLastFour").takeIf { it.isNotBlank() && it != "null" },
-                    sourceApp = o.optString("sourceApp").ifBlank { SourceApp.IMPORT.name },
-                    parseMethod = o.optString("parseMethod").ifBlank { ParseMethod.IMPORT.name },
-                    rawNotification = o.optString("rawNotification").takeIf { it.isNotBlank() && it != "null" },
-                    note = o.optString("note").takeIf { it.isNotBlank() && it != "null" },
-                    occurredAtMillis = occurredAt,
-                    confirmed = true
-                )
+            val rawTx = LedgerTransaction(
+                id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
+                amountCents = amountCents,
+                currencyCode = currency,
+                type = type.name,
+                category = category,
+                merchant = merchant,
+                channel = o.optString("channel").ifBlank { "手动导入" },
+                cardLastFour = cleanOptionalCell(o.optString("cardLastFour")),
+                sourceApp = o.optString("sourceApp").ifBlank { SourceApp.IMPORT.name },
+                parseMethod = o.optString("parseMethod").ifBlank { ParseMethod.IMPORT.name },
+                rawNotification = cleanOptionalCell(o.optString("rawNotification")),
+                note = note,
+                tradeType = cleanOptionalCell(o.optString("tradeType")),
+                productName = productName,
+                tradeStatus = cleanOptionalCell(o.optString("tradeStatus")),
+                transactionNo = cleanOptionalCell(o.optString("transactionNo")),
+                merchantOrderNo = cleanOptionalCell(o.optString("merchantOrderNo")),
+                occurredAtMillis = occurredAt,
+                confirmed = true
             )
+            val enriched = if (useRuleMatching && customRules.isNotEmpty()) {
+                applyRulesToTransaction(rawTx, customRules)
+            } else {
+                rawTx
+            }
+            if (enriched == null) {
+                skipped++
+            } else {
+                items.add(enriched)
+            }
         }
 
         require(items.isNotEmpty()) { "JSON 中未解析出有效账单条目" }
@@ -238,7 +278,11 @@ object ManualImportManager {
         }
     }
 
-    private fun parseCsvContent(text: String): ImportPreviewResult {
+    private fun parseCsvContent(
+        text: String,
+        customRules: List<CustomParsingRule>,
+        useRuleMatching: Boolean
+    ): ImportPreviewResult {
         val rawLines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
         require(rawLines.isNotEmpty()) { "CSV 内容为空" }
         val delimiter = detectDelimiter(rawLines.take(80))
@@ -252,7 +296,9 @@ object ManualImportManager {
             rows = rows,
             mapping = mapping,
             baseFormatLabel = if (delimiter == '\t') "TSV 表格" else "CSV 账单",
-            fromExcel = false
+            fromExcel = false,
+            customRules = customRules,
+            useRuleMatching = useRuleMatching
         )
     }
 
@@ -260,7 +306,9 @@ object ManualImportManager {
         rows: List<List<String>>,
         mapping: ColumnMapping,
         baseFormatLabel: String,
-        fromExcel: Boolean
+        fromExcel: Boolean,
+        customRules: List<CustomParsingRule>,
+        useRuleMatching: Boolean
     ): ImportPreviewResult {
         val items = mutableListOf<LedgerTransaction>()
         var skipped = 0
@@ -278,53 +326,92 @@ object ManualImportManager {
                 continue
             }
             val (amountCents, inferredType) = resolvedAmountAndType
-            val rawType = cols.getOrNull(mapping.typeCol).orEmpty()
-            val type = if (rawType.isNotBlank()) mapType(rawType, inferredType) else inferredType
+            val rawDirection = cols.getOrNull(mapping.typeCol).orEmpty()
+            val tradeType = cleanOptionalCell(cols.getOrNull(mapping.tradeTypeCol))
+            val type = when {
+                rawDirection.isNotBlank() -> mapType(rawDirection, inferredType)
+                !tradeType.isNullOrBlank() -> mapType(tradeType, inferredType)
+                else -> inferredType
+            }
 
-            val merchant = cols.getOrNull(mapping.merchantCol)?.trim().orEmpty()
-                .ifBlank { cols.getOrNull(mapping.productCol)?.trim().orEmpty() }
-                .ifBlank { "导入账单" }
-            val note = cols.getOrNull(mapping.productCol)?.trim()
-                ?.takeIf { it.isNotBlank() && it != "/" && it != merchant }
-            val channel = cols.getOrNull(mapping.channelCol)?.trim().orEmpty()
-                .ifBlank { "手动导入" }
-            val currency = resolveCurrencyCode(cols.getOrNull(mapping.currencyCol))
+            val rawMerchant = cleanOptionalCell(cols.getOrNull(mapping.merchantCol))
+            val productName = cleanOptionalCell(cols.getOrNull(mapping.productCol))
+            val noteCell = cleanOptionalCell(cols.getOrNull(mapping.noteCol))
+            val tradeStatus = cleanOptionalCell(cols.getOrNull(mapping.statusCol))
+            val transactionNo = cleanOptionalCell(cols.getOrNull(mapping.transactionNoCol))
+            val merchantOrderNo = cleanOptionalCell(cols.getOrNull(mapping.merchantOrderNoCol))
+
+            val merchant = rawMerchant
+                ?: productName
+                ?: tradeType
+                ?: "导入账单"
+
+            val note = noteCell ?: if (mapping.noteCol < 0 && productName != null && productName != merchant) {
+                productName
+            } else {
+                null
+            }
+
+            val channel = cleanOptionalCell(cols.getOrNull(mapping.channelCol)) ?: "手动导入"
+            val amountRawForCurrency = cols.getOrNull(mapping.amountCol)
+                ?: cols.getOrNull(mapping.expenseAmountCol)
+                ?: cols.getOrNull(mapping.incomeAmountCol)
+            val currency = resolveCurrencyCode(cols.getOrNull(mapping.currencyCol), amountRawForCurrency)
             val rawTime = cols.getOrNull(mapping.timeCol).orEmpty()
             val occurredAt = parseDateMillis(rawTime, allowExcelSerial = fromExcel)
 
-            val explicitCategory = cols.getOrNull(mapping.categoryCol)?.trim().orEmpty()
-            val category = if (explicitCategory.isNotBlank() && explicitCategory != "/") {
-                explicitCategory
-            } else {
-                ChinaNotificationParser.inferCategory(merchant, note.orEmpty(), type)
-            }
+            val explicitCategory = cleanOptionalCell(cols.getOrNull(mapping.categoryCol))
+            val contextForInfer = listOfNotNull(productName, tradeType, note).joinToString(" ")
+            val category = explicitCategory
+                ?: ChinaNotificationParser.inferCategory(merchant, contextForInfer, type)
 
-            items.add(
-                LedgerTransaction(
-                    amountCents = amountCents,
-                    currencyCode = currency,
-                    type = type.name,
-                    category = category.take(40),
-                    merchant = merchant.take(80),
-                    channel = channel.take(40),
-                    sourceApp = SourceApp.IMPORT.name,
-                    parseMethod = ParseMethod.IMPORT.name,
-                    note = note?.take(120),
-                    occurredAtMillis = occurredAt,
-                    confirmed = true
-                )
+            val rawTx = LedgerTransaction(
+                amountCents = amountCents,
+                currencyCode = currency,
+                type = type.name,
+                category = category.take(40),
+                merchant = merchant.take(120),
+                channel = channel.take(60),
+                sourceApp = SourceApp.IMPORT.name,
+                parseMethod = ParseMethod.IMPORT.name,
+                note = note?.take(160),
+                tradeType = tradeType?.take(60),
+                productName = productName?.take(120),
+                tradeStatus = tradeStatus?.take(40),
+                transactionNo = transactionNo?.take(80),
+                merchantOrderNo = merchantOrderNo?.take(80),
+                occurredAtMillis = occurredAt,
+                confirmed = true
             )
+
+            val finalTx = if (useRuleMatching && customRules.isNotEmpty()) {
+                applyRulesToTransaction(rawTx, customRules)
+            } else {
+                rawTx
+            }
+            if (finalTx == null) {
+                skipped++
+            } else {
+                items.add(finalTx)
+            }
         }
 
         require(items.isNotEmpty()) { "$baseFormatLabel 中未找到有效账单记录（已定位第 ${mapping.headerRowIndex + 1} 行为表头）" }
 
         val mappedColumns = buildList {
             if (mapping.timeCol >= 0) add("时间:${mapping.headers.getOrNull(mapping.timeCol)}")
-            if (mapping.merchantCol >= 0) add("对象:${mapping.headers.getOrNull(mapping.merchantCol)}")
+            if (mapping.tradeTypeCol >= 0) add("交易类型:${mapping.headers.getOrNull(mapping.tradeTypeCol)}")
+            if (mapping.merchantCol >= 0) add("对方:${mapping.headers.getOrNull(mapping.merchantCol)}")
+            if (mapping.productCol >= 0) add("商品:${mapping.headers.getOrNull(mapping.productCol)}")
+            if (mapping.typeCol >= 0) add("收/支:${mapping.headers.getOrNull(mapping.typeCol)}")
             if (mapping.amountCol >= 0) add("金额:${mapping.headers.getOrNull(mapping.amountCol)}")
             if (mapping.expenseAmountCol >= 0) add("支出:${mapping.headers.getOrNull(mapping.expenseAmountCol)}")
             if (mapping.incomeAmountCol >= 0) add("收入:${mapping.headers.getOrNull(mapping.incomeAmountCol)}")
-            if (mapping.channelCol >= 0) add("渠道:${mapping.headers.getOrNull(mapping.channelCol)}")
+            if (mapping.channelCol >= 0) add("支付方式:${mapping.headers.getOrNull(mapping.channelCol)}")
+            if (mapping.statusCol >= 0) add("状态:${mapping.headers.getOrNull(mapping.statusCol)}")
+            if (mapping.transactionNoCol >= 0) add("交易单号:${mapping.headers.getOrNull(mapping.transactionNoCol)}")
+            if (mapping.merchantOrderNoCol >= 0) add("商户单号:${mapping.headers.getOrNull(mapping.merchantOrderNoCol)}")
+            if (mapping.noteCol >= 0) add("备注:${mapping.headers.getOrNull(mapping.noteCol)}")
         }.joinToString(" · ")
 
         return ImportPreviewResult(
@@ -333,6 +420,48 @@ object ManualImportManager {
             skippedCount = skipped,
             detectedHeaderRowOneBased = mapping.headerRowIndex + 1,
             detectedColumnsSummary = mappedColumns
+        )
+    }
+
+    private fun applyRulesToTransaction(
+        tx: LedgerTransaction,
+        customRules: List<CustomParsingRule>
+    ): LedgerTransaction? {
+        val searchable = listOfNotNull(
+            tx.merchant,
+            tx.productName,
+            tx.tradeType,
+            tx.channel,
+            tx.tradeStatus,
+            tx.note,
+            tx.rawNotification
+        ).joinToString(" ")
+        val matched = customRules
+            .asSequence()
+            .filter { it.enabled && it.keywordPattern.isNotBlank() }
+            .sortedByDescending { it.priority }
+            .firstOrNull { rule ->
+                rule.keywordPattern.split("|", ",", "，")
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .any { kw -> searchable.contains(kw, ignoreCase = true) }
+            } ?: return tx
+
+        if (matched.isIgnoreRule) return null
+
+        val nextType = when (matched.defaultType.uppercase()) {
+            "EXPENSE", "INCOME", "TRANSFER" -> matched.defaultType.uppercase()
+            else -> tx.type
+        }
+        val nextCategory = matched.defaultCategory.takeIf { it.isNotBlank() && it != "自动" } ?: tx.category
+        val nextChannel = matched.channelName.takeIf { it.isNotBlank() && it != "自动" } ?: tx.channel
+        val nextMerchant = matched.merchantOverride.takeIf { it.isNotBlank() } ?: tx.merchant
+        return tx.copy(
+            type = nextType,
+            category = nextCategory.take(40),
+            channel = nextChannel.take(60),
+            merchant = nextMerchant.take(120),
+            parseMethod = ParseMethod.RULE_ENGINE.name
         )
     }
 
@@ -394,25 +523,47 @@ object ManualImportManager {
                 containsKeys = listOf("收入金额", "贷方金额", "收款金额", "收入(")
             )
             val amountCol = findBestCol(
-                exactKeys = listOf("金额", "交易金额", "实付金额", "金额(元)", "amount", "money", "total"),
+                exactKeys = listOf("金额(元)", "金额（元）", "金额", "交易金额", "实付金额", "amount", "money", "total"),
                 containsKeys = listOf("金额", "发生额", "实付", "amount", "price", "value"),
                 excludeKeys = listOf("余额", "balance")
             )
             val typeCol = findBestCol(
-                exactKeys = listOf("收/支", "收支", "收支类型", "交易类型", "类型", "type", "direction"),
-                containsKeys = listOf("收/支", "收支", "交易类型", "借贷", "type")
+                exactKeys = listOf("收/支", "收支", "收支类型", "借贷方向", "direction"),
+                containsKeys = listOf("收/支", "收支", "借贷")
+            )
+            val tradeTypeCol = findBestCol(
+                exactKeys = listOf("交易类型", "业务类型", "类型", "tradetype", "type"),
+                containsKeys = listOf("交易类型", "业务类型", "type"),
+                excludeKeys = listOf("收支", "收/支")
             )
             val merchantCol = findBestCol(
                 exactKeys = listOf("交易对方", "商户", "商户名称", "对方名称", "交易对象", "收款方", "merchant", "payee", "counterparty"),
-                containsKeys = listOf("交易对方", "商户", "交易对象", "对方", "payee", "merchant")
+                containsKeys = listOf("交易对方", "商户", "交易对象", "对方", "payee", "merchant"),
+                excludeKeys = listOf("单号", "订单号", "order")
             )
             val productCol = findBestCol(
-                exactKeys = listOf("商品", "商品名称", "商品说明", "摘要", "备注", "说明", "note", "memo"),
-                containsKeys = listOf("商品", "摘要", "备注", "说明", "note", "memo", "desc")
+                exactKeys = listOf("商品", "商品名称", "商品说明", "product", "item"),
+                containsKeys = listOf("商品", "product", "item")
             )
             val channelCol = findBestCol(
                 exactKeys = listOf("支付方式", "收/付款方式", "付款方式", "渠道", "账户", "交易渠道", "channel", "account", "method"),
                 containsKeys = listOf("支付方式", "付款方式", "渠道", "账户", "银行", "channel", "account")
+            )
+            val statusCol = findBestCol(
+                exactKeys = listOf("当前状态", "交易状态", "状态", "status", "state"),
+                containsKeys = listOf("状态", "status")
+            )
+            val transactionNoCol = findBestCol(
+                exactKeys = listOf("交易单号", "交易订单号", "流水号", "transactionno", "trade_no"),
+                containsKeys = listOf("交易单号", "交易订单", "流水号", "transaction")
+            )
+            val merchantOrderNoCol = findBestCol(
+                exactKeys = listOf("商户单号", "商家订单号", "商户订单号", "merchantorderno", "orderno"),
+                containsKeys = listOf("商户单号", "商家订单", "商户订单", "order")
+            )
+            val noteCol = findBestCol(
+                exactKeys = listOf("备注", "摘要", "说明", "附言", "note", "memo", "remark"),
+                containsKeys = listOf("备注", "摘要", "说明", "附言", "note", "memo", "remark")
             )
             val currencyCol = findBestCol(
                 exactKeys = listOf("币种", "货币", "currency"),
@@ -428,6 +579,7 @@ object ManualImportManager {
                 score = 0,
                 headers = row,
                 timeCol = timeCol,
+                tradeTypeCol = tradeTypeCol,
                 typeCol = typeCol,
                 merchantCol = merchantCol,
                 productCol = productCol,
@@ -436,7 +588,11 @@ object ManualImportManager {
                 expenseAmountCol = expenseAmountCol,
                 incomeAmountCol = incomeAmountCol,
                 currencyCol = currencyCol,
-                categoryCol = categoryCol
+                categoryCol = categoryCol,
+                statusCol = statusCol,
+                transactionNoCol = transactionNoCol,
+                merchantOrderNoCol = merchantOrderNoCol,
+                noteCol = noteCol
             )
             if (!candidate.hasUsableAmountColumn) continue
 
@@ -447,12 +603,16 @@ object ManualImportManager {
             if (timeCol >= 0) score += 3
             if (merchantCol >= 0) score += 3
             if (typeCol >= 0) score += 2
+            if (tradeTypeCol >= 0) score += 2
             if (channelCol >= 0) score += 2
-            if (productCol >= 0) score += 1
+            if (productCol >= 0) score += 2
+            if (statusCol >= 0) score += 1
+            if (transactionNoCol >= 0) score += 1
+            if (merchantOrderNoCol >= 0) score += 1
+            if (noteCol >= 0) score += 1
             if (categoryCol >= 0) score += 1
             if (currencyCol >= 0) score += 1
 
-            // Verify there is at least one parseable amount row below this header
             val hasDataBelow = ((r + 1) until minOf(rows.size, r + 15)).any { nextIdx ->
                 resolveAmountAndType(rows[nextIdx], candidate) != null
             }
@@ -464,6 +624,11 @@ object ManualImportManager {
             }
         }
         return best
+    }
+
+    private fun cleanOptionalCell(raw: String?): String? {
+        val cleaned = raw?.trim()?.removePrefix("\t")?.trim().orEmpty()
+        return cleaned.takeIf { it.isNotEmpty() && it != "/" && it != "-" && !it.equals("null", ignoreCase = true) }
     }
 
     private fun resolveAmountAndType(
@@ -497,38 +662,27 @@ object ManualImportManager {
     private fun cleanNumericAmount(raw: String?): Double? {
         if (raw.isNullOrBlank()) return null
         val cleaned = raw
-            .replace("¥", "")
-            .replace("￥", "")
-            .replace("$", "")
-            .replace("€", "")
-            .replace("£", "")
-            .replace("HK$", "", ignoreCase = true)
-            .replace("USD", "", ignoreCase = true)
-            .replace("CNY", "", ignoreCase = true)
+            .replace(Regex("""[¥￥$€£฿₱₹₽₺₪₩]"""), "")
+            .replace(Regex("""\b[A-Za-z]{2,4}\$?"""), "")
             .replace(",", "")
             .replace("元", "")
             .trim()
         return cleaned.toDoubleOrNull()
     }
 
-    private fun resolveCurrencyCode(raw: String?): String {
-        val text = raw?.trim().orEmpty()
-        if (text.isEmpty() || text == "/") return "CNY"
-        val upper = text.uppercase()
-        if (upper.length == 3 && upper.all { it in 'A'..'Z' }) return upper
-        return when {
-            text.contains("美元") || text.contains("美金") -> "USD"
-            text.contains("港币") || text.contains("港元") -> "HKD"
-            text.contains("欧元") -> "EUR"
-            text.contains("日元") -> "JPY"
-            text.contains("英镑") -> "GBP"
-            else -> "CNY"
+    private fun resolveCurrencyCode(raw: String?, amountRawFallback: String? = null): String {
+        CurrencyCatalog.findByToken(raw)?.let { return it.code }
+        if (!amountRawFallback.isNullOrBlank()) {
+            val detected = ChinaNotificationParser.detectCurrencyCode(amountRawFallback)
+            if (detected != "CNY") return detected
         }
+        return "CNY"
     }
 
     private fun parseFreeformLines(
         text: String,
-        customRules: List<CustomParsingRule>
+        customRules: List<CustomParsingRule>,
+        useRuleMatching: Boolean
     ): ImportPreviewResult {
         val items = mutableListOf<LedgerTransaction>()
         var skipped = 0
@@ -536,31 +690,33 @@ object ManualImportManager {
 
         for (line in lines) {
             val extractedLineTime = ChinaNotificationParser.extractOccurredAtMillis(line)
-            val parsed = ChinaNotificationParser.parse(
-                packageName = "manual.import",
-                title = "",
-                content = line,
-                customRules = customRules,
-                enableLocalSemanticPass = false
-            )
-            if (parsed != null && parsed.amountCents > 0L) {
-                items.add(
-                    LedgerTransaction(
-                        amountCents = parsed.amountCents,
-                        currencyCode = parsed.currencyCode,
-                        type = parsed.type.name,
-                        category = parsed.category,
-                        merchant = parsed.merchant,
-                        channel = if (parsed.channel == "未知渠道") "手动导入" else parsed.channel,
-                        cardLastFour = parsed.cardLastFour,
-                        sourceApp = SourceApp.IMPORT.name,
-                        parseMethod = ParseMethod.IMPORT.name,
-                        rawNotification = line.take(220),
-                        occurredAtMillis = parsed.occurredAtMillis ?: extractedLineTime ?: System.currentTimeMillis(),
-                        confirmed = true
-                    )
+            if (useRuleMatching) {
+                val parsed = ChinaNotificationParser.parse(
+                    packageName = "manual.import",
+                    title = "",
+                    content = line,
+                    customRules = customRules,
+                    enableLocalSemanticPass = false
                 )
-                continue
+                if (parsed != null && parsed.amountCents > 0L) {
+                    items.add(
+                        LedgerTransaction(
+                            amountCents = parsed.amountCents,
+                            currencyCode = parsed.currencyCode,
+                            type = parsed.type.name,
+                            category = parsed.category,
+                            merchant = parsed.merchant,
+                            channel = if (parsed.channel == "未知渠道") "手动导入" else parsed.channel,
+                            cardLastFour = parsed.cardLastFour,
+                            sourceApp = SourceApp.IMPORT.name,
+                            parseMethod = ParseMethod.RULE_ENGINE.name,
+                            rawNotification = line.take(220),
+                            occurredAtMillis = parsed.occurredAtMillis ?: extractedLineTime ?: System.currentTimeMillis(),
+                            confirmed = true
+                        )
+                    )
+                    continue
+                }
             }
 
             val numMatch = Regex("""([0-9]+(?:\.[0-9]{1,2})?)""").find(line)
@@ -568,7 +724,7 @@ object ManualImportManager {
             if (yuan != null && yuan > 0.0) {
                 val currency = ChinaNotificationParser.detectCurrencyCode(line)
                 val merchant = line.replace(numMatch.value, "")
-                    .replace(Regex("""(CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|¥|￥|\$|€|£|元)""", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("""\b[A-Za-z]{3}\b|[¥￥$€£฿₱₹₽₺₪₩]|元"""), "")
                     .trim()
                     .ifBlank { "导入记录" }
                 val type = if (line.contains("收入") || line.contains("工资") || line.contains("退款")) {
@@ -597,8 +753,9 @@ object ManualImportManager {
         }
 
         require(items.isNotEmpty()) { "未从输入文本中识别出有效的账单金额" }
+        val modeTag = if (useRuleMatching) "规则匹配" else "基础文本提取"
         return ImportPreviewResult(
-            formatLabel = "文本批量导入",
+            formatLabel = "文本批量导入 ($modeTag)",
             transactions = items,
             skippedCount = skipped
         )
@@ -647,7 +804,7 @@ object ManualImportManager {
     private fun mapType(raw: String, fallback: TransactionType = TransactionType.EXPENSE): TransactionType = when {
         raw.contains("收入") || raw.contains("收款") || raw.contains("退") ||
             raw.equals("INCOME", ignoreCase = true) || raw.contains("贷") -> TransactionType.INCOME
-        raw.contains("不计收支") || raw.contains("转账") ||
+        raw.contains("不计收支") || raw.contains("转账") || raw.contains("中性") ||
             raw.equals("TRANSFER", ignoreCase = true) -> TransactionType.TRANSFER
         raw.contains("支出") || raw.contains("付款") || raw.contains("消费") ||
             raw.equals("EXPENSE", ignoreCase = true) || raw.contains("借") -> TransactionType.EXPENSE

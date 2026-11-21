@@ -36,6 +36,11 @@ data class TransactionEntity(
     val parseMethod: String,
     val rawNotification: String?,
     val note: String?,
+    val tradeType: String? = null,
+    val productName: String? = null,
+    val tradeStatus: String? = null,
+    val transactionNo: String? = null,
+    val merchantOrderNo: String? = null,
     val occurredAtMillis: Long,
     val confirmed: Boolean,
     val recordedBaseCurrencyCode: String = "CNY",
@@ -56,6 +61,11 @@ data class TransactionEntity(
         parseMethod = parseMethod,
         rawNotification = rawNotification,
         note = note,
+        tradeType = tradeType,
+        productName = productName,
+        tradeStatus = tradeStatus,
+        transactionNo = transactionNo,
+        merchantOrderNo = merchantOrderNo,
         occurredAtMillis = occurredAtMillis,
         confirmed = confirmed,
         recordedBaseCurrencyCode = recordedBaseCurrencyCode,
@@ -78,6 +88,11 @@ data class TransactionEntity(
             parseMethod = tx.parseMethod,
             rawNotification = tx.rawNotification,
             note = tx.note,
+            tradeType = tx.tradeType,
+            productName = tx.productName,
+            tradeStatus = tx.tradeStatus,
+            transactionNo = tx.transactionNo,
+            merchantOrderNo = tx.merchantOrderNo,
             occurredAtMillis = tx.occurredAtMillis,
             confirmed = tx.confirmed,
             recordedBaseCurrencyCode = tx.recordedBaseCurrencyCode.uppercase().ifBlank { "CNY" },
@@ -386,7 +401,7 @@ interface LedgerDao {
         LedgerBookEntity::class,
         TransactionBookCrossRefEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -483,6 +498,16 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN tradeType TEXT")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN productName TEXT")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN tradeStatus TEXT")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN transactionNo TEXT")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN merchantOrderNo TEXT")
+            }
+        }
+
         fun getInstance(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -490,7 +515,7 @@ abstract class LedgerDatabase : RoomDatabase() {
                     LedgerDatabase::class.java,
                     "smart_ledger.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .addCallback(object : Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)

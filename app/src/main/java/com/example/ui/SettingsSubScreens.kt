@@ -1,5 +1,10 @@
 package com.example.ui
 
+import com.example.model.ExchangeRateSource
+import com.example.model.AiProviderMode
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.rounded.Search
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.foundation.Image
@@ -347,6 +352,7 @@ fun WebDavSettingsScreen(
 }
 
 @OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CurrencySettingsScreen(
     settings: BudgetSettings,
@@ -356,6 +362,19 @@ fun CurrencySettingsScreen(
 ) {
     val rateUpdateState by viewModel.rateUpdateState.collectAsStateWithLifecycle()
     val numberFont = LocalNumberFontFamily.current
+    var currencySearchQuery by remember { mutableStateOf("") }
+    var customRateUrlInput by remember(settings.customExchangeRateUrl) {
+        mutableStateOf(settings.customExchangeRateUrl)
+    }
+    var customUrlSavedHint by remember { mutableStateOf<String?>(null) }
+
+    val selectedSource = ExchangeRateSource.fromRaw(settings.exchangeRateSource)
+    val filteredCurrencies = remember(currencySearchQuery) {
+        CurrencyCatalog.search(currencySearchQuery)
+    }
+    val filteredForeignCurrencies = remember(filteredCurrencies) {
+        filteredCurrencies.filter { it.code != "CNY" }
+    }
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -375,22 +394,42 @@ fun CurrencySettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("统计主币种", style = MaterialTheme.typography.titleMedium)
+                        Text("统计主币种（支持 ${CurrencyCatalog.currencies.size} 种货币）", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "不同币种的账单将按汇率数据库折算为主币种计入月度总计与分析。",
+                            text = "不同币种的账单将按汇率数据库折算为主币种计入月度总计与分析，支持缩写与中文别名搜索。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            CurrencyCatalog.currencies.forEach { info ->
-                                FilterChip(
-                                    selected = settings.baseCurrencyCode.equals(info.code, ignoreCase = true),
-                                    onClick = { viewModel.saveSettings(settings.copy(baseCurrencyCode = info.code)) },
-                                    label = { Text("${info.code} ${info.chineseName}") }
-                                )
+                        OutlinedTextField(
+                            value = currencySearchQuery,
+                            onValueChange = { currencySearchQuery = it },
+                            placeholder = { Text("搜索币种，如 hkd / 港元 / 港币 / 泰铢 / CHF") },
+                            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("currency_search_input")
+                        )
+                        if (filteredCurrencies.isEmpty()) {
+                            Text(
+                                text = "未找到匹配「$currencySearchQuery」的币种",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                filteredCurrencies.forEach { info ->
+                                    FilterChip(
+                                        selected = settings.baseCurrencyCode.equals(info.code, ignoreCase = true),
+                                        onClick = { viewModel.saveSettings(settings.copy(baseCurrencyCode = info.code)) },
+                                        label = { Text("${info.code} ${info.chineseName}") },
+                                        modifier = Modifier.testTag("base_currency_chip_${info.code}")
+                                    )
+                                }
                             }
                         }
                     }
@@ -407,53 +446,135 @@ fun CurrencySettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("汇率数据库", style = MaterialTheme.typography.titleMedium)
-                                val timeHint = if (exchangeRates.updatedAtMillis > 0L) {
-                                    "上次更新：${formatDateTimeFull(exchangeRates.updatedAtMillis)}"
-                                } else {
-                                    "使用内置参考汇率 · 仅点击更新时联网获取"
-                                }
-                                Text(
-                                    text = timeHint,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Surface(
-                                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.fillMaxWidth()
+                        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("汇率数据库与数据源", style = MaterialTheme.typography.titleMedium)
+                            val timeHint = if (exchangeRates.updatedAtMillis > 0L) {
+                                "上次更新：${formatDateTimeFull(exchangeRates.updatedAtMillis)}"
+                            } else {
+                                "使用内置参考汇率 · 仅点击更新或自动到期时联网获取"
+                            }
+                            Text(
+                                text = timeHint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
                                 ) {
-                                    Column(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                                    ) {
+                                    Text(
+                                        text = "当前牌价来源：${exchangeRates.dataSource}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.testTag("exchange_rate_source_label")
+                                    )
+                                    if (exchangeRates.rateDateText.isNotBlank()) {
                                         Text(
-                                            text = "数据源：${exchangeRates.dataSource}",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                            modifier = Modifier.testTag("exchange_rate_source_label")
+                                            text = "牌价发布：${exchangeRates.rateDateText}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
                                         )
-                                        if (exchangeRates.rateDateText.isNotBlank()) {
-                                            Text(
-                                                text = "牌价发布：${exchangeRates.rateDateText}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
-                                            )
-                                        }
                                     }
                                 }
                             }
                         }
 
+                        Text("选择汇率数据源", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            ExchangeRateSource.entries.forEach { src ->
+                                FilterChip(
+                                    selected = selectedSource == src,
+                                    onClick = {
+                                        viewModel.saveSettings(settings.copy(exchangeRateSource = src.name))
+                                        customUrlSavedHint = null
+                                    },
+                                    label = { Text(src.label) },
+                                    modifier = Modifier.testTag("rate_source_${src.name}")
+                                )
+                            }
+                        }
+                        Text(
+                            text = selectedSource.description,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        if (selectedSource == ExchangeRateSource.CUSTOM) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = customRateUrlInput,
+                                    onValueChange = {
+                                        customRateUrlInput = it
+                                        customUrlSavedHint = null
+                                    },
+                                    label = { Text("自定义 JSON 汇率链接") },
+                                    placeholder = { Text("https://open.er-api.com/v6/latest/CNY") },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("custom_rate_url_input")
+                                )
+                                OutlinedButton(
+                                    onClick = {
+                                        val trimmed = customRateUrlInput.trim()
+                                        if (!trimmed.startsWith("http://", ignoreCase = true) &&
+                                            !trimmed.startsWith("https://", ignoreCase = true)
+                                        ) {
+                                            customUrlSavedHint = "链接必须以 http:// 或 https:// 开头"
+                                        } else {
+                                            viewModel.saveSettings(
+                                                settings.copy(
+                                                    exchangeRateSource = ExchangeRateSource.CUSTOM.name,
+                                                    customExchangeRateUrl = trimmed
+                                                )
+                                            )
+                                            customUrlSavedHint = "已保存自定义汇率链接"
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("save_custom_rate_url_button")
+                                ) {
+                                    Text("保存")
+                                }
+                            }
+                            Text(
+                                text = "兼容 rates / conversion_rates / cny / data 等标准 JSON 汇率格式（自动支持非 CNY 基准交叉换算）。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            customUrlSavedHint?.let { hint ->
+                                Text(
+                                    text = hint,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (hint.contains("必须")) ExpenseCoral else IncomeJade
+                                )
+                            }
+                        }
+
                         Button(
                             enabled = rateUpdateState !is RateUpdateState.Loading,
-                            onClick = { viewModel.updateExchangeRateDatabase() },
+                            onClick = {
+                                if (selectedSource == ExchangeRateSource.CUSTOM) {
+                                    val trimmed = customRateUrlInput.trim()
+                                    if (trimmed.isNotBlank() && trimmed != settings.customExchangeRateUrl) {
+                                        viewModel.saveSettings(settings.copy(customExchangeRateUrl = trimmed))
+                                    }
+                                }
+                                viewModel.updateExchangeRateDatabase()
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .minimumInteractiveComponentSize()
@@ -470,7 +591,7 @@ fun CurrencySettingsScreen(
                             } else {
                                 Icon(AppIcons.CurrencyExchange, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("联网更新实时汇率数据库")
+                                Text("从「${selectedSource.label}」更新实时汇率")
                             }
                         }
 
@@ -518,7 +639,11 @@ fun CurrencySettingsScreen(
 
                         HorizontalDivider()
 
-                        CurrencyCatalog.currencies.filter { it.code != "CNY" }.forEach { info ->
+                        Text(
+                            text = "外币对人民币参考牌价（显示 ${filteredForeignCurrencies.size} 项）",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        filteredForeignCurrencies.forEach { info ->
                             val rate = exchangeRates.ratesToCny[info.code] ?: info.defaultRateToCny
                             Row(
                                 modifier = Modifier
@@ -553,9 +678,13 @@ fun ManualImportScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val importState by viewModel.importUiState.collectAsStateWithLifecycle()
+    val aiConfig by viewModel.aiConfigState.collectAsStateWithLifecycle()
     var pastedText by remember { mutableStateOf("") }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
+    var useRuleMatching by rememberSaveable { mutableStateOf(true) }
+    var useAiUnderstanding by rememberSaveable { mutableStateOf(false) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -569,7 +698,13 @@ fun ManualImportScreen(
             val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: ByteArray(0)
             selectedFileName = fileName
-            viewModel.previewManualImportBytes(bytes, fileName)
+            viewModel.previewManualImportBytes(
+                bytes = bytes,
+                fileNameHint = fileName,
+                context = context,
+                useRuleMatching = useRuleMatching,
+                useAiUnderstanding = useAiUnderstanding
+            )
         }.onFailure {
             onShowMessage("读取文件失败：${it.localizedMessage ?: "无法打开文件"}")
         }
@@ -583,6 +718,70 @@ fun ManualImportScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            item(key = "import_options_card") {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("导入解析增强选项", style = MaterialTheme.typography.titleMedium)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("启用规则匹配", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = "套用自定义关键词、忽略规则与商户/分类/渠道覆写规则",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = useRuleMatching,
+                                onCheckedChange = { useRuleMatching = it },
+                                modifier = Modifier.testTag("import_toggle_rule_matching")
+                            )
+                        }
+                        HorizontalDivider()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("使用 AI 理解", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                val aiHint = when (aiConfig.providerMode) {
+                                    AiProviderMode.DISABLED -> "当前 AI理解未启用，开启后请先在「设置 -> AI理解」配置本地模型或在线 API"
+                                    AiProviderMode.LOCAL_SMALL_MODEL -> "将使用已配置的本地开源小模型辅助识别分类与商户"
+                                    AiProviderMode.ONLINE_API -> "将使用在线 API (${aiConfig.apiModelName.ifBlank { "已配置接口" }}) 增强理解复杂文本与商品描述"
+                                }
+                                Text(
+                                    text = aiHint,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = useAiUnderstanding,
+                                onCheckedChange = { checked ->
+                                    useAiUnderstanding = checked
+                                    if (checked && aiConfig.providerMode == AiProviderMode.DISABLED) {
+                                        onShowMessage("提示：AI理解当前未开启，请先前往「设置 -> AI理解」启用")
+                                    }
+                                },
+                                modifier = Modifier.testTag("import_toggle_ai_understanding")
+                            )
+                        }
+                    }
+                }
+            }
+
             item(key = "import_file_card") {
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -593,13 +792,14 @@ fun ManualImportScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("从文件导入", style = MaterialTheme.typography.titleMedium)
+                        Text("从文档导入", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "支持导入 XLSX 表格、微信/支付宝导出的 CSV、以及备份 JSON 文件（自动跳过前置说明并识别表头）。",
+                            text = "完整支持微信/支付宝标准 11 列表头（交易时间、交易类型、交易对方、商品、收/支、金额、支付方式、当前状态、交易单号、商户单号、备注）的 XLSX / CSV / JSON 账单文件。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Button(
+                            enabled = importState !is ImportUiState.Parsing,
                             onClick = {
                                 filePickerLauncher.launch(
                                     arrayOf(
@@ -637,12 +837,34 @@ fun ManualImportScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("粘贴文本批量导入", style = MaterialTheme.typography.titleMedium)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("从剪贴板或文本导入", style = MaterialTheme.typography.titleMedium)
+                            TextButton(
+                                onClick = {
+                                    val clipText = clipboardManager.getText()?.text?.trim().orEmpty()
+                                    if (clipText.isBlank()) {
+                                        onShowMessage("剪贴板中没有可读取的文本内容")
+                                    } else {
+                                        pastedText = clipText
+                                        onShowMessage("已读取剪贴板内容（${clipText.length} 字符）")
+                                    }
+                                },
+                                modifier = Modifier.testTag("read_clipboard_import_button")
+                            ) {
+                                Icon(AppIcons.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("读取剪贴板")
+                            }
+                        }
                         OutlinedTextField(
                             value = pastedText,
                             onValueChange = { pastedText = it },
                             label = { Text("粘贴多行账单、银行短信、CSV 或 JSON") },
-                            placeholder = { Text("例如：\n星巴克 42.00\nUSD 15.00 OpenAI\n【招商银行】您账户8812消费人民币128.00元。") },
+                            placeholder = { Text("例如：\n星巴克 42.00\nHKD 68.50 大家乐\n【招商银行】您账户8812消费人民币128.00元。") },
                             minLines = 4,
                             maxLines = 8,
                             modifier = Modifier
@@ -650,7 +872,16 @@ fun ManualImportScreen(
                                 .testTag("import_paste_input")
                         )
                         OutlinedButton(
-                            onClick = { viewModel.previewManualImport(pastedText, null) },
+                            enabled = importState !is ImportUiState.Parsing,
+                            onClick = {
+                                viewModel.previewManualImport(
+                                    rawContent = pastedText,
+                                    fileNameHint = null,
+                                    context = context,
+                                    useRuleMatching = useRuleMatching,
+                                    useAiUnderstanding = useAiUnderstanding
+                                )
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .minimumInteractiveComponentSize()
@@ -664,6 +895,26 @@ fun ManualImportScreen(
 
             when (val state = importState) {
                 is ImportUiState.Idle -> Unit
+                is ImportUiState.Parsing -> {
+                    item(key = "import_parsing") {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Text(state.message, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
                 is ImportUiState.Error -> {
                     item(key = "import_error") {
                         Surface(
@@ -729,7 +980,7 @@ fun ManualImportScreen(
                             }
                         }
                     }
-                    items(preview.transactions.take(12), key = { it.id }) { tx ->
+                    items(preview.transactions.take(15), key = { it.id }) { tx ->
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
                             shape = RoundedCornerShape(12.dp),
@@ -742,10 +993,22 @@ fun ManualImportScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(tx.merchant, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                    val extraMeta = listOfNotNull(
+                                        tx.productName?.takeIf { it != tx.merchant },
+                                        tx.tradeType,
+                                        tx.tradeStatus
+                                    ).joinToString(" · ")
+                                    if (extraMeta.isNotBlank()) {
+                                        Text(
+                                            text = extraMeta,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                     Text(
-                                        text = "${tx.category} · ${tx.channel} · ${tx.currencyCode}",
+                                        text = "${tx.category} · ${tx.channel} · ${tx.currencyCode} · ${formatDateTimeFull(tx.occurredAtMillis)}",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -763,7 +1026,6 @@ fun ManualImportScreen(
         }
     }
 }
-
 
 @Composable
 fun AppearanceSettingsScreen(
@@ -1954,50 +2216,31 @@ fun AppearanceInteractionSettingsScreen(
 
                         HorizontalDivider()
 
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("删除后提示横栏「仅手动关闭」", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                    Text(
-                                        text = "默认开启：删除账单后的底部撤销横栏不会自动消失，直到点击「撤销」、关闭按钮或左右滑关",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Switch(
-                                    checked = appearance.deleteUndoDuration == DeleteUndoDuration.MANUAL_ONLY,
-                                    onCheckedChange = { manualOnly ->
-                                        val nextDur = if (manualOnly) {
-                                            DeleteUndoDuration.MANUAL_ONLY
-                                        } else {
-                                            DeleteUndoDuration.STANDARD
-                                        }
-                                        viewModel.saveAppearanceSettings(appearance.copy(deleteUndoDuration = nextDur))
-                                    },
-                                    modifier = Modifier.testTag("toggle_delete_undo_manual_only")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("删除后提示横栏「仅手动关闭」", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = "默认开启，删除账单后的撤销横栏不会自动消失；关闭后将自动跟随上方「全局提示型底部横栏停留时间」（当前全局：${appearance.globalSnackbarDuration.label}）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-
-                            Text("删除后提示横栏停留时间选项", style = MaterialTheme.typography.labelLarge)
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                DeleteUndoDuration.entries.forEach { dur ->
-                                    FilterChip(
-                                        selected = appearance.deleteUndoDuration == dur,
-                                        onClick = {
-                                            viewModel.saveAppearanceSettings(appearance.copy(deleteUndoDuration = dur))
-                                        },
-                                        label = { Text(dur.label) },
-                                        modifier = Modifier.testTag("delete_undo_duration_${dur.name}")
-                                    )
-                                }
-                            }
+                            Switch(
+                                checked = appearance.deleteUndoDuration == DeleteUndoDuration.MANUAL_ONLY,
+                                onCheckedChange = { manualOnly ->
+                                    val nextDur = if (manualOnly) {
+                                        DeleteUndoDuration.MANUAL_ONLY
+                                    } else {
+                                        DeleteUndoDuration.STANDARD
+                                    }
+                                    viewModel.saveAppearanceSettings(appearance.copy(deleteUndoDuration = nextDur))
+                                },
+                                modifier = Modifier.testTag("toggle_delete_undo_manual_only")
+                            )
                         }
                     }
                 }

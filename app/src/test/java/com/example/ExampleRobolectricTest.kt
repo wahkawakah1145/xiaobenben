@@ -808,4 +808,66 @@ class ExampleRobolectricTest {
     assertEquals(192, cropped.width)
     assertEquals(192, cropped.height)
   }
+
+  @Test
+  fun `currency catalog supports abbreviation chinese alias search and expanded currencies`() {
+    val byAbbr = com.example.model.CurrencyCatalog.search("hkd")
+    org.junit.Assert.assertTrue(byAbbr.any { it.code == "HKD" })
+    val byZhAlias = com.example.model.CurrencyCatalog.search("港元")
+    org.junit.Assert.assertTrue(byZhAlias.any { it.code == "HKD" })
+    val byThai = com.example.model.CurrencyCatalog.search("泰铢")
+    org.junit.Assert.assertTrue(byThai.any { it.code == "THB" })
+    org.junit.Assert.assertTrue(com.example.model.CurrencyCatalog.currencies.size >= 30)
+  }
+
+  @Test
+  fun `exchange rate parser supports multiple json schemas and non-cny cross conversion`() {
+    val jsdelivrJson = """{"date":"2026-11-21","cny":{"usd":0.138,"hkd":1.08,"thb":4.8}}"""
+    val parsedJsDelivr = com.example.data.CurrencyExchangeManager.parseRatesPayload(jsdelivrJson, "Currency-API")
+    org.junit.Assert.assertNotNull(parsedJsDelivr)
+    org.junit.Assert.assertEquals(1.0 / 0.138, parsedJsDelivr!!.ratesToCny["USD"]!!, 0.01)
+    org.junit.Assert.assertEquals(1.0 / 4.8, parsedJsDelivr.ratesToCny["THB"]!!, 0.01)
+
+    val usdBaseJson = """{"base":"USD","date":"2026-11-21","rates":{"CNY":7.2,"HKD":7.8,"EUR":0.92}}"""
+    val parsedUsdBase = com.example.data.CurrencyExchangeManager.parseRatesPayload(usdBaseJson, "Custom")
+    org.junit.Assert.assertNotNull(parsedUsdBase)
+    org.junit.Assert.assertEquals(7.2 / 7.8, parsedUsdBase!!.ratesToCny["HKD"]!!, 0.01)
+    org.junit.Assert.assertEquals(7.2 / 0.92, parsedUsdBase.ratesToCny["EUR"]!!, 0.01)
+  }
+
+  @Test
+  fun `github update manager applies domestic mirror prefix to apk download url`() {
+    val sampleJson = """
+      {
+        "tag_name": "v1.1.4.518",
+        "name": "小本本 v1.1.4.518",
+        "body": "mirror test",
+        "html_url": "https://github.com/wahkawakah1145/xiaobenben/releases/tag/v1.1.4.518",
+        "assets": [
+          {
+            "name": "xiaobenben-v1.1.4.518-arm64-v8a.apk",
+            "size": 4123456,
+            "browser_download_url": "https://github.com/wahkawakah1145/xiaobenben/releases/download/v1.1.4.518/xiaobenben-v1.1.4.518-arm64-v8a.apk"
+          }
+        ]
+      }
+    """.trimIndent()
+    val parsed = com.example.data.GitHubReleaseUpdateManager.parseLatestReleaseJson(
+      jsonText = sampleJson,
+      repoPath = "wahkawakah1145/xiaobenben",
+      currentVersionName = "1.1.4.516",
+      mirror = com.example.model.GitHubUpdateMirror.GITHUB_AKAMS
+    )
+    org.junit.Assert.assertTrue(parsed.hasNewerVersion)
+    org.junit.Assert.assertTrue(parsed.apkDownloadUrl!!.startsWith("https://github.akams.cn/https://github.com/"))
+  }
+
+  @Test
+  fun `parseDateTimeInputMillis supports both second and minute precision`() {
+    val withSec = com.example.ui.components.parseDateTimeInputMillis("2026-11-21", "09:15:42")
+    val withoutSec = com.example.ui.components.parseDateTimeInputMillis("2026-11-21", "09:15")
+    org.junit.Assert.assertNotNull(withSec)
+    org.junit.Assert.assertNotNull(withoutSec)
+    assertEquals(42_000L, withSec!! - withoutSec!!)
+  }
 }

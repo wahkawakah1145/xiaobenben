@@ -274,4 +274,71 @@ class ImportAndDeduplicationTest {
         }
         return baos.toByteArray()
     }
+
+    @Test
+    fun parsesStandardElevenColumnWechatStyleCsvAndMatchesExtendedSearch() {
+        val csv = """
+            微信支付账单明细
+            交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注
+            2026-11-21 12:34:56,商户消费,大家乐茶餐厅,焗猪扒饭套餐,支出,HK$68.50,招商银行信用卡(8812),支付成功,4200001999202611210001,MCH20261121888,香港出差午餐
+        """.trimIndent()
+        val preview = ManualImportManager.parseImportedContent(csv, "wechat_bill.csv").getOrThrow()
+        assertEquals(1, preview.transactions.size)
+        val tx = preview.transactions.first()
+        assertEquals("大家乐茶餐厅", tx.merchant)
+        assertEquals("焗猪扒饭套餐", tx.productName)
+        assertEquals("商户消费", tx.tradeType)
+        assertEquals("支付成功", tx.tradeStatus)
+        assertEquals("4200001999202611210001", tx.transactionNo)
+        assertEquals("MCH20261121888", tx.merchantOrderNo)
+        assertEquals("香港出差午餐", tx.note)
+        assertEquals("HKD", tx.currencyCode)
+        assertEquals(6850L, tx.amountCents)
+        assertTrue(tx.matchesSearchQuery("hkd"))
+        assertTrue(tx.matchesSearchQuery("港元"))
+        assertTrue(tx.matchesSearchQuery("港币"))
+        assertTrue(tx.matchesSearchQuery("焗猪扒饭"))
+        assertTrue(tx.matchesSearchQuery("4200001999202611210001"))
+        assertTrue(tx.matchesSearchQuery("MCH20261121888"))
+        assertTrue(tx.matchesSearchQuery("支付成功"))
+    }
+
+    @Test
+    fun deduplicatorSupportsSecondPrecisionWindow() {
+        val base = 1_763_700_000_000L
+        val tx1 = LedgerTransaction(
+            id = "sec_1",
+            amountCents = 2500L,
+            merchant = "美团外卖",
+            channel = "微信支付",
+            occurredAtMillis = base
+        )
+        val tx2 = LedgerTransaction(
+            id = "sec_2",
+            amountCents = 2500L,
+            merchant = "美团外卖",
+            channel = "招商银行",
+            occurredAtMillis = base + 8_000L
+        )
+        val tx3 = LedgerTransaction(
+            id = "sec_3",
+            amountCents = 2500L,
+            merchant = "美团外卖",
+            channel = "支付宝",
+            occurredAtMillis = base + 25_000L
+        )
+        val tenSecGroups = SmartDeduplicator.findDuplicateGroups(
+            transactions = listOf(tx1, tx2, tx3),
+            maxWindowMillis = 10_000L
+        )
+        assertEquals(1, tenSecGroups.size)
+        assertEquals(2, tenSecGroups.first().items.size)
+
+        val thirtySecGroups = SmartDeduplicator.findDuplicateGroups(
+            transactions = listOf(tx1, tx2, tx3),
+            maxWindowMillis = 30_000L
+        )
+        assertEquals(1, thirtySecGroups.size)
+        assertEquals(3, thirtySecGroups.first().items.size)
+    }
 }

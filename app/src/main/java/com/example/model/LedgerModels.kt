@@ -46,23 +46,48 @@ data class CurrencyInfo(
     val symbol: String,
     val chineseName: String,
     val defaultRateToCny: Double,
-    val zeroDecimalDisplay: Boolean = false
+    val zeroDecimalDisplay: Boolean = false,
+    val aliases: List<String> = emptyList()
 )
 
 object CurrencyCatalog {
     val currencies = listOf(
-        CurrencyInfo("CNY", "¥", "人民币", 1.0),
-        CurrencyInfo("USD", "$", "美元", 7.24),
-        CurrencyInfo("HKD", "HK$", "港币", 0.93),
-        CurrencyInfo("EUR", "€", "欧元", 7.82),
-        CurrencyInfo("JPY", "JP¥", "日元", 0.047, zeroDecimalDisplay = true),
-        CurrencyInfo("GBP", "£", "英镑", 9.21),
-        CurrencyInfo("SGD", "S$", "新加坡元", 5.42),
-        CurrencyInfo("KRW", "₩", "韩元", 0.0052, zeroDecimalDisplay = true),
-        CurrencyInfo("AUD", "A$", "澳元", 4.72),
-        CurrencyInfo("CAD", "C$", "加元", 5.18),
-        CurrencyInfo("MOP", "MOP$", "澳门元", 0.90),
-        CurrencyInfo("TWD", "NT$", "新台币", 0.225)
+        CurrencyInfo("CNY", "¥", "人民币", 1.0, aliases = listOf("RMB", "元", "中国元", "人名币")),
+        CurrencyInfo("USD", "$", "美元", 7.24, aliases = listOf("US$", "美金", "美刀", "美圆")),
+        CurrencyInfo("HKD", "HK$", "港币", 0.93, aliases = listOf("港元", "香港元", "港纸")),
+        CurrencyInfo("EUR", "€", "欧元", 7.82, aliases = listOf("欧圆")),
+        CurrencyInfo("JPY", "JP¥", "日元", 0.047, zeroDecimalDisplay = true, aliases = listOf("日圆", "日币", "円")),
+        CurrencyInfo("GBP", "£", "英镑", 9.21, aliases = listOf("镑", "英国镑")),
+        CurrencyInfo("SGD", "S$", "新加坡元", 5.42, aliases = listOf("新币", "坡币", "星币")),
+        CurrencyInfo("KRW", "₩", "韩元", 0.0052, zeroDecimalDisplay = true, aliases = listOf("韩币", "韩国元")),
+        CurrencyInfo("AUD", "A$", "澳元", 4.72, aliases = listOf("澳币", "澳大利亚元")),
+        CurrencyInfo("CAD", "C$", "加元", 5.18, aliases = listOf("加币", "加拿大元")),
+        CurrencyInfo("MOP", "MOP$", "澳门元", 0.90, aliases = listOf("澳门币", "葡币")),
+        CurrencyInfo("TWD", "NT$", "新台币", 0.225, aliases = listOf("台币", "台湾元")),
+        CurrencyInfo("CHF", "CHF", "瑞士法郎", 8.20, aliases = listOf("瑞郎", "法郎")),
+        CurrencyInfo("NZD", "NZ$", "新西兰元", 4.30, aliases = listOf("纽元", "纽币")),
+        CurrencyInfo("THB", "฿", "泰铢", 0.21, aliases = listOf("泰国铢", "铢")),
+        CurrencyInfo("MYR", "RM", "马来西亚林吉特", 1.63, aliases = listOf("马币", "林吉特", "令吉")),
+        CurrencyInfo("IDR", "Rp", "印尼盾", 0.00046, zeroDecimalDisplay = true, aliases = listOf("印尼卢比")),
+        CurrencyInfo("VND", "₫", "越南盾", 0.00028, zeroDecimalDisplay = true, aliases = listOf("越盾")),
+        CurrencyInfo("PHP", "₱", "菲律宾比索", 0.125, aliases = listOf("菲比索", "比索")),
+        CurrencyInfo("INR", "₹", "印度卢比", 0.086, aliases = listOf("卢比")),
+        CurrencyInfo("RUB", "₽", "俄罗斯卢布", 0.075, aliases = listOf("卢布")),
+        CurrencyInfo("BRL", "R$", "巴西雷亚尔", 1.25, aliases = listOf("雷亚尔")),
+        CurrencyInfo("MXN", "MX$", "墨西哥比索", 0.36, aliases = listOf("墨比索")),
+        CurrencyInfo("ZAR", "R", "南非兰特", 0.40, aliases = listOf("兰特")),
+        CurrencyInfo("TRY", "₺", "土耳其里拉", 0.21, aliases = listOf("里拉")),
+        CurrencyInfo("SEK", "kr", "瑞典克朗", 0.67, aliases = listOf("瑞典币", "克朗")),
+        CurrencyInfo("NOK", "kr", "挪威克朗", 0.66, aliases = listOf("挪威币", "克朗")),
+        CurrencyInfo("DKK", "kr", "丹麦克朗", 1.05, aliases = listOf("丹麦币", "克朗")),
+        CurrencyInfo("PLN", "zł", "波兰兹罗提", 1.80, aliases = listOf("兹罗提")),
+        CurrencyInfo("CZK", "Kč", "捷克克朗", 0.31, aliases = listOf("捷克币")),
+        CurrencyInfo("HUF", "Ft", "匈牙利福林", 0.019, zeroDecimalDisplay = true, aliases = listOf("福林")),
+        CurrencyInfo("AED", "AED", "阿联酋迪拉姆", 1.97, aliases = listOf("迪拉姆")),
+        CurrencyInfo("SAR", "SAR", "沙特里亚尔", 1.93, aliases = listOf("里亚尔")),
+        CurrencyInfo("QAR", "QAR", "卡塔尔里亚尔", 1.99, aliases = listOf("卡塔尔币")),
+        CurrencyInfo("ILS", "₪", "以色列新谢克尔", 1.95, aliases = listOf("谢克尔")),
+        CurrencyInfo("ARS", "ARS$", "阿根廷比索", 0.0072, aliases = listOf("阿比索"))
     )
 
     val byCode: Map<String, CurrencyInfo> = currencies.associateBy { it.code }
@@ -70,7 +95,106 @@ object CurrencyCatalog {
     val defaultRatesToCny: Map<String, Double> = currencies.associate { it.code to it.defaultRateToCny }
 
     fun resolve(code: String?): CurrencyInfo =
-        byCode[code?.uppercase()] ?: currencies.first()
+        byCode[code?.trim()?.uppercase()] ?: currencies.first()
+
+    fun matchesQuery(info: CurrencyInfo, rawQuery: String): Boolean {
+        val q = rawQuery.trim()
+        if (q.isEmpty()) return true
+        return info.code.contains(q, ignoreCase = true) ||
+            info.symbol.contains(q, ignoreCase = true) ||
+            info.chineseName.contains(q, ignoreCase = true) ||
+            info.aliases.any { it.contains(q, ignoreCase = true) }
+    }
+
+    fun search(rawQuery: String): List<CurrencyInfo> {
+        val q = rawQuery.trim()
+        if (q.isEmpty()) return currencies
+        return currencies.filter { matchesQuery(it, q) }
+    }
+
+    fun findByToken(rawToken: String?): CurrencyInfo? {
+        val t = rawToken?.trim().orEmpty()
+        if (t.isEmpty() || t == "/") return null
+        val upper = t.uppercase()
+        byCode[upper]?.let { return it }
+        return currencies.firstOrNull { info ->
+            info.chineseName.equals(t, ignoreCase = true) ||
+                info.symbol.equals(t, ignoreCase = true) ||
+                info.aliases.any { it.equals(t, ignoreCase = true) }
+        } ?: currencies.firstOrNull { info ->
+            t.contains(info.chineseName, ignoreCase = true) ||
+                info.aliases.any { alias -> alias.length >= 2 && t.contains(alias, ignoreCase = true) }
+        }
+    }
+}
+
+enum class ExchangeRateSource(
+    val label: String,
+    val endpointUrl: String,
+    val description: String
+) {
+    EXCHANGE_RATE_API(
+        label = "ExchangeRate-API",
+        endpointUrl = "https://open.er-api.com/v6/latest/CNY",
+        description = "免 Key · 稳定覆盖 166 种主流货币"
+    ),
+    CURRENCY_API_JSDELIVR(
+        label = "Currency-API (jsDelivr)",
+        endpointUrl = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/cny.json",
+        description = "免 Key · 300+ 货币 · CDN 节点国内访问更稳"
+    ),
+    CURRENCY_API_PAGES(
+        label = "Currency-API (Cloudflare)",
+        endpointUrl = "https://latest.currency-api.pages.dev/v1/currencies/cny.json",
+        description = "免 Key · Cloudflare Pages 备用节点"
+    ),
+    FRANKFURTER(
+        label = "Frankfurter (欧洲央行)",
+        endpointUrl = "https://api.frankfurter.dev/v1/latest?base=CNY",
+        description = "开源免费 · 欧洲央行官方参考汇率"
+    ),
+    CUSTOM(
+        label = "自定义链接",
+        endpointUrl = "",
+        description = "填入返回 JSON 汇率表的自定义接口 URL"
+    );
+
+    companion object {
+        fun fromRaw(raw: String?): ExchangeRateSource =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: EXCHANGE_RATE_API
+    }
+}
+
+enum class GitHubUpdateMirror(
+    val label: String,
+    val proxyPrefix: String,
+    val description: String
+) {
+    DIRECT(
+        label = "GitHub 官方直连",
+        proxyPrefix = "",
+        description = "直接连接 api.github.com 与 github.com"
+    ),
+    GITHUB_AKAMS(
+        label = "国内镜像 · akams.cn",
+        proxyPrefix = "https://github.akams.cn/",
+        description = "国内免费公益镜像，支持检查更新与 APK 加速下载"
+    ),
+    GH_PROXY_COM(
+        label = "国内镜像 · gh-proxy.com",
+        proxyPrefix = "https://gh-proxy.com/",
+        description = "国内免费加速节点，支持 Release 与安装包下载加速"
+    ),
+    GHPROXY_NET(
+        label = "国内镜像 · ghproxy.net",
+        proxyPrefix = "https://ghproxy.net/",
+        description = "免费镜像节点，适合大文件 APK 加速下载"
+    );
+
+    companion object {
+        fun fromRaw(raw: String?): GitHubUpdateMirror =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: DIRECT
+    }
 }
 
 data class ExchangeRateState(
@@ -447,6 +571,11 @@ data class LedgerTransaction(
     val parseMethod: String = ParseMethod.MANUAL.name,
     val rawNotification: String? = null,
     val note: String? = null,
+    val tradeType: String? = null,
+    val productName: String? = null,
+    val tradeStatus: String? = null,
+    val transactionNo: String? = null,
+    val merchantOrderNo: String? = null,
     val occurredAtMillis: Long = System.currentTimeMillis(),
     val confirmed: Boolean = true,
     val recordedBaseCurrencyCode: String = "CNY",
@@ -458,6 +587,30 @@ data class LedgerTransaction(
     val txSourceApp: SourceApp get() = SourceApp.fromRaw(sourceApp)
     val txParseMethod: ParseMethod get() = ParseMethod.fromRaw(parseMethod)
     val currencyInfo: CurrencyInfo get() = CurrencyCatalog.resolve(currencyCode)
+
+    fun matchesSearchQuery(rawQuery: String): Boolean {
+        val q = rawQuery.trim()
+        if (q.isEmpty()) return true
+        val amountStr = "%.2f".format(java.util.Locale.US, amountCents / 100.0)
+        val amountCompact = if (amountCents % 100L == 0L) (amountCents / 100L).toString() else amountStr
+        return merchant.contains(q, ignoreCase = true) ||
+            category.contains(q, ignoreCase = true) ||
+            channel.contains(q, ignoreCase = true) ||
+            txType.label.contains(q, ignoreCase = true) ||
+            txSourceApp.label.contains(q, ignoreCase = true) ||
+            txParseMethod.label.contains(q, ignoreCase = true) ||
+            CurrencyCatalog.matchesQuery(currencyInfo, q) ||
+            amountStr.contains(q, ignoreCase = true) ||
+            amountCompact.contains(q, ignoreCase = true) ||
+            (cardLastFour?.contains(q, ignoreCase = true) == true) ||
+            (tradeType?.contains(q, ignoreCase = true) == true) ||
+            (productName?.contains(q, ignoreCase = true) == true) ||
+            (tradeStatus?.contains(q, ignoreCase = true) == true) ||
+            (transactionNo?.contains(q, ignoreCase = true) == true) ||
+            (merchantOrderNo?.contains(q, ignoreCase = true) == true) ||
+            (note?.contains(q, ignoreCase = true) == true) ||
+            (rawNotification?.contains(q, ignoreCase = true) == true)
+    }
 }
 
 data class CustomParsingRule(
@@ -515,7 +668,10 @@ data class BudgetSettings(
     val backupReminderIntervalHours: Int = 168,
     val lastLocalBackupMillis: Long = 0L,
     val lastBackupReminderMillis: Long = 0L,
-    val exchangeRateUpdateFrequency: String = ExchangeRateAutoUpdateFrequency.MANUAL.name
+    val exchangeRateUpdateFrequency: String = ExchangeRateAutoUpdateFrequency.MANUAL.name,
+    val exchangeRateSource: String = ExchangeRateSource.EXCHANGE_RATE_API.name,
+    val customExchangeRateUrl: String = "",
+    val githubUpdateMirror: String = GitHubUpdateMirror.DIRECT.name
 )
 
 data class WebDavConfig(

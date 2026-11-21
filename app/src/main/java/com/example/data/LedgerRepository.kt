@@ -242,6 +242,11 @@ class LedgerRepository(
                 cardLastFour = tx.cardLastFour?.trim()?.takeIf { it.isNotEmpty() }?.take(8),
                 rawNotification = compactText(tx.rawNotification, MAX_RAW_NOTIFICATION_LENGTH),
                 note = compactText(tx.note, MAX_NOTE_LENGTH),
+                tradeType = compactText(tx.tradeType, 60),
+                productName = compactText(tx.productName, 120),
+                tradeStatus = compactText(tx.tradeStatus, 40),
+                transactionNo = compactText(tx.transactionNo, 80),
+                merchantOrderNo = compactText(tx.merchantOrderNo, 80),
                 occurredAtMillis = tx.occurredAtMillis.coerceAtLeast(1L),
                 recordedBaseCurrencyCode = baseCode,
                 recordedRateToBase = snapshotRate,
@@ -269,7 +274,13 @@ class LedgerRepository(
         note: String?,
         occurredAtMillis: Long,
         confirmed: Boolean = true,
-        learnFormatTemplate: Boolean = true
+        learnFormatTemplate: Boolean = true,
+        tradeType: String? = null,
+        productName: String? = null,
+        tradeStatus: String? = null,
+        transactionNo: String? = null,
+        merchantOrderNo: String? = null,
+        updateExtendedFields: Boolean = false
     ): Result<Boolean> {
         return try {
             require(txId.isNotBlank()) { "账单 ID 不能为空" }
@@ -289,6 +300,11 @@ class LedgerRepository(
                 channel = cleanChannel,
                 cardLastFour = cardLastFour?.trim()?.takeIf { it.isNotEmpty() }?.take(8),
                 note = compactText(note, MAX_NOTE_LENGTH),
+                tradeType = if (updateExtendedFields) compactText(tradeType, 60) else existing.tradeType,
+                productName = if (updateExtendedFields) compactText(productName, 120) else existing.productName,
+                tradeStatus = if (updateExtendedFields) compactText(tradeStatus, 40) else existing.tradeStatus,
+                transactionNo = if (updateExtendedFields) compactText(transactionNo, 80) else existing.transactionNo,
+                merchantOrderNo = if (updateExtendedFields) compactText(merchantOrderNo, 80) else existing.merchantOrderNo,
                 occurredAtMillis = occurredAtMillis.coerceAtLeast(1L),
                 confirmed = confirmed,
                 updatedAtMillis = now

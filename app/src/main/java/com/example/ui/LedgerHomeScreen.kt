@@ -310,12 +310,7 @@ fun LedgerHomeScreen(
                     else -> true
                 }
                 val q = searchQuery.trim()
-                val matchesSearch = q.isEmpty() ||
-                    tx.merchant.contains(q, ignoreCase = true) ||
-                    tx.category.contains(q, ignoreCase = true) ||
-                    tx.channel.contains(q, ignoreCase = true) ||
-                    tx.currencyCode.contains(q, ignoreCase = true) ||
-                    (tx.note?.contains(q, ignoreCase = true) == true)
+                val matchesSearch = tx.matchesSearchQuery(q)
                 val matchesStart = customStartMillis == null || tx.occurredAtMillis >= customStartMillis
                 val matchesEnd = customEndMillis == null || tx.occurredAtMillis <= customEndMillis
                 val matchesAmount = if (minAmountCents != null || maxAmountCents != null) {
@@ -477,7 +472,7 @@ fun LedgerHomeScreen(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("搜索商户、银行、币种或备注（长按条目可批量编辑）") },
+                        placeholder = { Text("搜索对方、商品、单号、币种(如hkd/港元)或备注") },
                         leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
@@ -936,10 +931,22 @@ fun LedgerHomeScreen(
     }
 
     if (showCreateDialog) {
+        var extTradeType: String? = null
+        var extProductName: String? = null
+        var extTradeStatus: String? = null
+        var extTxNo: String? = null
+        var extMerchantOrderNo: String? = null
         TransactionEditorDialog(
             initialTransaction = null,
             defaultCurrencyCode = baseCurrency,
             onDismiss = { showCreateDialog = false },
+            onSaveExtended = { tt, pn, ts, tno, mno ->
+                extTradeType = tt
+                extProductName = pn
+                extTradeStatus = ts
+                extTxNo = tno
+                extMerchantOrderNo = mno
+            },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.addManualTransaction(
                     amountCents = amountCents,
@@ -950,7 +957,12 @@ fun LedgerHomeScreen(
                     channel = channel,
                     cardLastFour = tail,
                     note = note,
-                    occurredAtMillis = occurredAtMillis
+                    occurredAtMillis = occurredAtMillis,
+                    tradeType = extTradeType,
+                    productName = extProductName,
+                    tradeStatus = extTradeStatus,
+                    transactionNo = extTxNo,
+                    merchantOrderNo = extMerchantOrderNo
                 )
                 showCreateDialog = false
             }
@@ -958,10 +970,22 @@ fun LedgerHomeScreen(
     }
 
     editingTransaction?.let { tx ->
+        var extTradeType: String? = tx.tradeType
+        var extProductName: String? = tx.productName
+        var extTradeStatus: String? = tx.tradeStatus
+        var extTxNo: String? = tx.transactionNo
+        var extMerchantOrderNo: String? = tx.merchantOrderNo
         TransactionEditorDialog(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
             onDismiss = { editingTransaction = null },
+            onSaveExtended = { tt, pn, ts, tno, mno ->
+                extTradeType = tt
+                extProductName = pn
+                extTradeStatus = ts
+                extTxNo = tno
+                extMerchantOrderNo = mno
+            },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
                     txId = tx.id,
@@ -974,7 +998,13 @@ fun LedgerHomeScreen(
                     cardLastFour = tail,
                     note = note,
                     occurredAtMillis = occurredAtMillis,
-                    confirmed = true
+                    confirmed = true,
+                    tradeType = extTradeType,
+                    productName = extProductName,
+                    tradeStatus = extTradeStatus,
+                    transactionNo = extTxNo,
+                    merchantOrderNo = extMerchantOrderNo,
+                    updateExtendedFields = true
                 )
                 editingTransaction = null
             }
@@ -2455,6 +2485,16 @@ private fun TransactionRowCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                val productPreview = transaction.productName?.takeIf { it.isNotBlank() && it != transaction.merchant }
+                if (productPreview != null) {
+                    Text(
+                        text = productPreview,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)

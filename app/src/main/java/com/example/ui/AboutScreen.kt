@@ -1,5 +1,9 @@
 package com.example.ui
 
+import com.example.model.GitHubUpdateMirror
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -70,10 +74,13 @@ import kotlinx.coroutines.launch
 private const val DEFAULT_GITHUB_REPO = "wahkawakah1145/xiaobenben"
 private const val AI_STUDIO_TOOL_URL = "https://aistudio.google.com/"
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AboutScreen(
     onShowMessage: (String) -> Unit,
     appIconStyleId: String = AppIconStyle.EMERALD.id,
+    selectedMirror: GitHubUpdateMirror = GitHubUpdateMirror.DIRECT,
+    onSelectMirror: (GitHubUpdateMirror) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -193,6 +200,31 @@ fun AboutScreen(
                             }
                         }
 
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "更新检查与下载源（可选国内免费 GitHub 镜像源）",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                GitHubUpdateMirror.entries.forEach { mirror ->
+                                    FilterChip(
+                                        selected = selectedMirror == mirror,
+                                        onClick = { onSelectMirror(mirror) },
+                                        label = { Text(mirror.label) },
+                                        modifier = Modifier.testTag("about_mirror_${mirror.name}")
+                                    )
+                                }
+                            }
+                            Text(
+                                text = selectedMirror.description,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
                         Button(
                             enabled = !checkingUpdate,
                             onClick = {
@@ -203,7 +235,8 @@ fun AboutScreen(
                                 scope.launch {
                                     val result = GitHubReleaseUpdateManager.checkLatestRelease(
                                         repoPath = repoPath,
-                                        currentVersionName = BuildConfig.VERSION_NAME
+                                        currentVersionName = BuildConfig.VERSION_NAME,
+                                        mirror = selectedMirror
                                     )
                                     checkingUpdate = false
                                     result
@@ -379,7 +412,7 @@ fun AboutScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "安装包：${info.apkAssetName}$sizeText",
+                                text = "通道：${info.usedMirrorLabel}\n安装包：${info.apkAssetName}$sizeText",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)

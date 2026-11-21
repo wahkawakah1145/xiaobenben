@@ -1,5 +1,6 @@
 package com.example.ui
 
+import com.example.model.GitHubUpdateMirror
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
@@ -143,6 +144,7 @@ const val ROUTE_SETTINGS = "settings"
 const val ROUTE_SETTINGS_LEDGER_MGMT = "settings/ledger_mgmt"
 const val ROUTE_SETTINGS_BOOKS = "settings/books"
 const val ROUTE_BOOK_ANALYTICS = "books/analytics"
+const val ROUTE_SETTINGS_MANUAL_IMPORT = "settings/manual_import"
 const val ROUTE_SETTINGS_BILL_BEHAVIOR = "settings/bill_behavior"
 const val ROUTE_SETTINGS_PARSER = "settings/parser"
 const val ROUTE_SETTINGS_AI = "settings/ai"
@@ -446,6 +448,7 @@ fun AppNavigation(
                     val bName = selectedAnalyticsBookId?.let { id -> books.firstOrNull { it.id == id }?.name }
                     if (bName != null) "账本分析 · $bName" else "账本分析"
                 }
+                ROUTE_SETTINGS_MANUAL_IMPORT -> "手动导入账单"
                 ROUTE_SETTINGS_BILL_BEHAVIOR -> "记账与预算"
                 ROUTE_SETTINGS_CURRENCY -> "币种与汇率"
                 ROUTE_SETTINGS_DEDUP -> "智能去重"
@@ -563,6 +566,7 @@ fun AppNavigation(
                         storageFootprint = storageFootprint,
                         booksCount = books.size,
                         onOpenBooks = { navController.navigate(ROUTE_SETTINGS_BOOKS) },
+                        onOpenManualImport = { navController.navigate(ROUTE_SETTINGS_MANUAL_IMPORT) },
                         onOpenBehaviorBudget = { navController.navigate(ROUTE_SETTINGS_BILL_BEHAVIOR) },
                         onOpenCurrencyRates = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
                         onOpenSmartDedup = { navController.navigate(ROUTE_SETTINGS_DEDUP) },
@@ -596,6 +600,10 @@ fun AppNavigation(
                         onCalendarFullScreenChange = { isAnalyticsCalendarOpen = it },
                         listState = analyticsListState
                     )
+                    ROUTE_SETTINGS_MANUAL_IMPORT -> ManualImportScreen(
+                        viewModel = viewModel,
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
+                    )
                     ROUTE_SETTINGS_BILL_BEHAVIOR -> BookkeepingBehaviorScreen(
                         settings = settings,
                         viewModel = viewModel,
@@ -623,7 +631,7 @@ fun AppNavigation(
                     ROUTE_SETTINGS_DATA_HUB -> DataHubScreen(
                         settings = settings,
                         viewModel = viewModel,
-                        initialTab = DataHubTab.IMPORT,
+                        initialTab = DataHubTab.LOCAL_BACKUP,
                         onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_LOCAL_BACKUP -> DataHubScreen(
@@ -671,6 +679,10 @@ fun AppNavigation(
                     )
                     ROUTE_SETTINGS_ABOUT -> AboutScreen(
                         appIconStyleId = appearance.appIconStyleId,
+                        selectedMirror = GitHubUpdateMirror.fromRaw(settings.githubUpdateMirror),
+                        onSelectMirror = { mirror ->
+                            viewModel.saveSettings(settings.copy(githubUpdateMirror = mirror.name))
+                        },
                         onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                 }
@@ -989,6 +1001,7 @@ fun AppNavigation(
                             listOf(
                                 ROUTE_SETTINGS_LEDGER_MGMT,
                                 ROUTE_SETTINGS_BOOKS,
+                                ROUTE_SETTINGS_MANUAL_IMPORT,
                                 ROUTE_BOOK_ANALYTICS,
                                 ROUTE_SETTINGS_BILL_BEHAVIOR,
                                 ROUTE_SETTINGS_CURRENCY,
@@ -1040,7 +1053,8 @@ fun AppNavigation(
                     deleteUndoBanner?.let { banner ->
                         DeleteUndoFloatingBar(
                             banner = banner,
-                            duration = appearance.deleteUndoDuration,
+                            manualOnly = appearance.deleteUndoDuration == DeleteUndoDuration.MANUAL_ONLY,
+                            globalDuration = appearance.globalSnackbarDuration,
                             onUndo = { viewModel.undoLastDelete() },
                             onDismiss = { viewModel.dismissDeleteUndoBanner() }
                         )
@@ -1248,17 +1262,19 @@ private fun SwipeBackContainer(
 @Composable
 private fun DeleteUndoFloatingBar(
     banner: DeleteUndoBanner,
-    duration: DeleteUndoDuration,
+    manualOnly: Boolean,
+    globalDuration: GlobalToastDuration,
     onUndo: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val offsetX = remember(banner.id) { Animatable(0f) }
     var barWidthPx by remember { mutableFloatStateOf(720f) }
+    val effectiveMillis = if (manualOnly) -1L else globalDuration.durationMillis
 
-    LaunchedEffect(banner.id, duration) {
-        if (duration.durationMillis > 0L) {
-            delay(duration.durationMillis)
+    LaunchedEffect(banner.id, effectiveMillis) {
+        if (effectiveMillis > 0L) {
+            delay(effectiveMillis)
             onDismiss()
         }
     }
@@ -1325,10 +1341,10 @@ private fun DeleteUndoFloatingBar(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = if (duration == DeleteUndoDuration.MANUAL_ONLY) {
+                    text = if (manualOnly || globalDuration == GlobalToastDuration.MANUAL_ONLY) {
                         "仅手动关闭 · 左右滑动或点击关闭"
                     } else {
-                        "${duration.label}后自动关闭 · 左右滑动可关闭"
+                        "跟随全局（${globalDuration.label}）· 左右滑动可关闭"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.68f)

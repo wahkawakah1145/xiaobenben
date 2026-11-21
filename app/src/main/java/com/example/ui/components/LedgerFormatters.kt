@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -131,7 +132,7 @@ fun formatYuan(cents: Long, showSign: Boolean = false, type: TransactionType? = 
     formatCurrency(cents, "CNY", showSign, type)
 
 fun formatTimeShort(millis: Long): String {
-    return SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(millis))
+    return SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date(millis))
 }
 
 fun formatDateHeader(
@@ -153,15 +154,15 @@ fun formatItemTimeCompact(
 ): String {
     val txCal = Calendar.getInstance().apply { timeInMillis = millis }
     val pattern = if (txCal.get(Calendar.YEAR) != nowYear) {
-        "yyyy-MM-dd HH:mm"
+        "yyyy-MM-dd HH:mm:ss"
     } else {
-        "HH:mm"
+        "HH:mm:ss"
     }
     return SimpleDateFormat(pattern, Locale.CHINA).format(Date(millis))
 }
 
 fun formatDateTimeFull(millis: Long): String {
-    return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(millis))
+    return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(Date(millis))
 }
 
 fun channelBrandColor(channel: String): Color {
@@ -424,6 +425,53 @@ fun TransactionDetailSheet(
                 }
             }
 
+            val extraFields = listOfNotNull(
+                transaction.tradeType?.takeIf { it.isNotBlank() }?.let { "交易类型" to it },
+                transaction.productName?.takeIf { it.isNotBlank() }?.let { "商品" to it },
+                transaction.tradeStatus?.takeIf { it.isNotBlank() }?.let { "当前状态" to it },
+                transaction.transactionNo?.takeIf { it.isNotBlank() }?.let { "交易单号" to it },
+                transaction.merchantOrderNo?.takeIf { it.isNotBlank() }?.let { "商户单号" to it }
+            )
+            if (extraFields.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("detail_extended_bill_fields")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "账单明细信息",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        extraFields.forEach { (label, value) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = value,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             if (!transaction.note.isNullOrBlank()) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -526,7 +574,14 @@ fun TransactionEditorDialog(
         cardLastFour: String?,
         note: String?,
         occurredAtMillis: Long
-    ) -> Unit
+    ) -> Unit,
+    onSaveExtended: ((
+        tradeType: String?,
+        productName: String?,
+        tradeStatus: String?,
+        transactionNo: String?,
+        merchantOrderNo: String?
+    ) -> Unit)? = null
 ) {
     var selectedType by remember {
         mutableStateOf(initialTransaction?.txType ?: TransactionType.EXPENSE)
@@ -547,6 +602,22 @@ fun TransactionEditorDialog(
     }
     var cardTail by remember { mutableStateOf(initialTransaction?.cardLastFour ?: "") }
     var note by remember { mutableStateOf(initialTransaction?.note ?: "") }
+    var tradeType by remember { mutableStateOf(initialTransaction?.tradeType ?: "") }
+    var productName by remember { mutableStateOf(initialTransaction?.productName ?: "") }
+    var tradeStatus by remember { mutableStateOf(initialTransaction?.tradeStatus ?: "") }
+    var transactionNo by remember { mutableStateOf(initialTransaction?.transactionNo ?: "") }
+    var merchantOrderNo by remember { mutableStateOf(initialTransaction?.merchantOrderNo ?: "") }
+    var showMoreFields by remember {
+        mutableStateOf(
+            !initialTransaction?.tradeType.isNullOrBlank() ||
+                !initialTransaction?.productName.isNullOrBlank() ||
+                !initialTransaction?.tradeStatus.isNullOrBlank() ||
+                !initialTransaction?.transactionNo.isNullOrBlank() ||
+                !initialTransaction?.merchantOrderNo.isNullOrBlank()
+        )
+    }
+    var currencyQuery by remember { mutableStateOf("") }
+    val filteredCurrencies = remember(currencyQuery) { CurrencyCatalog.search(currencyQuery) }
     val initialMillis = remember(initialTransaction) {
         initialTransaction?.occurredAtMillis ?: System.currentTimeMillis()
     }
@@ -554,7 +625,7 @@ fun TransactionEditorDialog(
         mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(initialMillis)))
     }
     var timeText by remember(initialMillis) {
-        mutableStateOf(SimpleDateFormat("HH:mm", Locale.US).format(Date(initialMillis)))
+        mutableStateOf(SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(initialMillis)))
     }
     var showDatePicker by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf<String?>(null) }
@@ -660,13 +731,23 @@ fun TransactionEditorDialog(
                 }
 
                 Text("币种", style = MaterialTheme.typography.labelMedium)
+                OutlinedTextField(
+                    value = currencyQuery,
+                    onValueChange = { currencyQuery = it },
+                    placeholder = { Text("搜索币种，如 hkd / 港元 / 泰铢") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("editor_currency_search")
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    CurrencyCatalog.currencies.forEach { c ->
+                    filteredCurrencies.forEach { c ->
                         FilterChip(
                             selected = selectedCurrency.equals(c.code, ignoreCase = true),
                             onClick = { selectedCurrency = c.code },
@@ -752,7 +833,53 @@ fun TransactionEditorDialog(
                     )
                 }
 
-                Text("记账时间（可修正通知延迟/导入偏差）", style = MaterialTheme.typography.labelMedium)
+                TextButton(
+                    onClick = { showMoreFields = !showMoreFields },
+                    modifier = Modifier.testTag("editor_toggle_extended_fields")
+                ) {
+                    Text(if (showMoreFields) "收起更多账单信息 ▲" else "展开更多账单信息（商品/类型/状态/单号）▼")
+                }
+                if (showMoreFields) {
+                    OutlinedTextField(
+                        value = productName,
+                        onValueChange = { productName = it.take(120) },
+                        label = { Text("商品 / 说明 (可选)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = tradeType,
+                            onValueChange = { tradeType = it.take(60) },
+                            label = { Text("交易类型 (可选)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = tradeStatus,
+                            onValueChange = { tradeStatus = it.take(40) },
+                            label = { Text("当前状态 (可选)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = transactionNo,
+                        onValueChange = { transactionNo = it.take(80) },
+                        label = { Text("交易单号 (可选)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = merchantOrderNo,
+                        onValueChange = { merchantOrderNo = it.take(80) },
+                        label = { Text("商户单号 (可选)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Text("记账时间（精确到秒，可修正通知延迟/导入偏差）", style = MaterialTheme.typography.labelMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = dateText,
@@ -765,8 +892,8 @@ fun TransactionEditorDialog(
                     )
                     OutlinedTextField(
                         value = timeText,
-                        onValueChange = { timeText = it.take(5); validationError = null },
-                        label = { Text("时间 (HH:mm)") },
+                        onValueChange = { timeText = it.take(8); validationError = null },
+                        label = { Text("时间 (HH:mm:ss)") },
                         singleLine = true,
                         modifier = Modifier
                             .weight(0.95f)
@@ -787,7 +914,7 @@ fun TransactionEditorDialog(
                         onClick = {
                             val now = Date(System.currentTimeMillis())
                             dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now)
-                            timeText = SimpleDateFormat("HH:mm", Locale.US).format(now)
+                            timeText = SimpleDateFormat("HH:mm:ss", Locale.US).format(now)
                         },
                         label = { Text("此刻") }
                     )
@@ -796,7 +923,7 @@ fun TransactionEditorDialog(
                             val millis = (parseDateTimeInputMillis(dateText, timeText) ?: System.currentTimeMillis()) - 3_600_000L
                             val d = Date(millis)
                             dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
-                            timeText = SimpleDateFormat("HH:mm", Locale.US).format(d)
+                            timeText = SimpleDateFormat("HH:mm:ss", Locale.US).format(d)
                         },
                         label = { Text("-1小时") }
                     )
@@ -805,7 +932,7 @@ fun TransactionEditorDialog(
                             val millis = System.currentTimeMillis() - 86_400_000L
                             val d = Date(millis)
                             dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
-                            timeText = SimpleDateFormat("HH:mm", Locale.US).format(d)
+                            timeText = SimpleDateFormat("HH:mm:ss", Locale.US).format(d)
                         },
                         label = { Text("昨天此时") }
                     )
@@ -830,10 +957,17 @@ fun TransactionEditorDialog(
                     }
                     val parsedTimeMillis = parseDateTimeInputMillis(dateText, timeText)
                     if (parsedTimeMillis == null) {
-                        validationError = "请输入有效日期和时间，例如 2026-11-19 与 08:30"
+                        validationError = "请输入有效日期和时间，例如 2026-11-19 与 08:30:00"
                         return@Button
                     }
                     val cents = (yuan * 100.0).roundToLong().coerceAtLeast(1L)
+                    onSaveExtended?.invoke(
+                        tradeType.trim().ifBlank { null },
+                        productName.trim().ifBlank { null },
+                        tradeStatus.trim().ifBlank { null },
+                        transactionNo.trim().ifBlank { null },
+                        merchantOrderNo.trim().ifBlank { null }
+                    )
                     onSave(
                         cents,
                         selectedCurrency,
@@ -905,10 +1039,14 @@ fun TransactionEditorDialog(
 fun parseDateTimeInputMillis(dateInput: String, timeInput: String): Long? {
     val cleanDate = dateInput.trim().replace('/', '-').replace('.', '-')
     val cleanTime = timeInput.trim().replace('：', ':')
-    val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply { isLenient = false }
-    return runCatching {
-        fmt.parse("$cleanDate $cleanTime")?.time
-    }.getOrNull()
+    val patterns = listOf("yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm")
+    for (p in patterns) {
+        val parsed = runCatching {
+            SimpleDateFormat(p, Locale.US).apply { isLenient = false }.parse("$cleanDate $cleanTime")?.time
+        }.getOrNull()
+        if (parsed != null) return parsed
+    }
+    return null
 }
 
 private fun DrawScope.drawMinimalYenSymbol(

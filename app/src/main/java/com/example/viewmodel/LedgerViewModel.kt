@@ -80,6 +80,7 @@ sealed interface RateUpdateState {
 
 sealed interface ImportUiState {
     data object Idle : ImportUiState
+    data class Parsing(val message: String) : ImportUiState
     data class Ready(val preview: ImportPreviewResult) : ImportUiState
     data class Error(val message: String) : ImportUiState
 }
@@ -368,7 +369,12 @@ class LedgerViewModel(
         channel: String,
         cardLastFour: String?,
         note: String?,
-        occurredAtMillis: Long = System.currentTimeMillis()
+        occurredAtMillis: Long = System.currentTimeMillis(),
+        tradeType: String? = null,
+        productName: String? = null,
+        tradeStatus: String? = null,
+        transactionNo: String? = null,
+        merchantOrderNo: String? = null
     ) {
         viewModelScope.launch {
             val resolvedCurrency = CurrencyCatalog.resolve(currencyCode)
@@ -384,6 +390,11 @@ class LedgerViewModel(
                 parseMethod = ParseMethod.MANUAL.name,
                 rawNotification = null,
                 note = note?.takeIf { it.isNotBlank() },
+                tradeType = tradeType?.takeIf { it.isNotBlank() },
+                productName = productName?.takeIf { it.isNotBlank() },
+                tradeStatus = tradeStatus?.takeIf { it.isNotBlank() },
+                transactionNo = transactionNo?.takeIf { it.isNotBlank() },
+                merchantOrderNo = merchantOrderNo?.takeIf { it.isNotBlank() },
                 occurredAtMillis = occurredAtMillis,
                 confirmed = true
             )
@@ -406,7 +417,13 @@ class LedgerViewModel(
         note: String?,
         occurredAtMillis: Long,
         confirmed: Boolean = true,
-        learnFormatTemplate: Boolean = true
+        learnFormatTemplate: Boolean = true,
+        tradeType: String? = null,
+        productName: String? = null,
+        tradeStatus: String? = null,
+        transactionNo: String? = null,
+        merchantOrderNo: String? = null,
+        updateExtendedFields: Boolean = false
     ) {
         viewModelScope.launch {
             repository.updateTransaction(
@@ -421,7 +438,13 @@ class LedgerViewModel(
                 note = note,
                 occurredAtMillis = occurredAtMillis,
                 confirmed = confirmed,
-                learnFormatTemplate = learnFormatTemplate
+                learnFormatTemplate = learnFormatTemplate,
+                tradeType = tradeType,
+                productName = productName,
+                tradeStatus = tradeStatus,
+                transactionNo = transactionNo,
+                merchantOrderNo = merchantOrderNo,
+                updateExtendedFields = updateExtendedFields
             )
                 .onSuccess { templateUpdated ->
                     if (templateUpdated) {
@@ -993,30 +1016,206 @@ class LedgerViewModel(
         }
     }
 
-    fun previewManualImport(rawContent: String, fileNameHint: String? = null) {
+    fun previewManualImport(
+        rawContent: String,
+        fileNameHint: String? = null,
+        context: android.content.Context? = null,
+        useRuleMatching: Boolean = true,
+        useAiUnderstanding: Boolean = false
+    ) {
         val rules = (rulesState.value as? UiState.Success)?.data ?: emptyList()
-        ManualImportManager.parseImportedContent(rawContent, fileNameHint, rules)
-            .onSuccess { preview ->
-                _importUiState.value = ImportUiState.Ready(preview)
+        if (!useAiUnderstanding) {
+            ManualImportManager.parseImportedContent(
+                rawContent = rawContent,
+                fileNameHint = fileNameHint,
+                customRules = rules,
+                useRuleMatching = useRuleMatching
+            )
+                .onSuccess { preview ->
+                    _importUiState.value = ImportUiState.Ready(preview)
+                }
+                .onFailure { err ->
+                    _importUiState.value = ImportUiState.Error(err.message ?: "无法解析导入内容")
+                }
+            return
+        }
+
+        viewModelScope.launch {
+            _importUiState.value = ImportUiState.Parsing("正在解析并调用 AI 理解增强账单...")
+            val baseResult = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                ManualImportManager.parseImportedContent(
+                    rawContent = rawContent,
+                    fileNameHint = fileNameHint,
+                    customRules = rules,
+                    useRuleMatching = useRuleMatching
+                )
             }
-            .onFailure { err ->
-                _importUiState.value = ImportUiState.Error(err.message ?: "无法解析导入内容")
+            val aiConfig = repository.getAiConfigOnce()
+            if (context == null || aiConfig.providerMode == AiProviderMode.DISABLED) {
+                baseResult
+                    .onSuccess { preview ->
+                        _importUiState.value = ImportUiState.Ready(
+                            preview.copy(formatLabel = "${preview.formatLabel}（AI 未开启，已按常规模式解析）")
+                        )
+                    }
+                    .onFailure { err ->
+                        _importUiState.value = ImportUiState.Error(err.message ?: "无法解析导入内容（请先在「设置 -> AI理解」启用本地模型或在线 API）")
+                    }
+                return@launch
             }
+
+            if (baseResult.isSuccess) {
+                val basePreview = baseResult.getOrThrow()
+                val enhanced = enhanceImportedTransactionsWithAi(
+                    context = context,
+                    aiConfig = aiConfig,
+                    rules = rules,
+                    items = basePreview.transactions
+                )
+                _importUiState.value = ImportUiState.Ready(
+                    basePreview.copy(
+                        formatLabel = "${basePreview.formatLabel} + AI理解",
+                        transactions = enhanced
+                    )
+                )
+            } else {
+                val lines = rawContent.lines().map { it.trim() }.filter { it.isNotEmpty() }.take(30)
+                val aiItems = mutableListOf<LedgerTransaction>()
+                var skipped = 0
+                for (line in lines) {
+                    val res = aiManager.enhanceOrParseNotification(
+                        context = context,
+                        config = aiConfig,
+                        packageName = "manual.import",
+                        title = "手动导入",
+                        content = line,
+                        fallbackParsed = null,
+                        availableRules = rules
+                    )
+                    val parsed = res.getOrNull()
+                    if (parsed != null && parsed.isFinancialTransaction && parsed.amountCents > 0L) {
+                        aiItems.add(
+                            LedgerTransaction(
+                                amountCents = parsed.amountCents,
+                                currencyCode = parsed.currencyCode,
+                                type = parsed.type.name,
+                                category = parsed.category,
+                                merchant = parsed.merchant,
+                                channel = if (parsed.channel == "未知渠道") "手动导入" else parsed.channel,
+                                cardLastFour = parsed.cardLastFour,
+                                sourceApp = SourceApp.IMPORT.name,
+                                parseMethod = ParseMethod.LOCAL_NLP.name,
+                                rawNotification = line.take(220),
+                                occurredAtMillis = parsed.occurredAtMillis ?: System.currentTimeMillis(),
+                                confirmed = true
+                            )
+                        )
+                    } else {
+                        skipped++
+                    }
+                }
+                if (aiItems.isNotEmpty()) {
+                    _importUiState.value = ImportUiState.Ready(
+                        ImportPreviewResult(
+                            formatLabel = "AI 理解文本导入",
+                            transactions = aiItems,
+                            skippedCount = skipped
+                        )
+                    )
+                } else {
+                    _importUiState.value = ImportUiState.Error(
+                        baseResult.exceptionOrNull()?.message ?: "规则与 AI 均未能从文本中提取有效账单"
+                    )
+                }
+            }
+        }
     }
 
-    fun previewManualImportBytes(bytes: ByteArray, fileNameHint: String? = null) {
+    fun previewManualImportBytes(
+        bytes: ByteArray,
+        fileNameHint: String? = null,
+        context: android.content.Context? = null,
+        useRuleMatching: Boolean = true,
+        useAiUnderstanding: Boolean = false
+    ) {
         val rules = (rulesState.value as? UiState.Success)?.data ?: emptyList()
         viewModelScope.launch {
+            _importUiState.value = ImportUiState.Parsing(
+                if (useAiUnderstanding) "正在读取文档并调用 AI 理解增强..." else "正在解析所选文档..."
+            )
             val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                ManualImportManager.parseImportedBytes(bytes, fileNameHint, rules)
+                ManualImportManager.parseImportedBytes(
+                    bytes = bytes,
+                    fileNameHint = fileNameHint,
+                    customRules = rules,
+                    useRuleMatching = useRuleMatching
+                )
             }
             result
                 .onSuccess { preview ->
+                    if (useAiUnderstanding && context != null) {
+                        val aiConfig = repository.getAiConfigOnce()
+                        if (aiConfig.providerMode != AiProviderMode.DISABLED) {
+                            val enhanced = enhanceImportedTransactionsWithAi(
+                                context = context,
+                                aiConfig = aiConfig,
+                                rules = rules,
+                                items = preview.transactions
+                            )
+                            _importUiState.value = ImportUiState.Ready(
+                                preview.copy(
+                                    formatLabel = "${preview.formatLabel} + AI理解",
+                                    transactions = enhanced
+                                )
+                            )
+                            return@onSuccess
+                        }
+                    }
                     _importUiState.value = ImportUiState.Ready(preview)
                 }
                 .onFailure { err ->
                     _importUiState.value = ImportUiState.Error(err.message ?: "无法解析所选文件")
                 }
+        }
+    }
+
+    private suspend fun enhanceImportedTransactionsWithAi(
+        context: android.content.Context,
+        aiConfig: AiConfig,
+        rules: List<CustomParsingRule>,
+        items: List<LedgerTransaction>
+    ): List<LedgerTransaction> {
+        val aiLimit = if (aiConfig.providerMode == AiProviderMode.ONLINE_API) 25 else 80
+        return items.mapIndexed { idx, tx ->
+            if (idx >= aiLimit) return@mapIndexed tx
+            val summaryText = buildString {
+                append("交易对方:").append(tx.merchant)
+                tx.productName?.let { append(" 商品:").append(it) }
+                tx.tradeType?.let { append(" 交易类型:").append(it) }
+                append(" 金额:").append("%.2f".format(java.util.Locale.US, tx.amountCents / 100.0)).append(" ").append(tx.currencyCode)
+                append(" 支付方式:").append(tx.channel)
+                tx.tradeStatus?.let { append(" 当前状态:").append(it) }
+                tx.note?.let { append(" 备注:").append(it) }
+                tx.rawNotification?.let { append(" 原文:").append(it) }
+            }
+            val aiRes = aiManager.enhanceOrParseNotification(
+                context = context,
+                config = aiConfig,
+                packageName = "manual.import",
+                title = "账单导入增强",
+                content = summaryText,
+                fallbackParsed = null,
+                availableRules = rules
+            ).getOrNull()
+            if (aiRes != null) {
+                tx.copy(
+                    category = aiRes.category.takeIf { it.isNotBlank() && it != "其他" } ?: tx.category,
+                    merchant = if (tx.merchant == "导入账单" || tx.merchant == "导入记录") aiRes.merchant.ifBlank { tx.merchant } else tx.merchant,
+                    parseMethod = ParseMethod.LOCAL_NLP.name
+                )
+            } else {
+                tx
+            }
         }
     }
 

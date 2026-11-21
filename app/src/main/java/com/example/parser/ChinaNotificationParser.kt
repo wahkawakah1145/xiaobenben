@@ -45,7 +45,7 @@ object ChinaNotificationParser {
         """([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{1,3}(?:\s[0-9]{3})+(?:[.,][0-9]{1,2})?|[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]{1,2}|[0-9]+(?:[.,][0-9]{1,2})?)"""
 
     private val amountPatterns = listOf(
-        Regex("""(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|美元|港币|港元|欧元|日元|英镑|新币|韩元|澳元|加元|澳门元|新台币|HK\$|US\$|S\$|A\$|C\$|NT\$|MOP\$|[¥￥$€£₩])\s*[+\-]?\s*$amountNumberRegexToken""", RegexOption.IGNORE_CASE),
+        Regex("""(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS|美元|港币|港元|欧元|日元|日圆|英镑|新币|韩元|澳元|加元|澳门元|新台币|瑞郎|泰铢|林吉特|卢布|迪拉姆|HK\$|US\$|S\$|A\$|C\$|NT\$|MOP\$|[¥￥$€£₩])\s*[+\-]?\s*$amountNumberRegexToken""", RegexOption.IGNORE_CASE),
         Regex("""(?:金额|付款|消费|支出|扣款|扣费|支付|入账|到账|存入|收款|转入|转出|支取|转账|还款)[为:：]?\s*[+\-]?\s*$amountNumberRegexToken\s*(?:元|美元|港币|港元|日元|欧元|英镑|円)?"""),
         Regex("""$amountNumberRegexToken\s*(?:元|美元|港币|港元|日元|欧元|英镑|円|USD|HKD|EUR|JPY|GBP)""", RegexOption.IGNORE_CASE)
     )
@@ -345,7 +345,7 @@ object ChinaNotificationParser {
 
         // 1. Full date + time: yyyy-MM-dd HH:mm(:ss) / yyyy年M月d日 H时m分 / yyyy/M/d H:mm
         val fullDateTimeRegex = Regex(
-            """(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})日?\s*[T\s,，]?\s*(\d{1,2})[:时](\d{2})(?:[:分](\d{2}))?"""
+            """(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})日?\s*[T\s,，]?\s*(\d{1,2})[:时](\d{2})(?:[:分](\d{2})秒?)?"""
         )
         fullDateTimeRegex.find(text)?.let { m ->
             val y = m.groupValues[1].toIntOrNull()
@@ -361,7 +361,7 @@ object ChinaNotificationParser {
 
         // 2. Month + Day + Time (no year): 11月18日 08:30(:00) or 11-18 08:30 or 11/18 08:30
         val monthDayTimeRegex = Regex(
-            """(?<!\d)(\d{1,2})\s*[月/-]\s*(\d{1,2})日?\s*(\d{1,2})[:时](\d{2})(?:[:分](\d{2}))?"""
+            """(?<!\d)(\d{1,2})\s*[月/-]\s*(\d{1,2})日?\s*(\d{1,2})[:时](\d{2})(?:[:分](\d{2})秒?)?"""
         )
         monthDayTimeRegex.find(text)?.let { m ->
             val mon = m.groupValues[1].toIntOrNull()
@@ -382,7 +382,7 @@ object ChinaNotificationParser {
         }
 
         // 3. Relative day + time: 今天 / 今日 / 昨天 / 昨日 / 前天 HH:mm
-        val relTimeRegex = Regex("""(今天|今日|昨天|昨日|前天)\s*(\d{1,2})[:时](\d{2})(?:[:分](\d{2}))?""")
+        val relTimeRegex = Regex("""(今天|今日|昨天|昨日|前天)\s*(\d{1,2})[:时](\d{2})(?:[:分](\d{2})秒?)?""")
         relTimeRegex.find(text)?.let { m ->
             val dayOffset = when (m.groupValues[1]) {
                 "昨天", "昨日" -> -1
@@ -416,7 +416,7 @@ object ChinaNotificationParser {
                     ?: refCal.get(Calendar.HOUR_OF_DAY)
                 val min = timeOnly?.groupValues?.get(2)?.toIntOrNull()?.takeIf { it in 0..59 }
                     ?: refCal.get(Calendar.MINUTE)
-                val sec = timeOnly?.groupValues?.get(3)?.toIntOrNull()?.takeIf { it in 0..59 } ?: 0
+                val sec = timeOnly?.groupValues?.get(3)?.toIntOrNull()?.takeIf { it in 0..59 } ?: if (timeOnly == null) refCal.get(Calendar.SECOND) else 0
                 return buildCalMillis(y, mon!! - 1, d!!, h, min, sec)
             }
         }
@@ -597,15 +597,53 @@ object ChinaNotificationParser {
         return when {
             target.contains("HKD", ignoreCase = true) || target.contains("HK$") ||
                 target.contains("港币") || target.contains("港元") -> "HKD"
-            target.contains("MOP", ignoreCase = true) || target.contains("澳门元") -> "MOP"
+            target.contains("MOP", ignoreCase = true) || target.contains("MOP$") ||
+                target.contains("澳门元") || target.contains("澳门币") -> "MOP"
             target.contains("TWD", ignoreCase = true) || target.contains("NT$") ||
                 target.contains("新台币") || target.contains("台币") -> "TWD"
             target.contains("SGD", ignoreCase = true) || target.contains("S$") ||
                 target.contains("新加坡元") || target.contains("新币") -> "SGD"
+            target.contains("NZD", ignoreCase = true) || target.contains("NZ$") ||
+                target.contains("新西兰元") || target.contains("纽元") -> "NZD"
             target.contains("AUD", ignoreCase = true) || target.contains("A$") ||
-                target.contains("澳元") -> "AUD"
+                target.contains("澳元") || target.contains("澳币") -> "AUD"
             target.contains("CAD", ignoreCase = true) || target.contains("C$") ||
-                target.contains("加元") -> "CAD"
+                target.contains("加元") || target.contains("加币") -> "CAD"
+            target.contains("CHF", ignoreCase = true) || target.contains("瑞士法郎") ||
+                target.contains("瑞郎") -> "CHF"
+            target.contains("THB", ignoreCase = true) || target.contains("฿") ||
+                target.contains("泰铢") -> "THB"
+            target.contains("MYR", ignoreCase = true) || target.contains("林吉特") ||
+                target.contains("马币") || Regex("""\bRM\s*[0-9]""").containsMatchIn(target) -> "MYR"
+            target.contains("IDR", ignoreCase = true) || target.contains("印尼盾") -> "IDR"
+            target.contains("VND", ignoreCase = true) || target.contains("₫") ||
+                target.contains("越南盾") || target.contains("越盾") -> "VND"
+            target.contains("PHP", ignoreCase = true) || target.contains("₱") ||
+                target.contains("菲律宾比索") -> "PHP"
+            target.contains("INR", ignoreCase = true) || target.contains("₹") ||
+                target.contains("印度卢比") -> "INR"
+            target.contains("RUB", ignoreCase = true) || target.contains("₽") ||
+                target.contains("卢布") -> "RUB"
+            target.contains("BRL", ignoreCase = true) || target.contains("雷亚尔") -> "BRL"
+            target.contains("MXN", ignoreCase = true) || target.contains("MX$") ||
+                target.contains("墨西哥比索") -> "MXN"
+            target.contains("ZAR", ignoreCase = true) || target.contains("南非兰特") -> "ZAR"
+            target.contains("TRY", ignoreCase = true) || target.contains("₺") ||
+                target.contains("土耳其里拉") -> "TRY"
+            target.contains("SEK", ignoreCase = true) || target.contains("瑞典克朗") -> "SEK"
+            target.contains("NOK", ignoreCase = true) || target.contains("挪威克朗") -> "NOK"
+            target.contains("DKK", ignoreCase = true) || target.contains("丹麦克朗") -> "DKK"
+            target.contains("PLN", ignoreCase = true) || target.contains("zł") ||
+                target.contains("兹罗提") -> "PLN"
+            target.contains("CZK", ignoreCase = true) || target.contains("Kč") ||
+                target.contains("捷克克朗") -> "CZK"
+            target.contains("HUF", ignoreCase = true) || target.contains("福林") -> "HUF"
+            target.contains("AED", ignoreCase = true) || target.contains("迪拉姆") -> "AED"
+            target.contains("SAR", ignoreCase = true) || target.contains("沙特里亚尔") -> "SAR"
+            target.contains("QAR", ignoreCase = true) || target.contains("卡塔尔里亚尔") -> "QAR"
+            target.contains("ILS", ignoreCase = true) || target.contains("₪") ||
+                target.contains("谢克尔") -> "ILS"
+            target.contains("ARS", ignoreCase = true) || target.contains("阿根廷比索") -> "ARS"
             target.contains("USD", ignoreCase = true) || target.contains("US$") ||
                 target.contains("美元") || target.contains("美金") ||
                 Regex("""\$\s*[0-9]""").containsMatchIn(target) -> "USD"
@@ -614,7 +652,7 @@ object ChinaNotificationParser {
             target.contains("GBP", ignoreCase = true) || target.contains("英镑") ||
                 target.contains("£") -> "GBP"
             target.contains("JPY", ignoreCase = true) || target.contains("日元") ||
-                target.contains("円") -> "JPY"
+                target.contains("日圆") || target.contains("円") -> "JPY"
             target.contains("KRW", ignoreCase = true) || target.contains("韩元") ||
                 target.contains("₩") -> "KRW"
             else -> "CNY"

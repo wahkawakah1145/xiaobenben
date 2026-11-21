@@ -25,7 +25,6 @@ import com.example.model.BudgetSettings
 import com.example.viewmodel.LedgerViewModel
 
 enum class DataHubTab(val label: String) {
-    IMPORT("手动导入"),
     LOCAL_BACKUP("本地备份"),
     WEBDAV("WebDAV")
 }
@@ -35,16 +34,14 @@ enum class DataHubTab(val label: String) {
 fun DataHubScreen(
     settings: BudgetSettings,
     viewModel: LedgerViewModel,
-    initialTab: DataHubTab = DataHubTab.IMPORT,
+    initialTab: DataHubTab = DataHubTab.LOCAL_BACKUP,
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(initialTab) }
 
     LaunchedEffect(initialTab) {
-        if (initialTab == DataHubTab.LOCAL_BACKUP) {
-            selectedTab = DataHubTab.LOCAL_BACKUP
-        }
+        selectedTab = initialTab
     }
 
     Column(
@@ -76,10 +73,6 @@ fun DataHubScreen(
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when (selectedTab) {
-                DataHubTab.IMPORT -> ManualImportScreen(
-                    viewModel = viewModel,
-                    onShowMessage = onShowMessage
-                )
                 DataHubTab.LOCAL_BACKUP -> LocalBackupScreen(
                     settings = settings,
                     viewModel = viewModel,

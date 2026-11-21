@@ -7,6 +7,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 enum class DeduplicationTimeWindow(val label: String, val maxDiffMillis: Long) {
+    TEN_SECONDS("10 秒内", 10_000L),
+    THIRTY_SECONDS("30 秒内", 30_000L),
     ONE_MINUTE("1 分钟内", 60_000L),
     FIVE_MINUTES("5 分钟内", 5L * 60_000L),
     FIFTEEN_MINUTES("15 分钟内", 15L * 60_000L),
@@ -39,6 +41,8 @@ data class DuplicateGroup(
 object SmartDeduplicator {
 
     const val DEFAULT_SHORT_WINDOW_MINUTES = 1
+    const val DEFAULT_SHORT_WINDOW_SECONDS = 60
+    const val MIN_SHORT_WINDOW_MILLIS = 1_000L
     const val MAX_SHORT_WINDOW_MILLIS = 7L * 24L * 3_600_000L
 
     private val bracketSuffixRegex = Regex("""[（(【\[][^）)】\]]{1,24}[）)】\]]""")
@@ -48,9 +52,16 @@ object SmartDeduplicator {
 
     fun formatWindowLabel(minutes: Int): String {
         val safe = minutes.coerceIn(1, 7 * 24 * 60)
+        return formatWindowLabelSeconds(safe * 60)
+    }
+
+    fun formatWindowLabelSeconds(seconds: Int): String {
+        val safe = seconds.coerceIn(1, (MAX_SHORT_WINDOW_MILLIS / 1000L).toInt())
         return when {
-            safe >= 60 && safe % 60 == 0 -> "${safe / 60} 小时内"
-            else -> "$safe 分钟内"
+            safe < 60 -> "$safe 秒内"
+            safe >= 3600 && safe % 3600 == 0 -> "${safe / 3600} 小时内"
+            safe % 60 == 0 -> "${safe / 60} 分钟内"
+            else -> "${safe / 60} 分 ${safe % 60} 秒内"
         }
     }
 
@@ -113,7 +124,7 @@ object SmartDeduplicator {
     ): List<DuplicateGroup> {
         if (transactions.size < 2) return emptyList()
 
-        val boundedWindow = maxWindowMillis.coerceIn(60_000L, MAX_SHORT_WINDOW_MILLIS)
+        val boundedWindow = maxWindowMillis.coerceIn(MIN_SHORT_WINDOW_MILLIS, MAX_SHORT_WINDOW_MILLIS)
         val buckets = transactions.groupBy { tx ->
             Triple(tx.amountCents, tx.currencyCode.uppercase(), tx.txType)
         }

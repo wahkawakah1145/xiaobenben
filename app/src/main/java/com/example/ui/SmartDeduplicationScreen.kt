@@ -87,9 +87,9 @@ fun SmartDeduplicationScreen(
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val haptic = LocalHapticFeedback.current
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
-    var customWindowMinutes by rememberSaveable { mutableIntStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_MINUTES) }
-    var customValueInput by rememberSaveable { mutableStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_MINUTES.toString()) }
-    var customUnitHours by rememberSaveable { mutableStateOf(false) }
+    var customWindowSeconds by rememberSaveable { mutableIntStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_SECONDS) }
+    var customValueInput by rememberSaveable { mutableStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_SECONDS.toString()) }
+    var customUnitMode by rememberSaveable { mutableIntStateOf(0) }
     var customErrorText by remember { mutableStateOf<String?>(null) }
     var channelFilter by remember { mutableStateOf(DeduplicationChannelFilter.ALL) }
     var searchQuery by remember { mutableStateOf("") }
@@ -97,11 +97,11 @@ fun SmartDeduplicationScreen(
     var inspectingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
     var editingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
 
-    val candidateGroups by remember(allTransactions, customWindowMinutes, channelFilter) {
+    val candidateGroups by remember(allTransactions, customWindowSeconds, channelFilter) {
         derivedStateOf {
             SmartDeduplicator.findDuplicateGroups(
                 transactions = allTransactions,
-                maxWindowMillis = customWindowMinutes * 60_000L,
+                maxWindowMillis = customWindowSeconds * 1_000L,
                 channelFilter = channelFilter
             )
         }
@@ -115,11 +115,7 @@ fun SmartDeduplicationScreen(
             } else {
                 candidateGroups.filter { group ->
                     group.representativeMerchant.contains(q, ignoreCase = true) ||
-                        group.items.any { tx ->
-                            tx.merchant.contains(q, ignoreCase = true) ||
-                                tx.channel.contains(q, ignoreCase = true) ||
-                                (tx.amountCents / 100.0).toString().contains(q)
-                        }
+                        group.items.any { tx -> tx.matchesSearchQuery(q) }
                 }
             }
         }
@@ -185,7 +181,7 @@ fun SmartDeduplicationScreen(
                                 Text("短时智能去重筛选", style = MaterialTheme.typography.titleMedium)
                             }
                             Text(
-                                text = "仅识别短时间窗口内金额相同且交易对象相似的重复入账，自动排除跨周期的长期重复消费（当前窗口：${SmartDeduplicator.formatWindowLabel(customWindowMinutes)}；点击勾选，长按条目可弹窗查看详情）。",
+                                text = "仅识别短时间窗口内金额相同且交易对象相似的重复入账，自动排除跨周期的长期重复消费（当前窗口：${SmartDeduplicator.formatWindowLabelSeconds(customWindowSeconds)}；点击勾选，长按条目可弹窗查看详情）。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -209,18 +205,25 @@ fun SmartDeduplicationScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 DeduplicationTimeWindow.entries.forEach { win ->
-                                    val winMinutes = (win.maxDiffMillis / 60_000L).toInt()
+                                    val winSeconds = (win.maxDiffMillis / 1_000L).toInt()
                                     FilterChip(
-                                        selected = customWindowMinutes == winMinutes,
+                                        selected = customWindowSeconds == winSeconds,
                                         onClick = {
-                                            customWindowMinutes = winMinutes
+                                            customWindowSeconds = winSeconds
                                             customErrorText = null
-                                            if (winMinutes >= 60 && winMinutes % 60 == 0) {
-                                                customUnitHours = true
-                                                customValueInput = (winMinutes / 60).toString()
-                                            } else {
-                                                customUnitHours = false
-                                                customValueInput = winMinutes.toString()
+                                            when {
+                                                winSeconds < 60 -> {
+                                                    customUnitMode = 0
+                                                    customValueInput = winSeconds.toString()
+                                                }
+                                                winSeconds >= 3600 && winSeconds % 3600 == 0 -> {
+                                                    customUnitMode = 2
+                                                    customValueInput = (winSeconds / 3600).toString()
+                                                }
+                                                else -> {
+                                                    customUnitMode = 1
+                                                    customValueInput = (winSeconds / 60).toString()
+                                                }
                                             }
                                         },
                                         label = { Text(win.label) },
@@ -229,19 +232,19 @@ fun SmartDeduplicationScreen(
                                 }
                             }
 
-                            // Custom Short Time Window Controls
+                            // Custom Short Time Window Controls (Seconds / Minutes / Hours)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 OutlinedTextField(
                                     value = customValueInput,
                                     onValueChange = {
-                                        customValueInput = it.filter(Char::isDigit).take(4)
+                                        customValueInput = it.filter(Char::isDigit).take(5)
                                         customErrorText = null
                                     },
-                                    label = { Text("自定义短时窗口") },
+                                    label = { Text("自定义窗口") },
                                     leadingIcon = { Icon(AppIcons.Schedule, contentDescription = null) },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
@@ -250,29 +253,39 @@ fun SmartDeduplicationScreen(
                                         .testTag("dedup_custom_window_input")
                                 )
                                 FilterChip(
-                                    selected = !customUnitHours,
-                                    onClick = { customUnitHours = false },
-                                    label = { Text("分钟") },
+                                    selected = customUnitMode == 0,
+                                    onClick = { customUnitMode = 0 },
+                                    label = { Text("秒") },
+                                    modifier = Modifier.testTag("dedup_unit_seconds")
+                                )
+                                FilterChip(
+                                    selected = customUnitMode == 1,
+                                    onClick = { customUnitMode = 1 },
+                                    label = { Text("分") },
                                     modifier = Modifier.testTag("dedup_unit_minutes")
                                 )
                                 FilterChip(
-                                    selected = customUnitHours,
-                                    onClick = { customUnitHours = true },
-                                    label = { Text("小时") },
+                                    selected = customUnitMode == 2,
+                                    onClick = { customUnitMode = 2 },
+                                    label = { Text("时") },
                                     modifier = Modifier.testTag("dedup_unit_hours")
                                 )
                                 OutlinedButton(
                                     onClick = {
                                         val num = customValueInput.trim().toIntOrNull()
-                                        val maxMinutes = (SmartDeduplicator.MAX_SHORT_WINDOW_MILLIS / 60_000L).toInt()
+                                        val maxSeconds = (SmartDeduplicator.MAX_SHORT_WINDOW_MILLIS / 1_000L).toInt()
                                         if (num == null || num <= 0) {
                                             customErrorText = "请输入大于 0 的整数"
                                         } else {
-                                            val computed = if (customUnitHours) num * 60 else num
-                                            if (computed > maxMinutes) {
-                                                customErrorText = "仅支持 7 天（${maxMinutes / 60} 小时）以内的短时重复检测"
+                                            val computedSeconds = when (customUnitMode) {
+                                                0 -> num.toLong()
+                                                1 -> num.toLong() * 60L
+                                                else -> num.toLong() * 3600L
+                                            }
+                                            if (computedSeconds > maxSeconds.toLong()) {
+                                                customErrorText = "仅支持 7 天（168 小时）以内的短时重复检测"
                                             } else {
-                                                customWindowMinutes = computed
+                                                customWindowSeconds = computedSeconds.toInt()
                                                 customErrorText = null
                                             }
                                         }

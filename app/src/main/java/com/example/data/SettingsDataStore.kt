@@ -99,6 +99,9 @@ class SettingsDataStore(private val context: Context) {
         val EXCHANGE_RATES_SOURCE = stringPreferencesKey("exchange_rates_source")
         val EXCHANGE_RATES_DATE_TEXT = stringPreferencesKey("exchange_rates_date_text")
         val EXCHANGE_RATE_AUTO_UPDATE_FREQ = stringPreferencesKey("exchange_rate_auto_update_freq")
+        val EXCHANGE_RATE_SOURCE = stringPreferencesKey("exchange_rate_source")
+        val CUSTOM_EXCHANGE_RATE_URL = stringPreferencesKey("custom_exchange_rate_url")
+        val GITHUB_UPDATE_MIRROR = stringPreferencesKey("github_update_mirror")
 
         val AI_PROVIDER_MODE = stringPreferencesKey("ai_provider_mode")
         val AI_LOCAL_MODEL_ID = stringPreferencesKey("ai_local_model_id")
@@ -125,7 +128,12 @@ class SettingsDataStore(private val context: Context) {
             lastLocalBackupMillis = prefs[Keys.LAST_LOCAL_BACKUP_MILLIS] ?: 0L,
             lastBackupReminderMillis = prefs[Keys.LAST_BACKUP_REMINDER_MILLIS] ?: 0L,
             exchangeRateUpdateFrequency = com.example.model.ExchangeRateAutoUpdateFrequency
-                .fromRaw(prefs[Keys.EXCHANGE_RATE_AUTO_UPDATE_FREQ]).name
+                .fromRaw(prefs[Keys.EXCHANGE_RATE_AUTO_UPDATE_FREQ]).name,
+            exchangeRateSource = com.example.model.ExchangeRateSource
+                .fromRaw(prefs[Keys.EXCHANGE_RATE_SOURCE]).name,
+            customExchangeRateUrl = prefs[Keys.CUSTOM_EXCHANGE_RATE_URL] ?: "",
+            githubUpdateMirror = com.example.model.GitHubUpdateMirror
+                .fromRaw(prefs[Keys.GITHUB_UPDATE_MIRROR]).name
         )
     }
 
@@ -238,6 +246,11 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.LAST_BACKUP_REMINDER_MILLIS] = settings.lastBackupReminderMillis.coerceAtLeast(0L)
             prefs[Keys.EXCHANGE_RATE_AUTO_UPDATE_FREQ] = com.example.model.ExchangeRateAutoUpdateFrequency
                 .fromRaw(settings.exchangeRateUpdateFrequency).name
+            prefs[Keys.EXCHANGE_RATE_SOURCE] = com.example.model.ExchangeRateSource
+                .fromRaw(settings.exchangeRateSource).name
+            prefs[Keys.CUSTOM_EXCHANGE_RATE_URL] = settings.customExchangeRateUrl.trim().take(500)
+            prefs[Keys.GITHUB_UPDATE_MIRROR] = com.example.model.GitHubUpdateMirror
+                .fromRaw(settings.githubUpdateMirror).name
         }
     }
 

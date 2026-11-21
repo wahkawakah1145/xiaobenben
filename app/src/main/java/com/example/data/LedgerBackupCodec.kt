@@ -40,6 +40,11 @@ object LedgerBackupCodec {
                 put("baseCurrencyCode", settings.baseCurrencyCode)
                 put("backupReminderEnabled", settings.backupReminderEnabled)
                 put("backupReminderIntervalHours", settings.backupReminderIntervalHours)
+                put("exchangeRateSource", settings.exchangeRateSource)
+                if (settings.customExchangeRateUrl.isNotBlank()) {
+                    put("customExchangeRateUrl", settings.customExchangeRateUrl)
+                }
+                put("githubUpdateMirror", settings.githubUpdateMirror)
             })
             put("transactions", JSONArray().apply {
                 transactions.forEach { tx ->
@@ -59,7 +64,12 @@ object LedgerBackupCodec {
                         tx.rawNotification?.takeIf { it.isNotBlank() }?.let {
                             put("rawNotification", it.take(220))
                         }
-                        tx.note?.takeIf { it.isNotBlank() }?.let { put("note", it.take(120)) }
+                        tx.note?.takeIf { it.isNotBlank() }?.let { put("note", it.take(160)) }
+                        tx.tradeType?.takeIf { it.isNotBlank() }?.let { put("tradeType", it.take(60)) }
+                        tx.productName?.takeIf { it.isNotBlank() }?.let { put("productName", it.take(120)) }
+                        tx.tradeStatus?.takeIf { it.isNotBlank() }?.let { put("tradeStatus", it.take(40)) }
+                        tx.transactionNo?.takeIf { it.isNotBlank() }?.let { put("transactionNo", it.take(80)) }
+                        tx.merchantOrderNo?.takeIf { it.isNotBlank() }?.let { put("merchantOrderNo", it.take(80)) }
                         put("occurredAtMillis", tx.occurredAtMillis)
                         if (!tx.confirmed) put("confirmed", false)
                         if (!tx.recordedBaseCurrencyCode.equals("CNY", ignoreCase = true)) {
@@ -151,6 +161,11 @@ object LedgerBackupCodec {
                         parseMethod = o.optString("parseMethod", "MANUAL"),
                         rawNotification = o.optString("rawNotification").takeIf { it.isNotBlank() && it != "null" },
                         note = o.optString("note").takeIf { it.isNotBlank() && it != "null" },
+                        tradeType = o.optString("tradeType").takeIf { it.isNotBlank() && it != "null" },
+                        productName = o.optString("productName").takeIf { it.isNotBlank() && it != "null" },
+                        tradeStatus = o.optString("tradeStatus").takeIf { it.isNotBlank() && it != "null" },
+                        transactionNo = o.optString("transactionNo").takeIf { it.isNotBlank() && it != "null" },
+                        merchantOrderNo = o.optString("merchantOrderNo").takeIf { it.isNotBlank() && it != "null" },
                         occurredAtMillis = o.optLong("occurredAtMillis", System.currentTimeMillis()),
                         confirmed = o.optBoolean("confirmed", true),
                         recordedBaseCurrencyCode = o.optString("recordedBaseCurrencyCode", "CNY").ifBlank { "CNY" },
@@ -236,7 +251,12 @@ object LedgerBackupCodec {
                 backupReminderIntervalHours = s.optInt(
                     "backupReminderIntervalHours",
                     currentSettings.backupReminderIntervalHours
-                ).coerceIn(1, 8760)
+                ).coerceIn(1, 8760),
+                exchangeRateSource = s.optString("exchangeRateSource", currentSettings.exchangeRateSource)
+                    .ifBlank { currentSettings.exchangeRateSource },
+                customExchangeRateUrl = s.optString("customExchangeRateUrl", currentSettings.customExchangeRateUrl),
+                githubUpdateMirror = s.optString("githubUpdateMirror", currentSettings.githubUpdateMirror)
+                    .ifBlank { currentSettings.githubUpdateMirror }
             )
         }
 

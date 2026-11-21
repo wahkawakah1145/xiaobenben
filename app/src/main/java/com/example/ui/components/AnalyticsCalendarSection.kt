@@ -519,11 +519,48 @@ fun AnalyticsCalendarSection(
                     val maxDayExpense = remember(dayTotals) {
                         dayTotals.maxOfOrNull { it.first }?.coerceAtLeast(1L) ?: 1L
                     }
+                    val monthExpenseTotal = remember(dayTotals) { dayTotals.sumOf { it.first } }
+                    val monthIncomeTotal = remember(dayTotals) { dayTotals.sumOf { it.second } }
+                    val monthActiveDays = remember(dayTotals) { dayTotals.count { it.third > 0 } }
 
                     val totalCells = firstDayOfWeekMonBased + daysInMonth
                     val numRows = (totalCells + 6) / 7
 
                     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "本月记账 $monthActiveDays 天",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text(
+                                        text = "支 -${compactCalendarMoney(monthExpenseTotal, baseCurrencyCode)}",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = numberFont),
+                                        color = ExpenseCoral,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "收 +${compactCalendarMoney(monthIncomeTotal, baseCurrencyCode)}",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = numberFont),
+                                        color = IncomeJade,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+
                         // Weekday Headers + Week Jump Column
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -564,7 +601,7 @@ fun AnalyticsCalendarSection(
                                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
                                     modifier = Modifier
                                         .width(24.dp)
-                                        .height(54.dp)
+                                        .height(64.dp)
                                         .clip(RoundedCornerShape(8.dp))
                                         .clickable {
                                             val jump = Calendar.getInstance().apply {
@@ -587,7 +624,7 @@ fun AnalyticsCalendarSection(
                                 for (c in 0 until 7) {
                                     val dom = r * 7 + c - firstDayOfWeekMonBased + 1
                                     if (dom !in 1..daysInMonth) {
-                                        Spacer(modifier = Modifier.weight(1f).height(54.dp))
+                                        Spacer(modifier = Modifier.weight(1f).height(64.dp))
                                     } else {
                                         val (exp, inc, cnt) = dayTotals[dom]
                                         val isToday = isThisMonth && dom == todayDom
@@ -604,7 +641,7 @@ fun AnalyticsCalendarSection(
                                             } else null,
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .height(54.dp)
+                                                .height(64.dp)
                                                 .clip(RoundedCornerShape(10.dp))
                                                 .clickable {
                                                     val jump = Calendar.getInstance().apply {
@@ -615,7 +652,9 @@ fun AnalyticsCalendarSection(
                                                 .testTag("calendar_month_day_$dom")
                                         ) {
                                             Column(
-                                                modifier = Modifier.padding(horizontal = 2.dp, vertical = 4.dp),
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .padding(horizontal = 2.dp, vertical = 3.dp),
                                                 horizontalAlignment = Alignment.CenterHorizontally,
                                                 verticalArrangement = Arrangement.SpaceBetween
                                             ) {
@@ -625,30 +664,41 @@ fun AnalyticsCalendarSection(
                                                     fontWeight = if (isToday || cnt > 0) FontWeight.Bold else FontWeight.Normal,
                                                     color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                                 )
-                                                if (exp > 0L) {
-                                                    Text(
-                                                        text = "-${compactCalendarShort(exp)}",
-                                                        fontSize = 9.sp,
-                                                        lineHeight = 10.sp,
-                                                        color = ExpenseCoral,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Clip
-                                                    )
-                                                } else if (inc > 0L) {
-                                                    Text(
-                                                        text = "+${compactCalendarShort(inc)}",
-                                                        fontSize = 9.sp,
-                                                        lineHeight = 10.sp,
-                                                        color = IncomeJade,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Clip
-                                                    )
-                                                } else {
-                                                    Text(
-                                                        text = "",
-                                                        fontSize = 9.sp,
-                                                        lineHeight = 10.sp
-                                                    )
+                                                Column(
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    verticalArrangement = Arrangement.spacedBy(1.dp)
+                                                ) {
+                                                    if (exp > 0L) {
+                                                        Text(
+                                                            text = "-${compactCalendarShort(exp)}",
+                                                            fontSize = 8.5.sp,
+                                                            lineHeight = 9.5.sp,
+                                                            fontFamily = numberFont,
+                                                            color = ExpenseCoral,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Clip
+                                                        )
+                                                    }
+                                                    if (inc > 0L) {
+                                                        Text(
+                                                            text = "+${compactCalendarShort(inc)}",
+                                                            fontSize = 8.5.sp,
+                                                            lineHeight = 9.5.sp,
+                                                            fontFamily = numberFont,
+                                                            color = IncomeJade,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Clip
+                                                        )
+                                                    }
+                                                    if (exp == 0L && inc == 0L && cnt > 0) {
+                                                        Text(
+                                                            text = "${cnt}笔",
+                                                            fontSize = 8.sp,
+                                                            lineHeight = 9.sp,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            maxLines = 1
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -953,6 +1003,6 @@ private fun compactCalendarShort(cents: Long): String {
     return when {
         valNum >= 10_000.0 -> "%.1fw".format(Locale.US, valNum / 10_000.0)
         valNum >= 100.0 || cents % 100L == 0L -> "${(cents / 100L)}"
-        else -> "%.0f".format(Locale.US, valNum)
+        else -> "%.1f".format(Locale.US, valNum)
     }
 }

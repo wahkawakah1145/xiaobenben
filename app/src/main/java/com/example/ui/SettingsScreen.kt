@@ -101,7 +101,7 @@ fun SettingsScreen(
                         SettingsNavRow(
                             icon = AppIcons.AccountBalanceWallet,
                             title = "账单工具",
-                            subtitle = "账本管理 · 记账与预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 智能去重 · 存储优化",
+                            subtitle = "账本 · 文档/剪贴板导入 · 预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 秒级去重 · 存储优化",
                             testTag = "menu_ledger_management",
                             onClick = onOpenLedgerManagement
                         )
@@ -135,7 +135,7 @@ fun SettingsScreen(
                         SettingsNavRow(
                             icon = AppIcons.FolderCopy,
                             title = "备份与恢复",
-                            subtitle = "手动导入 (XLSX/CSV/JSON) · 本地备份与通知 · WebDAV 同步",
+                            subtitle = "本地备份导出与恢复 · 定时备份提醒 · WebDAV 云端同步",
                             testTag = "menu_data_hub",
                             onClick = onOpenDataHub
                         )
