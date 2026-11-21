@@ -145,6 +145,7 @@ const val ROUTE_SETTINGS_LEDGER_MGMT = "settings/ledger_mgmt"
 const val ROUTE_SETTINGS_BOOKS = "settings/books"
 const val ROUTE_BOOK_ANALYTICS = "books/analytics"
 const val ROUTE_SETTINGS_MANUAL_IMPORT = "settings/manual_import"
+const val ROUTE_SETTINGS_CATEGORIES = "settings/categories"
 const val ROUTE_SETTINGS_BILL_BEHAVIOR = "settings/bill_behavior"
 const val ROUTE_SETTINGS_PARSER = "settings/parser"
 const val ROUTE_SETTINGS_AI = "settings/ai"
@@ -449,6 +450,7 @@ fun AppNavigation(
                     if (bName != null) "账本分析 · $bName" else "账本分析"
                 }
                 ROUTE_SETTINGS_MANUAL_IMPORT -> "手动导入账单"
+                ROUTE_SETTINGS_CATEGORIES -> "分类管理"
                 ROUTE_SETTINGS_BILL_BEHAVIOR -> "记账与预算"
                 ROUTE_SETTINGS_CURRENCY -> "币种与汇率"
                 ROUTE_SETTINGS_DEDUP -> "智能去重"
@@ -566,6 +568,7 @@ fun AppNavigation(
                         storageFootprint = storageFootprint,
                         booksCount = books.size,
                         onOpenBooks = { navController.navigate(ROUTE_SETTINGS_BOOKS) },
+                        onOpenCategories = { navController.navigate(ROUTE_SETTINGS_CATEGORIES) },
                         onOpenManualImport = { navController.navigate(ROUTE_SETTINGS_MANUAL_IMPORT) },
                         onOpenBehaviorBudget = { navController.navigate(ROUTE_SETTINGS_BILL_BEHAVIOR) },
                         onOpenCurrencyRates = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
@@ -603,6 +606,11 @@ fun AppNavigation(
                     ROUTE_SETTINGS_MANUAL_IMPORT -> ManualImportScreen(
                         viewModel = viewModel,
                         onShowMessage = { msg -> showGlobalSnackbar(msg) }
+                    )
+                    ROUTE_SETTINGS_CATEGORIES -> CategoryManagementScreen(
+                        settings = settings,
+                        transactionsState = transactionsState,
+                        viewModel = viewModel
                     )
                     ROUTE_SETTINGS_BILL_BEHAVIOR -> BookkeepingBehaviorScreen(
                         settings = settings,
@@ -1002,6 +1010,7 @@ fun AppNavigation(
                             listOf(
                                 ROUTE_SETTINGS_LEDGER_MGMT,
                                 ROUTE_SETTINGS_BOOKS,
+                                ROUTE_SETTINGS_CATEGORIES,
                                 ROUTE_SETTINGS_MANUAL_IMPORT,
                                 ROUTE_BOOK_ANALYTICS,
                                 ROUTE_SETTINGS_BILL_BEHAVIOR,

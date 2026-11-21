@@ -613,29 +613,116 @@ data class LedgerTransaction(
     val splitChannels: List<String> get() = ChannelSplitter.splitChannels(channel)
 
     fun matchesSearchQuery(rawQuery: String): Boolean {
-        val q = rawQuery.trim()
-        if (q.isEmpty()) return true
+        val tokens = rawQuery
+            .trim()
+            .split(Regex("""[\s\u3000]+"""))
+            .filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return true
+
         val amountStr = "%.2f".format(java.util.Locale.US, amountCents / 100.0)
         val amountCompact = if (amountCents % 100L == 0L) (amountCents / 100L).toString() else amountStr
         val balanceStr = balanceAfterCents?.let { "%.2f".format(java.util.Locale.US, it / 100.0) }
-        return merchant.contains(q, ignoreCase = true) ||
-            category.contains(q, ignoreCase = true) ||
-            channel.contains(q, ignoreCase = true) ||
-            txType.label.contains(q, ignoreCase = true) ||
-            txSourceApp.label.contains(q, ignoreCase = true) ||
-            txParseMethod.label.contains(q, ignoreCase = true) ||
-            CurrencyCatalog.matchesQuery(currencyInfo, q) ||
-            amountStr.contains(q, ignoreCase = true) ||
-            amountCompact.contains(q, ignoreCase = true) ||
-            (balanceStr?.contains(q, ignoreCase = true) == true) ||
-            (cardLastFour?.contains(q, ignoreCase = true) == true) ||
-            (tradeType?.contains(q, ignoreCase = true) == true) ||
-            (productName?.contains(q, ignoreCase = true) == true) ||
-            (tradeStatus?.contains(q, ignoreCase = true) == true) ||
-            (transactionNo?.contains(q, ignoreCase = true) == true) ||
-            (merchantOrderNo?.contains(q, ignoreCase = true) == true) ||
-            (note?.contains(q, ignoreCase = true) == true) ||
-            (rawNotification?.contains(q, ignoreCase = true) == true)
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = occurredAtMillis }
+        val year = cal.get(java.util.Calendar.YEAR)
+        val month = cal.get(java.util.Calendar.MONTH) + 1
+        val day = cal.get(java.util.Calendar.DAY_OF_MONTH)
+        val dateDash = "%04d-%02d-%02d".format(java.util.Locale.US, year, month, day)
+        val dateCompact = "%04d%02d%02d".format(java.util.Locale.US, year, month, day)
+
+        return tokens.all { q ->
+            merchant.contains(q, ignoreCase = true) ||
+                category.contains(q, ignoreCase = true) ||
+                channel.contains(q, ignoreCase = true) ||
+                splitChannels.any { it.contains(q, ignoreCase = true) } ||
+                txType.label.contains(q, ignoreCase = true) ||
+                txSourceApp.label.contains(q, ignoreCase = true) ||
+                txParseMethod.label.contains(q, ignoreCase = true) ||
+                CurrencyCatalog.matchesQuery(currencyInfo, q) ||
+                amountStr.contains(q, ignoreCase = true) ||
+                amountCompact.contains(q, ignoreCase = true) ||
+                (balanceStr?.contains(q, ignoreCase = true) == true) ||
+                dateDash.contains(q, ignoreCase = true) ||
+                dateCompact.contains(q, ignoreCase = true) ||
+                (cardLastFour?.contains(q, ignoreCase = true) == true) ||
+                (tradeType?.contains(q, ignoreCase = true) == true) ||
+                (productName?.contains(q, ignoreCase = true) == true) ||
+                (tradeStatus?.contains(q, ignoreCase = true) == true) ||
+                (transactionNo?.contains(q, ignoreCase = true) == true) ||
+                (merchantOrderNo?.contains(q, ignoreCase = true) == true) ||
+                (note?.contains(q, ignoreCase = true) == true) ||
+                (rawNotification?.contains(q, ignoreCase = true) == true)
+        }
+    }
+
+    fun matchesSimilarCriteria(
+        target: LedgerTransaction,
+        criteria: Set<SimilarBillCriterion>
+    ): Boolean {
+        if (criteria.isEmpty()) return false
+        return criteria.all { criterion ->
+            when (criterion) {
+                SimilarBillCriterion.MERCHANT -> {
+                    val a = merchant.trim()
+                    val b = target.merchant.trim()
+                    a.isNotEmpty() && b.isNotEmpty() && a.equals(b, ignoreCase = true)
+                }
+                SimilarBillCriterion.PRODUCT -> {
+                    val a = productName?.trim().orEmpty()
+                    val b = target.productName?.trim().orEmpty()
+                    a.isNotEmpty() && b.isNotEmpty() && a.equals(b, ignoreCase = true)
+                }
+                SimilarBillCriterion.TRADE_TYPE -> {
+                    val a = tradeType?.trim().orEmpty()
+                    val b = target.tradeType?.trim().orEmpty()
+                    a.isNotEmpty() && b.isNotEmpty() && a.equals(b, ignoreCase = true)
+                }
+                SimilarBillCriterion.CHANNEL -> {
+                    val a = channel.trim()
+                    val b = target.channel.trim()
+                    a.isNotEmpty() && b.isNotEmpty() && (
+                        a.equals(b, ignoreCase = true) ||
+                            splitChannels.any { ch -> target.splitChannels.any { it.equals(ch, ignoreCase = true) } }
+                        )
+                }
+                SimilarBillCriterion.CATEGORY -> {
+                    val a = category.trim()
+                    val b = target.category.trim()
+                    a.isNotEmpty() && b.isNotEmpty() && a.equals(b, ignoreCase = true)
+                }
+                SimilarBillCriterion.TYPE -> txType == target.txType
+                SimilarBillCriterion.AMOUNT -> amountCents == target.amountCents
+                SimilarBillCriterion.CURRENCY -> currencyCode.equals(target.currencyCode, ignoreCase = true)
+                SimilarBillCriterion.CARD_TAIL -> {
+                    val a = cardLastFour?.trim().orEmpty()
+                    val b = target.cardLastFour?.trim().orEmpty()
+                    a.isNotEmpty() && b.isNotEmpty() && a.equals(b, ignoreCase = true)
+                }
+            }
+        }
+    }
+}
+
+enum class SimilarBillCriterion(val label: String) {
+    MERCHANT("商户"),
+    PRODUCT("商品"),
+    TRADE_TYPE("交易类型"),
+    CHANNEL("渠道"),
+    CATEGORY("分类"),
+    TYPE("收支方向"),
+    AMOUNT("金额"),
+    CURRENCY("币种"),
+    CARD_TAIL("卡尾号");
+
+    fun previewValue(tx: LedgerTransaction): String? = when (this) {
+        MERCHANT -> tx.merchant.trim().takeIf { it.isNotEmpty() }
+        PRODUCT -> tx.productName?.trim()?.takeIf { it.isNotEmpty() }
+        TRADE_TYPE -> tx.tradeType?.trim()?.takeIf { it.isNotEmpty() }
+        CHANNEL -> tx.channel.trim().takeIf { it.isNotEmpty() }
+        CATEGORY -> tx.category.trim().takeIf { it.isNotEmpty() }
+        TYPE -> tx.txType.label
+        AMOUNT -> "%.2f".format(java.util.Locale.US, tx.amountCents / 100.0)
+        CURRENCY -> tx.currencyCode
+        CARD_TAIL -> tx.cardLastFour?.trim()?.takeIf { it.isNotEmpty() }
     }
 }
 
@@ -719,7 +806,10 @@ data class BudgetSettings(
     val exchangeRateSource: String = ExchangeRateSource.EXCHANGE_RATE_API.name,
     val customExchangeRateUrl: String = "",
     val githubUpdateMirror: String = GitHubUpdateMirror.DIRECT.name,
-    val enabledCurrencyCodes: List<String> = CurrencyCatalog.defaultEnabledForeignCodes
+    val enabledCurrencyCodes: List<String> = CurrencyCatalog.defaultEnabledForeignCodes,
+    val expenseCategories: List<String> = CategoryCatalog.expenseCategories,
+    val incomeCategories: List<String> = CategoryCatalog.incomeCategories,
+    val transferCategories: List<String> = CategoryCatalog.transferCategories
 )
 
 data class WebDavConfig(
@@ -794,4 +884,30 @@ object CategoryCatalog {
     val transferCategories = listOf("不计收支", "账户互转", "转账红包", "其他")
 
     val allCategories = (expenseCategories + incomeCategories + transferCategories).distinct()
+
+    fun normalizeCategoryList(raw: List<String>, defaults: List<String>): List<String> {
+        val cleaned = raw
+            .map { it.trim().take(24) }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        return if (cleaned.isEmpty()) defaults else cleaned
+    }
+
+    fun activeExpenseCategories(settings: BudgetSettings?): List<String> =
+        normalizeCategoryList(settings?.expenseCategories ?: expenseCategories, expenseCategories)
+
+    fun activeIncomeCategories(settings: BudgetSettings?): List<String> =
+        normalizeCategoryList(settings?.incomeCategories ?: incomeCategories, incomeCategories)
+
+    fun activeTransferCategories(settings: BudgetSettings?): List<String> =
+        normalizeCategoryList(settings?.transferCategories ?: transferCategories, transferCategories)
+
+    fun categoriesForType(type: TransactionType, settings: BudgetSettings? = null): List<String> = when (type) {
+        TransactionType.EXPENSE -> activeExpenseCategories(settings)
+        TransactionType.INCOME -> activeIncomeCategories(settings)
+        TransactionType.TRANSFER -> activeTransferCategories(settings)
+    }
+
+    fun allActiveCategories(settings: BudgetSettings? = null): List<String> =
+        (activeExpenseCategories(settings) + activeIncomeCategories(settings) + activeTransferCategories(settings)).distinct()
 }

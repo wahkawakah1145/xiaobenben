@@ -1,8 +1,10 @@
 package com.example.data
 
 import android.content.Context
+import android.database.sqlite.SQLiteBlobTooBigException
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
+import com.example.model.CategoryCatalog
 import com.example.model.CurrencyCatalog
 import com.example.model.CustomParsingRule
 import com.example.model.ExchangeRateState
@@ -17,11 +19,20 @@ import com.example.model.TransactionType
 import com.example.model.WebDavConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+
+data class CategorySyncResult(
+    val updatedTransactions: Int = 0,
+    val updatedRules: Int = 0,
+    val aiPromptSynced: Boolean = false
+)
 
 class LedgerRepository(
     private val dao: LedgerDao,
@@ -34,14 +45,20 @@ class LedgerRepository(
         database = LedgerDatabase.getInstance(context)
     )
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun observeTransactions(): Flow<List<LedgerTransaction>> =
-        dao.observeAllTransactions().map { list -> list.map { it.toDomain() } }
+        dao.observeTransactionsSignature()
+            .mapLatest { loadAllTransactionsChunked() }
+            .flowOn(Dispatchers.IO)
 
     fun observeBooks(): Flow<List<LedgerBook>> =
         dao.observeAllBooks().map { list -> list.map { it.toDomain() } }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun observeBookLinks(): Flow<List<TransactionBookLink>> =
-        dao.observeAllBookRefs().map { list -> list.map { it.toDomain() } }
+        dao.observeBookRefsSignature()
+            .mapLatest { loadAllBookLinksChunked() }
+            .flowOn(Dispatchers.IO)
 
     fun observeInquiries(): Flow<List<com.example.model.NotificationInquiry>> =
         dao.observeInquiries().map { list -> list.map { it.toDomain() } }
@@ -68,14 +85,90 @@ class LedgerRepository(
     suspend fun getRulesOnce(): List<CustomParsingRule> =
         dao.getAllRulesOnce().map { it.toDomain() }
 
-    suspend fun getAllTransactionsOnce(): List<LedgerTransaction> =
-        dao.getAllTransactionsOnce().map { it.toDomain() }
+    suspend fun getAllTransactionsOnce(): List<LedgerTransaction> = loadAllTransactionsChunked()
+
+    suspend fun getTransactionsByIdsOnce(txIds: Collection<String>): List<LedgerTransaction> =
+        withContext(Dispatchers.IO) {
+            val cleanIds = txIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (cleanIds.isEmpty()) return@withContext emptyList()
+            val result = ArrayList<LedgerTransaction>(cleanIds.size)
+            cleanIds.chunked(200).forEach { chunk ->
+                result.addAll(dao.getTransactionsByIds(chunk).map { it.toDomain() })
+            }
+            result
+        }
 
     suspend fun getAllBooksOnce(): List<LedgerBook> =
         dao.getAllBooksOnce().map { it.toDomain() }
 
-    suspend fun getAllBookLinksOnce(): List<TransactionBookLink> =
-        dao.getAllBookRefsOnce().map { it.toDomain() }
+    suspend fun getAllBookLinksOnce(): List<TransactionBookLink> = loadAllBookLinksChunked()
+
+    /**
+     * Reads transactions in bounded SQLite pages so a single CursorWindow (2 MB fixed native
+     * buffer on Android) never overflows even with thousands of records containing long raw text.
+     */
+    internal suspend fun loadAllTransactionsChunked(
+        initialPageSize: Int = DEFAULT_TRANSACTION_PAGE_SIZE
+    ): List<LedgerTransaction> = withContext(Dispatchers.IO) {
+        val all = ArrayList<LedgerTransaction>()
+        var offset = 0
+        var pageSize = initialPageSize.coerceIn(10, 400)
+        while (true) {
+            val page = readTransactionPageSafe(limit = pageSize, offset = offset)
+            if (page.isEmpty()) break
+            for (entity in page) {
+                all.add(entity.toDomain())
+            }
+            offset += page.size
+            if (page.size < pageSize) break
+            // If we previously shrank pageSize due to an exceptionally large row, gently recover.
+            if (pageSize < initialPageSize) {
+                pageSize = (pageSize * 2).coerceAtMost(initialPageSize)
+            }
+        }
+        all
+    }
+
+    private suspend fun readTransactionPageSafe(limit: Int, offset: Int): List<TransactionEntity> {
+        var attemptLimit = limit.coerceAtLeast(1)
+        while (true) {
+            try {
+                return dao.getTransactionsPage(limit = attemptLimit, offset = offset)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val isCursorWindowOverflow = e is SQLiteBlobTooBigException ||
+                    e is IllegalStateException ||
+                    e.message?.contains("CursorWindow", ignoreCase = true) == true
+                if (!isCursorWindowOverflow || attemptLimit <= 1) {
+                    throw e
+                }
+                attemptLimit = when {
+                    attemptLimit > 40 -> 40
+                    attemptLimit > 10 -> 10
+                    else -> 1
+                }
+            }
+        }
+    }
+
+    private suspend fun loadAllBookLinksChunked(
+        pageSize: Int = DEFAULT_BOOK_LINK_PAGE_SIZE
+    ): List<TransactionBookLink> = withContext(Dispatchers.IO) {
+        val all = ArrayList<TransactionBookLink>()
+        var offset = 0
+        val safePageSize = pageSize.coerceIn(50, 1000)
+        while (true) {
+            val page = dao.getBookRefsPage(limit = safePageSize, offset = offset)
+            if (page.isEmpty()) break
+            for (entity in page) {
+                all.add(entity.toDomain())
+            }
+            offset += page.size
+            if (page.size < safePageSize) break
+        }
+        all
+    }
 
     suspend fun ensureDefaultRulesSeeded() {
         val count = dao.getRuleCount()
@@ -285,7 +378,7 @@ class LedgerRepository(
         return try {
             require(txId.isNotBlank()) { "账单 ID 不能为空" }
             require(amountCents in 1L..1_000_000_000L) { "金额需大于 0 且不超过 1000 万" }
-            val existing = dao.getAllTransactionsOnce().firstOrNull { it.id == txId }
+            val existing = dao.getTransactionById(txId)
                 ?: throw IllegalArgumentException("未找到对应的账单记录")
             val now = System.currentTimeMillis()
             val cleanCategory = category.trim().ifBlank { "其他" }.take(40)
@@ -519,7 +612,11 @@ class LedgerRepository(
             val baseCode = settings?.let { CurrencyCatalog.resolve(it.baseCurrencyCode).code }
             val resolvedNewCurrency = currencyCode?.let { CurrencyCatalog.resolve(it).code }
 
-            val existing = dao.getAllTransactionsOnce().filter { it.id in idSet }
+            val existing = buildList {
+                idSet.chunked(200).forEach { chunk ->
+                    addAll(dao.getTransactionsByIds(chunk))
+                }
+            }
             val updated = existing.map { entity ->
                 val newCurrency = resolvedNewCurrency ?: entity.currencyCode
                 val currencyChanged = resolvedNewCurrency != null && !resolvedNewCurrency.equals(entity.currencyCode, ignoreCase = true)
@@ -733,7 +830,7 @@ class LedgerRepository(
             dao.upsertBooks(books.map { LedgerBookEntity.fromDomain(it) })
         }
         if (links.isNotEmpty()) {
-            val existingTxIds = dao.getAllTransactionsOnce().mapTo(HashSet()) { it.id }
+            val existingTxIds = dao.getAllTransactionIdsOnce().toHashSet()
             val existingBookIds = dao.getAllBooksOnce().mapTo(HashSet()) { it.id }
             val validRefs = links
                 .filter { it.transactionId in existingTxIds && it.bookId in existingBookIds }
@@ -796,6 +893,227 @@ class LedgerRepository(
     suspend fun saveAiConfig(config: com.example.model.AiConfig): Result<Unit> {
         return try {
             settingsStore.saveAiConfig(config)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun addCustomCategory(
+        type: TransactionType,
+        rawName: String,
+        syncAiPrompt: Boolean = true
+    ): Result<CategorySyncResult> {
+        return try {
+            val cleanName = rawName.trim().take(24)
+            require(cleanName.isNotEmpty()) { "分类名称不能为空" }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedSettings = when (type) {
+                TransactionType.EXPENSE -> {
+                    val cur = CategoryCatalog.activeExpenseCategories(settings)
+                    require(cur.none { it == cleanName }) { "该支出分类已存在" }
+                    settings.copy(expenseCategories = cur + cleanName)
+                }
+                TransactionType.INCOME -> {
+                    val cur = CategoryCatalog.activeIncomeCategories(settings)
+                    require(cur.none { it == cleanName }) { "该收入分类已存在" }
+                    settings.copy(incomeCategories = cur + cleanName)
+                }
+                TransactionType.TRANSFER -> {
+                    val cur = CategoryCatalog.activeTransferCategories(settings)
+                    require(cur.none { it == cleanName }) { "该转账分类已存在" }
+                    settings.copy(transferCategories = cur + cleanName)
+                }
+            }
+            settingsStore.saveBudgetSettings(updatedSettings)
+            var aiSynced = false
+            if (syncAiPrompt) {
+                val aiCfg = settingsStore.getAiConfigOnce()
+                val newPrompt = AiUnderstandingManager.syncPromptForCategoryChange(
+                    currentCustomPrompt = aiCfg.customSystemPrompt,
+                    oldName = null,
+                    newName = cleanName,
+                    allActiveCategories = CategoryCatalog.allActiveCategories(updatedSettings)
+                )
+                if (newPrompt != aiCfg.customSystemPrompt) {
+                    settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
+                }
+                aiSynced = true
+            }
+            Result.success(CategorySyncResult(aiPromptSynced = aiSynced))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun renameCategory(
+        type: TransactionType,
+        oldName: String,
+        rawNewName: String,
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true,
+        syncAiPrompt: Boolean = true
+    ): Result<CategorySyncResult> {
+        return try {
+            val cleanOld = oldName.trim()
+            val cleanNew = rawNewName.trim().take(24)
+            require(cleanOld.isNotEmpty() && cleanNew.isNotEmpty()) { "分类名称不能为空" }
+            require(cleanOld != cleanNew) { "新分类名称与原名称相同" }
+
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedSettings = when (type) {
+                TransactionType.EXPENSE -> {
+                    val cur = CategoryCatalog.activeExpenseCategories(settings)
+                    val replaced = cur.map { if (it == cleanOld) cleanNew else it }.distinct()
+                    settings.copy(expenseCategories = replaced)
+                }
+                TransactionType.INCOME -> {
+                    val cur = CategoryCatalog.activeIncomeCategories(settings)
+                    val replaced = cur.map { if (it == cleanOld) cleanNew else it }.distinct()
+                    settings.copy(incomeCategories = replaced)
+                }
+                TransactionType.TRANSFER -> {
+                    val cur = CategoryCatalog.activeTransferCategories(settings)
+                    val replaced = cur.map { if (it == cleanOld) cleanNew else it }.distinct()
+                    settings.copy(transferCategories = replaced)
+                }
+            }
+            settingsStore.saveBudgetSettings(updatedSettings)
+
+            val now = System.currentTimeMillis()
+            val updatedTx = if (syncTransactions) {
+                dao.renameTransactionCategory(cleanOld, cleanNew, now)
+            } else {
+                0
+            }
+            val updatedRules = if (syncRules) {
+                dao.renameRuleCategory(cleanOld, cleanNew, now)
+            } else {
+                0
+            }
+            var aiSynced = false
+            if (syncAiPrompt) {
+                val aiCfg = settingsStore.getAiConfigOnce()
+                val newPrompt = AiUnderstandingManager.syncPromptForCategoryChange(
+                    currentCustomPrompt = aiCfg.customSystemPrompt,
+                    oldName = cleanOld,
+                    newName = cleanNew,
+                    allActiveCategories = CategoryCatalog.allActiveCategories(updatedSettings)
+                )
+                if (newPrompt != aiCfg.customSystemPrompt) {
+                    settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
+                }
+                aiSynced = true
+            }
+            Result.success(
+                CategorySyncResult(
+                    updatedTransactions = updatedTx,
+                    updatedRules = updatedRules,
+                    aiPromptSynced = aiSynced
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteCategory(
+        type: TransactionType,
+        targetName: String,
+        fallbackCategory: String = "其他",
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true,
+        syncAiPrompt: Boolean = true
+    ): Result<CategorySyncResult> {
+        return try {
+            val cleanTarget = targetName.trim()
+            val cleanFallback = fallbackCategory.trim().ifBlank { "其他" }.take(24)
+            require(cleanTarget.isNotEmpty()) { "分类名称不能为空" }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedSettings = when (type) {
+                TransactionType.EXPENSE -> {
+                    val cur = CategoryCatalog.activeExpenseCategories(settings)
+                    require(cur.size > 1) { "至少需保留 1 个支出分类" }
+                    settings.copy(expenseCategories = cur.filterNot { it == cleanTarget })
+                }
+                TransactionType.INCOME -> {
+                    val cur = CategoryCatalog.activeIncomeCategories(settings)
+                    require(cur.size > 1) { "至少需保留 1 个收入分类" }
+                    settings.copy(incomeCategories = cur.filterNot { it == cleanTarget })
+                }
+                TransactionType.TRANSFER -> {
+                    val cur = CategoryCatalog.activeTransferCategories(settings)
+                    require(cur.size > 1) { "至少需保留 1 个转账分类" }
+                    settings.copy(transferCategories = cur.filterNot { it == cleanTarget })
+                }
+            }
+            settingsStore.saveBudgetSettings(updatedSettings)
+            val now = System.currentTimeMillis()
+            val updatedTx = if (syncTransactions && cleanFallback != cleanTarget) {
+                dao.renameTransactionCategory(cleanTarget, cleanFallback, now)
+            } else {
+                0
+            }
+            val updatedRules = if (syncRules && cleanFallback != cleanTarget) {
+                dao.renameRuleCategory(cleanTarget, cleanFallback, now)
+            } else {
+                0
+            }
+            var aiSynced = false
+            if (syncAiPrompt) {
+                val aiCfg = settingsStore.getAiConfigOnce()
+                val newPrompt = AiUnderstandingManager.syncPromptForCategoryChange(
+                    currentCustomPrompt = aiCfg.customSystemPrompt,
+                    oldName = cleanTarget,
+                    newName = null,
+                    allActiveCategories = CategoryCatalog.allActiveCategories(updatedSettings)
+                )
+                if (newPrompt != aiCfg.customSystemPrompt) {
+                    settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
+                }
+                aiSynced = true
+            }
+            Result.success(
+                CategorySyncResult(
+                    updatedTransactions = updatedTx,
+                    updatedRules = updatedRules,
+                    aiPromptSynced = aiSynced
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun resetCategoriesToDefault(syncAiPrompt: Boolean = true): Result<Unit> {
+        return try {
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val reset = settings.copy(
+                expenseCategories = CategoryCatalog.expenseCategories,
+                incomeCategories = CategoryCatalog.incomeCategories,
+                transferCategories = CategoryCatalog.transferCategories
+            )
+            settingsStore.saveBudgetSettings(reset)
+            if (syncAiPrompt) {
+                val aiCfg = settingsStore.getAiConfigOnce()
+                val newPrompt = AiUnderstandingManager.syncPromptForCategoryChange(
+                    currentCustomPrompt = aiCfg.customSystemPrompt,
+                    oldName = null,
+                    newName = null,
+                    allActiveCategories = CategoryCatalog.allActiveCategories(reset)
+                )
+                if (newPrompt != aiCfg.customSystemPrompt) {
+                    settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
+                }
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -938,6 +1256,8 @@ class LedgerRepository(
     }
 
     companion object {
+        const val DEFAULT_TRANSACTION_PAGE_SIZE = 200
+        const val DEFAULT_BOOK_LINK_PAGE_SIZE = 500
         const val MAX_RAW_NOTIFICATION_LENGTH = 220
         const val MAX_NOTE_LENGTH = 120
         fun defaultSeededRules(): List<CustomParsingRule> {

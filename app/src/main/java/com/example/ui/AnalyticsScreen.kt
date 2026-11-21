@@ -14,6 +14,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
@@ -786,7 +787,8 @@ fun AnalyticsScreen(
                                         selectedCategoryFilter = null
                                         expandAllCategoryLegends = false
                                     },
-                                    onTransactionClick = { inspectingTransaction = it }
+                                    onTransactionClick = { inspectingTransaction = it },
+                                    onTransactionLongClick = { editingTransaction = it }
                                 )
                             }
                         }
@@ -1002,7 +1004,8 @@ fun AnalyticsScreen(
                                         selectedChannelFilter = null
                                         expandAllChannelLegends = false
                                     },
-                                    onTransactionClick = { inspectingTransaction = it }
+                                    onTransactionClick = { inspectingTransaction = it },
+                                    onTransactionLongClick = { editingTransaction = it }
                                 )
                             }
                         }
@@ -1351,10 +1354,38 @@ fun AnalyticsScreen(
     }
 
     editingTransaction?.let { tx ->
+        var extTradeType: String? = tx.tradeType
+        var extProductName: String? = tx.productName
+        var extTradeStatus: String? = tx.tradeStatus
+        var extTxNo: String? = tx.transactionNo
+        var extMerchantOrderNo: String? = tx.merchantOrderNo
         TransactionEditorDialog(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
+            enabledCurrencyCodes = settings.enabledCurrencyCodes,
+            expenseCategories = com.example.model.CategoryCatalog.activeExpenseCategories(settings),
+            incomeCategories = com.example.model.CategoryCatalog.activeIncomeCategories(settings),
+            transferCategories = com.example.model.CategoryCatalog.activeTransferCategories(settings),
+            allTransactions = allTransactions,
+            onBatchApplySimilar = { matchedIds, type, category, channel, merchant, currencyCode, note ->
+                viewModel.batchUpdateTransactions(
+                    txIds = matchedIds,
+                    type = type,
+                    category = category,
+                    channel = channel,
+                    merchant = merchant,
+                    currencyCode = currencyCode,
+                    note = note
+                )
+            },
             onDismiss = { editingTransaction = null },
+            onSaveExtended = { tt, pn, ts, tno, mno ->
+                extTradeType = tt
+                extProductName = pn
+                extTradeStatus = ts
+                extTxNo = tno
+                extMerchantOrderNo = mno
+            },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
                     txId = tx.id,
@@ -1367,7 +1398,13 @@ fun AnalyticsScreen(
                     cardLastFour = tail,
                     note = note,
                     occurredAtMillis = occurredAtMillis,
-                    confirmed = true
+                    confirmed = true,
+                    tradeType = extTradeType,
+                    productName = extProductName,
+                    tradeStatus = extTradeStatus,
+                    transactionNo = extTxNo,
+                    merchantOrderNo = extMerchantOrderNo,
+                    updateExtendedFields = true
                 )
                 editingTransaction = null
             }
@@ -1797,6 +1834,7 @@ private fun ClickableBreakdownRow(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun FilteredTransactionsPanel(
     title: String,
@@ -1804,9 +1842,11 @@ private fun FilteredTransactionsPanel(
     baseCurrencyCode: String,
     ratesToCny: Map<String, Double>,
     onClearFilter: () -> Unit,
-    onTransactionClick: (LedgerTransaction) -> Unit
+    onTransactionClick: (LedgerTransaction) -> Unit,
+    onTransactionLongClick: (LedgerTransaction) -> Unit = onTransactionClick
 ) {
     val numberFont = LocalNumberFontFamily.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -1823,12 +1863,18 @@ private fun FilteredTransactionsPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                CompactFullText(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                    maxLines = 2,
-                    modifier = Modifier.weight(1f)
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    CompactFullText(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 2
+                    )
+                    Text(
+                        text = "点按查看详情 · 长按直接编辑",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 TextButton(
                     onClick = onClearFilter,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
@@ -1853,7 +1899,13 @@ private fun FilteredTransactionsPanel(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable { onTransactionClick(tx) }
+                            .combinedClickable(
+                                onClick = { onTransactionClick(tx) },
+                                onLongClick = {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    onTransactionLongClick(tx)
+                                }
+                            )
                             .testTag("filtered_tx_row_${tx.id}")
                     ) {
                         Row(

@@ -21,9 +21,11 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +45,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import com.example.ui.theme.AppIcons
@@ -51,6 +54,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -776,6 +780,7 @@ fun CurrencySettingsScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun ManualImportScreen(
     viewModel: LedgerViewModel,
@@ -784,6 +789,7 @@ fun ManualImportScreen(
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val importState by viewModel.importUiState.collectAsStateWithLifecycle()
     val aiConfig by viewModel.aiConfigState.collectAsStateWithLifecycle()
     var pastedText by remember { mutableStateOf("") }
@@ -791,7 +797,13 @@ fun ManualImportScreen(
     var useRuleMatching by rememberSaveable { mutableStateOf(true) }
     var useAiUnderstanding by rememberSaveable { mutableStateOf(false) }
     val readyPreview = (importState as? ImportUiState.Ready)?.preview
-    var showAllRecognizedItems by remember(readyPreview) { mutableStateOf(false) }
+    var showAllRecognizedItems by remember(readyPreview) { mutableStateOf(true) }
+    var selectedImportIds by remember(readyPreview) {
+        mutableStateOf(readyPreview?.defaultSelectedIds() ?: emptySet())
+    }
+    var inspectingImportTx by remember(readyPreview) {
+        mutableStateOf<com.example.model.LedgerTransaction?>(null)
+    }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -1040,9 +1052,14 @@ fun ManualImportScreen(
                 }
                 is ImportUiState.Ready -> {
                     val preview = state.preview
-                    val newItems = preview.newTransactions
+                    val recommendedItems = preview.recommendedTransactions
                     val duplicateCount = preview.duplicateCount
-                    val displayedItems = if (showAllRecognizedItems) preview.transactions else newItems
+                    val selfTransferCount = preview.selfTransferExcludedCount
+                    val displayedItems = if (showAllRecognizedItems) preview.transactions else recommendedItems
+                    val displayedIds = displayedItems.mapTo(LinkedHashSet()) { it.id }
+                    val allDisplayedSelected = displayedIds.isNotEmpty() && displayedIds.all { it in selectedImportIds }
+                    val selectedItemsToCommit = preview.transactions.filter { it.id in selectedImportIds }
+
                     item(key = "import_preview_header") {
                         Card(
                             shape = RoundedCornerShape(18.dp),
@@ -1059,17 +1076,21 @@ fun ManualImportScreen(
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                Text(
+                                    text = "点击条目切换勾选 · 长按条目查看详情 · 默认全选并自动排除重复与本人互转/不计收支项",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Surface(
                                         shape = RoundedCornerShape(99.dp),
                                         color = IncomeJade.copy(alpha = 0.16f)
                                     ) {
                                         Text(
-                                            text = "新增 ${newItems.size} 笔",
+                                            text = "已勾选 ${selectedItemsToCommit.size} 笔",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = IncomeJade,
                                             fontWeight = FontWeight.SemiBold,
@@ -1085,12 +1106,26 @@ fun ManualImportScreen(
                                         }
                                     ) {
                                         Text(
-                                            text = if (duplicateCount > 0) "重复跳过 $duplicateCount 笔" else "无重复条目",
+                                            text = if (duplicateCount > 0) "重复 $duplicateCount 笔" else "无重复",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = if (duplicateCount > 0) ExpenseCoral else MaterialTheme.colorScheme.onSurfaceVariant,
                                             fontWeight = FontWeight.Medium,
                                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                                         )
+                                    }
+                                    if (selfTransferCount > 0) {
+                                        Surface(
+                                            shape = RoundedCornerShape(99.dp),
+                                            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f)
+                                        ) {
+                                            Text(
+                                                text = "本人互转/不计收支 $selfTransferCount 笔",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                            )
+                                        }
                                     }
                                 }
                                 if (preview.detectedColumnsSummary.isNotBlank()) {
@@ -1100,21 +1135,44 @@ fun ManualImportScreen(
                                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                                     )
                                 }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    FilterChip(
-                                        selected = !showAllRecognizedItems,
-                                        onClick = { showAllRecognizedItems = false },
-                                        label = { Text("仅看新增 (${newItems.size})") },
-                                        modifier = Modifier.testTag("import_filter_new_only")
-                                    )
                                     FilterChip(
                                         selected = showAllRecognizedItems,
                                         onClick = { showAllRecognizedItems = true },
-                                        label = { Text("列出全部识别 (${preview.transactions.size})") },
+                                        label = { Text("全部识别 (${preview.transactions.size})") },
                                         modifier = Modifier.testTag("import_filter_show_all")
+                                    )
+                                    FilterChip(
+                                        selected = !showAllRecognizedItems,
+                                        onClick = { showAllRecognizedItems = false },
+                                        label = { Text("仅看推荐 (${recommendedItems.size})") },
+                                        modifier = Modifier.testTag("import_filter_new_only")
+                                    )
+                                    AssistChip(
+                                        onClick = { selectedImportIds = preview.defaultSelectedIds() },
+                                        label = { Text("恢复默认勾选") },
+                                        modifier = Modifier.testTag("import_default_selection_button")
+                                    )
+                                    AssistChip(
+                                        onClick = {
+                                            selectedImportIds = if (allDisplayedSelected) {
+                                                selectedImportIds - displayedIds
+                                            } else {
+                                                selectedImportIds + displayedIds
+                                            }
+                                        },
+                                        label = { Text(if (allDisplayedSelected) "取消全选" else "全选当前") },
+                                        modifier = Modifier.testTag("import_select_all_button")
+                                    )
+                                    AssistChip(
+                                        onClick = {
+                                            selectedImportIds = (selectedImportIds - displayedIds) + (displayedIds - selectedImportIds)
+                                        },
+                                        label = { Text("反选") },
+                                        modifier = Modifier.testTag("import_invert_selection_button")
                                     )
                                 }
                                 Row(
@@ -1130,25 +1188,26 @@ fun ManualImportScreen(
                                         Text("取消")
                                     }
                                     Button(
-                                        enabled = newItems.isNotEmpty(),
+                                        enabled = selectedItemsToCommit.isNotEmpty(),
                                         onClick = {
                                             viewModel.commitManualImport(
-                                                items = newItems,
-                                                skippedDuplicateCount = duplicateCount
+                                                items = selectedItemsToCommit,
+                                                skippedDuplicateCount = duplicateCount,
+                                                unselectedCount = (preview.transactions.size - selectedItemsToCommit.size).coerceAtLeast(0)
                                             )
                                         },
                                         modifier = Modifier
-                                            .weight(1.35f)
+                                            .weight(1.45f)
                                             .minimumInteractiveComponentSize()
                                             .testTag("commit_import_button")
                                     ) {
                                         Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            if (newItems.isNotEmpty()) {
-                                                "导入新增 (${newItems.size})"
+                                            if (selectedItemsToCommit.isNotEmpty()) {
+                                                "导入已选 (${selectedItemsToCommit.size})"
                                             } else {
-                                                "无新增条目"
+                                                "请先勾选条目"
                                             }
                                         )
                                     }
@@ -1170,12 +1229,12 @@ fun ManualImportScreen(
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Text(
-                                        text = "识别到的 ${preview.transactions.size} 笔账单均为重复条目，已自动过滤。",
+                                        text = "识别到的 ${preview.transactions.size} 笔账单均为重复或本人互转排除项，默认未勾选。",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Medium
                                     )
                                     Text(
-                                        text = "如需核对已跳过的明细，请点击上方「列出全部识别 (${preview.transactions.size})」。",
+                                        text = "如需核对或手动勾选导入，请切换至「全部识别 (${preview.transactions.size})」。",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -1185,30 +1244,60 @@ fun ManualImportScreen(
                     }
                     items(displayedItems, key = { it.id }) { tx ->
                         val isDuplicate = tx.id in preview.duplicateIds
-                        val dupReason = preview.duplicateReasons[tx.id]
+                        val exclusionTag = preview.defaultExclusionTag(tx)
+                        val exclusionDetail = preview.defaultExclusionDetail(tx)
+                        val isSelected = tx.id in selectedImportIds
+                        val isExcludedDefault = exclusionTag != null
                         Surface(
-                            color = if (isDuplicate) {
-                                MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.62f)
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerLow
+                            color = when {
+                                isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f)
+                                isExcludedDefault -> MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.62f)
+                                else -> MaterialTheme.colorScheme.surfaceContainerLow
                             },
-                            border = if (isDuplicate) {
-                                BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
-                            } else {
-                                null
-                            },
+                            border = BorderStroke(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+                                }
+                            ),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .combinedClickable(
+                                    onClick = {
+                                        selectedImportIds = if (isSelected) {
+                                            selectedImportIds - tx.id
+                                        } else {
+                                            selectedImportIds + tx.id
+                                        }
+                                    },
+                                    onLongClick = {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        inspectingImportTx = tx
+                                    }
+                                )
                                 .testTag(if (isDuplicate) "import_preview_dup_${tx.id}" else "import_preview_new_${tx.id}")
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = {
+                                        selectedImportIds = if (isSelected) {
+                                            selectedImportIds - tx.id
+                                        } else {
+                                            selectedImportIds + tx.id
+                                        }
+                                    }
+                                )
                                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -1218,31 +1307,32 @@ fun ManualImportScreen(
                                             text = tx.merchant,
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.Medium,
-                                            color = if (isDuplicate) {
+                                            color = if (isExcludedDefault && !isSelected) {
                                                 MaterialTheme.colorScheme.onSurfaceVariant
                                             } else {
                                                 MaterialTheme.colorScheme.onSurface
                                             }
                                         )
-                                        if (isDuplicate) {
+                                        if (exclusionTag != null) {
+                                            val tagColor = if (isDuplicate) ExpenseCoral else MaterialTheme.colorScheme.tertiary
                                             Surface(
                                                 shape = RoundedCornerShape(6.dp),
-                                                color = ExpenseCoral.copy(alpha = 0.14f)
+                                                color = tagColor.copy(alpha = 0.14f)
                                             ) {
                                                 Text(
-                                                    text = "重复 · 已跳过",
+                                                    text = "$exclusionTag · 默认不选",
                                                     style = MaterialTheme.typography.labelSmall,
-                                                    color = ExpenseCoral,
+                                                    color = tagColor,
                                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                                                 )
                                             }
                                         }
                                     }
-                                    if (isDuplicate && !dupReason.isNullOrBlank()) {
+                                    if (!exclusionDetail.isNullOrBlank()) {
                                         Text(
-                                            text = dupReason,
+                                            text = exclusionDetail,
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = ExpenseCoral.copy(alpha = 0.85f)
+                                            color = if (isDuplicate) ExpenseCoral.copy(alpha = 0.85f) else MaterialTheme.colorScheme.tertiary
                                         )
                                     }
                                     val extraMeta = listOfNotNull(
@@ -1269,7 +1359,7 @@ fun ManualImportScreen(
                                     text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
                                     style = MaterialTheme.typography.titleSmall.copy(fontFamily = LocalNumberFontFamily.current),
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isDuplicate) {
+                                    color = if (isExcludedDefault && !isSelected) {
                                         MaterialTheme.colorScheme.onSurfaceVariant
                                     } else {
                                         MaterialTheme.colorScheme.onSurface
@@ -1281,6 +1371,95 @@ fun ManualImportScreen(
                 }
             }
         }
+    }
+
+    inspectingImportTx?.let { tx ->
+        val preview = readyPreview
+        val exclusionTag = preview?.defaultExclusionTag(tx)
+        val exclusionDetail = preview?.defaultExclusionDetail(tx)
+        val isChecked = tx.id in selectedImportIds
+        AlertDialog(
+            onDismissRequest = { inspectingImportTx = null },
+            title = { Text("导入条目详情") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontFamily = LocalNumberFontFamily.current),
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (exclusionTag != null) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = ExpenseCoral.copy(alpha = 0.12f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "排除标记：$exclusionTag${exclusionDetail?.let { "（$it）" } ?: ""}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ExpenseCoral,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+                    Text("交易对方：${tx.merchant}", style = MaterialTheme.typography.bodySmall)
+                    Text("收支与分类：${tx.txType.label} · ${tx.category}", style = MaterialTheme.typography.bodySmall)
+                    Text("支付渠道：${tx.channel}", style = MaterialTheme.typography.bodySmall)
+                    Text("发生时间：${formatDateTimeFull(tx.occurredAtMillis)}", style = MaterialTheme.typography.bodySmall)
+                    tx.productName?.takeIf { it.isNotBlank() }?.let {
+                        Text("商品/说明：$it", style = MaterialTheme.typography.bodySmall)
+                    }
+                    tx.tradeType?.takeIf { it.isNotBlank() }?.let {
+                        Text("交易类型：$it", style = MaterialTheme.typography.bodySmall)
+                    }
+                    tx.tradeStatus?.takeIf { it.isNotBlank() }?.let {
+                        Text("当前状态：$it", style = MaterialTheme.typography.bodySmall)
+                    }
+                    tx.balanceAfterCents?.let {
+                        Text("本次余额：${formatCurrency(it, tx.currencyCode)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    tx.transactionNo?.takeIf { it.isNotBlank() }?.let {
+                        Text("交易单号/日志号：$it", style = MaterialTheme.typography.bodySmall)
+                    }
+                    tx.merchantOrderNo?.takeIf { it.isNotBlank() }?.let {
+                        Text("商户单号：$it", style = MaterialTheme.typography.bodySmall)
+                    }
+                    tx.note?.takeIf { it.isNotBlank() }?.let {
+                        Text("备注/附言：$it", style = MaterialTheme.typography.bodySmall)
+                    }
+                    tx.rawNotification?.takeIf { it.isNotBlank() }?.let { raw ->
+                        HorizontalDivider()
+                        Text("原始记录", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        SelectionContainer {
+                            Text(raw, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { inspectingImportTx = null }) { Text("关闭") }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        selectedImportIds = if (isChecked) {
+                            selectedImportIds - tx.id
+                        } else {
+                            selectedImportIds + tx.id
+                        }
+                        inspectingImportTx = null
+                    },
+                    modifier = Modifier.testTag("import_detail_toggle_select")
+                ) {
+                    Text(if (isChecked) "取消勾选此项" else "勾选导入此项")
+                }
+            }
+        )
     }
 }
 

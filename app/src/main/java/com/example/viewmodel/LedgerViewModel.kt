@@ -489,7 +489,7 @@ class LedgerViewModel(
 
     fun deleteTransaction(txId: String) {
         viewModelScope.launch {
-            val snapshot = repository.getAllTransactionsOnce().filter { it.id == txId }
+            val snapshot = repository.getTransactionsByIdsOnce(listOf(txId))
             repository.deleteTransaction(txId)
                 .onSuccess {
                     if (snapshot.isNotEmpty()) {
@@ -508,7 +508,7 @@ class LedgerViewModel(
         viewModelScope.launch {
             val idSet = txIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             if (idSet.isEmpty()) return@launch
-            val snapshot = repository.getAllTransactionsOnce().filter { it.id in idSet }
+            val snapshot = repository.getTransactionsByIdsOnce(idSet)
             repository.deleteTransactions(idSet)
                 .onSuccess { count ->
                     if (count > 0 && snapshot.isNotEmpty()) {
@@ -676,6 +676,7 @@ class LedgerViewModel(
                 return@launch
             }
             val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
+            val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settingsState.value)
             val result = aiManager.enhanceOrParseNotification(
                 context = context,
                 config = config,
@@ -683,7 +684,8 @@ class LedgerViewModel(
                 title = title,
                 content = content,
                 fallbackParsed = null,
-                availableRules = rules
+                availableRules = rules,
+                activeCategories = activeCategories
             )
             result
                 .onSuccess { parsed ->
@@ -771,6 +773,103 @@ class LedgerViewModel(
         viewModelScope.launch {
             repository.saveSettings(settings)
                 .onFailure { _actionMessage.value = "保存设置失败" }
+        }
+    }
+
+    fun addCustomCategory(
+        type: TransactionType,
+        name: String,
+        syncAiPrompt: Boolean = true
+    ) {
+        viewModelScope.launch {
+            repository.addCustomCategory(type = type, rawName = name, syncAiPrompt = syncAiPrompt)
+                .onSuccess { res ->
+                    val aiSuffix = if (res.aiPromptSynced) "，已同步 AI 理解提示词" else ""
+                    _actionMessage.value = "已添加${type.label}分类「${name.trim()}」$aiSuffix"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = err.message ?: "添加分类失败"
+                }
+        }
+    }
+
+    fun renameCategory(
+        type: TransactionType,
+        oldName: String,
+        newName: String,
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true,
+        syncAiPrompt: Boolean = true
+    ) {
+        viewModelScope.launch {
+            repository.renameCategory(
+                type = type,
+                oldName = oldName,
+                rawNewName = newName,
+                syncTransactions = syncTransactions,
+                syncRules = syncRules,
+                syncAiPrompt = syncAiPrompt
+            )
+                .onSuccess { res ->
+                    val details = buildList {
+                        if (syncTransactions) add("${res.updatedTransactions} 笔账单")
+                        if (syncRules) add("${res.updatedRules} 条规则")
+                        if (res.aiPromptSynced) add("AI 提示词")
+                    }.joinToString("、")
+                    val suffix = if (details.isNotEmpty()) "（已同步 $details）" else ""
+                    _actionMessage.value = "已将「$oldName」改为「${newName.trim()}」$suffix"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = err.message ?: "修改分类失败"
+                }
+        }
+    }
+
+    fun deleteCategory(
+        type: TransactionType,
+        targetName: String,
+        fallbackCategory: String = "其他",
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true,
+        syncAiPrompt: Boolean = true
+    ) {
+        viewModelScope.launch {
+            repository.deleteCategory(
+                type = type,
+                targetName = targetName,
+                fallbackCategory = fallbackCategory,
+                syncTransactions = syncTransactions,
+                syncRules = syncRules,
+                syncAiPrompt = syncAiPrompt
+            )
+                .onSuccess { res ->
+                    val details = buildList {
+                        if (syncTransactions && res.updatedTransactions > 0) add("${res.updatedTransactions} 笔账单归入「$fallbackCategory」")
+                        if (syncRules && res.updatedRules > 0) add("${res.updatedRules} 条规则归入「$fallbackCategory」")
+                        if (res.aiPromptSynced) add("已同步 AI 提示词")
+                    }.joinToString("，")
+                    val suffix = if (details.isNotEmpty()) "（$details）" else ""
+                    _actionMessage.value = "已删除分类「$targetName」$suffix"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = err.message ?: "删除分类失败"
+                }
+        }
+    }
+
+    fun resetCategoriesToDefault(syncAiPrompt: Boolean = true) {
+        viewModelScope.launch {
+            repository.resetCategoriesToDefault(syncAiPrompt = syncAiPrompt)
+                .onSuccess {
+                    _actionMessage.value = if (syncAiPrompt) {
+                        "已恢复默认分类列表并同步 AI 提示词"
+                    } else {
+                        "已恢复默认分类列表"
+                    }
+                }
+                .onFailure { err ->
+                    _actionMessage.value = err.message ?: "恢复默认分类失败"
+                }
         }
     }
 
@@ -1038,6 +1137,7 @@ class LedgerViewModel(
             repository.saveAiConfig(config)
             _aiTestState.value = AiTestState.Loading
             val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
+            val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settingsState.value)
             aiManager.enhanceOrParseNotification(
                 context = context,
                 config = config,
@@ -1045,7 +1145,8 @@ class LedgerViewModel(
                 title = sampleTitle,
                 content = sampleContent,
                 fallbackParsed = null,
-                availableRules = rules
+                availableRules = rules,
+                activeCategories = activeCategories
             )
                 .onSuccess { parsed -> _aiTestState.value = AiTestState.Success(parsed) }
                 .onFailure { err -> _aiTestState.value = AiTestState.Error(err.message ?: "AI理解测试失败") }
@@ -1129,6 +1230,7 @@ class LedgerViewModel(
                 val lines = rawContent.lines().map { it.trim() }.filter { it.isNotEmpty() }.take(30)
                 val aiItems = mutableListOf<LedgerTransaction>()
                 var skipped = 0
+                val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settingsState.value)
                 for (line in lines) {
                     val res = aiManager.enhanceOrParseNotification(
                         context = context,
@@ -1137,7 +1239,8 @@ class LedgerViewModel(
                         title = "手动导入",
                         content = line,
                         fallbackParsed = null,
-                        availableRules = rules
+                        availableRules = rules,
+                        activeCategories = activeCategories
                     )
                     val parsed = res.getOrNull()
                     if (parsed != null && parsed.isFinancialTransaction && parsed.amountCents > 0L) {
@@ -1253,6 +1356,7 @@ class LedgerViewModel(
                 tx.note?.let { append(" 备注:").append(it) }
                 tx.rawNotification?.let { append(" 原文:").append(it) }
             }
+            val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settingsState.value)
             val aiRes = aiManager.enhanceOrParseNotification(
                 context = context,
                 config = aiConfig,
@@ -1260,7 +1364,8 @@ class LedgerViewModel(
                 title = "账单导入增强",
                 content = summaryText,
                 fallbackParsed = null,
-                availableRules = rules
+                availableRules = rules,
+                activeCategories = activeCategories
             ).getOrNull()
             if (aiRes != null) {
                 tx.copy(
@@ -1274,25 +1379,30 @@ class LedgerViewModel(
         }
     }
 
-    fun commitManualImport(items: List<LedgerTransaction>, skippedDuplicateCount: Int = 0) {
+    fun commitManualImport(
+        items: List<LedgerTransaction>,
+        skippedDuplicateCount: Int = 0,
+        unselectedCount: Int = 0
+    ) {
         viewModelScope.launch {
             if (items.isEmpty()) {
                 _importUiState.value = ImportUiState.Idle
                 _actionMessage.value = if (skippedDuplicateCount > 0) {
-                    "识别到的 $skippedDuplicateCount 笔账单均已存在，未重复导入"
+                    "未选择待导入账单（已跳过 $skippedDuplicateCount 笔重复）"
                 } else {
-                    "没有可导入的新增账单"
+                    "未选择可导入的账单"
                 }
                 return@launch
             }
             repository.importTransactions(items)
                 .onSuccess { count ->
                     _importUiState.value = ImportUiState.Idle
-                    _actionMessage.value = if (skippedDuplicateCount > 0) {
-                        "成功导入 $count 笔新账单（已自动跳过 $skippedDuplicateCount 笔重复）"
-                    } else {
-                        "成功导入 $count 笔账单"
+                    val extra = when {
+                        unselectedCount > 0 -> "（未勾选跳过 $unselectedCount 笔）"
+                        skippedDuplicateCount > 0 -> "（已跳过 $skippedDuplicateCount 笔重复）"
+                        else -> ""
                     }
+                    _actionMessage.value = "成功导入 $count 笔账单$extra"
                 }
                 .onFailure { err ->
                     _actionMessage.value = "导入失败：${err.localizedMessage ?: "请重试"}"

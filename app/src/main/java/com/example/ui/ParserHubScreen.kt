@@ -88,7 +88,9 @@ fun ParserHubScreen(
     val context = LocalContext.current
     val parseState by viewModel.parseBenchState.collectAsStateWithLifecycle()
     val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
+    val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val capturedLogs by NotificationBridge.capturedLogs.collectAsStateWithLifecycle()
+    val activeCategories = remember(settings) { CategoryCatalog.allActiveCategories(settings) }
     val numberFont = LocalNumberFontFamily.current
 
     var titleInput by remember { mutableStateOf("") }
@@ -552,6 +554,7 @@ fun ParserHubScreen(
     if (showCreateRuleDialog) {
         CustomRuleEditorDialog(
             initialRule = null,
+            activeCategories = activeCategories,
             onDismiss = { showCreateRuleDialog = false },
             onSave = { rule ->
                 viewModel.saveOrUpdateCustomRule(rule)
@@ -563,6 +566,7 @@ fun ParserHubScreen(
     editingRule?.let { targetRule ->
         CustomRuleEditorDialog(
             initialRule = targetRule,
+            activeCategories = activeCategories,
             onDismiss = { editingRule = null },
             onSave = { updated ->
                 viewModel.saveOrUpdateCustomRule(updated)
@@ -670,6 +674,7 @@ private fun CustomRuleCard(
 @Composable
 private fun CustomRuleEditorDialog(
     initialRule: CustomParsingRule?,
+    activeCategories: List<String> = CategoryCatalog.allCategories,
     onDismiss: () -> Unit,
     onSave: (CustomParsingRule) -> Unit
 ) {
@@ -692,7 +697,10 @@ private fun CustomRuleEditorDialog(
         TransactionType.TRANSFER.name to TransactionType.TRANSFER.label,
         "IGNORE" to "忽略非账单"
     )
-    val categoryChoices = listOf("自动") + CategoryCatalog.allCategories
+    val categoryChoices = remember(activeCategories, initialRule?.defaultCategory) {
+        (listOf("自动") + activeCategories + listOfNotNull(initialRule?.defaultCategory?.takeIf { it.isNotBlank() }))
+            .distinct()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,

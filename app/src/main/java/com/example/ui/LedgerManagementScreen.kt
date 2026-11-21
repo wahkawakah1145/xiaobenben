@@ -67,6 +67,7 @@ fun BillToolsMenuScreen(
     storageFootprint: StorageFootprintInfo,
     booksCount: Int = 0,
     onOpenBooks: () -> Unit = {},
+    onOpenCategories: () -> Unit = {},
     onOpenManualImport: () -> Unit = {},
     onOpenBehaviorBudget: () -> Unit,
     onOpenCurrencyRates: () -> Unit,
@@ -82,6 +83,7 @@ fun BillToolsMenuScreen(
     val baseCurrencyInfo = CurrencyCatalog.resolve(settings.baseCurrencyCode)
     val rateFreq = ExchangeRateAutoUpdateFrequency.fromRaw(settings.exchangeRateUpdateFrequency)
     val txCount = (transactionsState as? UiState.Success)?.data?.size ?: storageFootprint.transactionCount
+    val totalCategoryCount = com.example.model.CategoryCatalog.allActiveCategories(settings).size
 
     val behaviorSummary = buildString {
         append(if (settings.autoRecordEnabled) "自动捕捉已开启" else "仅手动记账")
@@ -116,6 +118,14 @@ fun BillToolsMenuScreen(
                             subtitle = if (booksCount > 0) "已创建 $booksCount 个账本 · 支持多账本归类与分账本图表分析" else "新建多维度账本，支持隐藏底部账本 Tab 后仍在此使用",
                             testTag = "bill_tool_books",
                             onClick = onOpenBooks
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        BillToolMenuRow(
+                            icon = AppIcons.ViewQuilt,
+                            title = "分类管理（同步规则与 AI）",
+                            subtitle = "当前共 $totalCategoryCount 个分类 · 支持新增/改名并同步账单、规则与 AI 提示词",
+                            testTag = "bill_tool_categories",
+                            onClick = onOpenCategories
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         BillToolMenuRow(

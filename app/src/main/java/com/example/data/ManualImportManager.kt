@@ -33,6 +33,62 @@ data class ImportPreviewResult(
 
     val duplicateCount: Int
         get() = duplicateIds.size
+
+    fun isSelfTransferExcluded(tx: LedgerTransaction): Boolean {
+        if (tx.txType == TransactionType.TRANSFER) return true
+        val cat = tx.category.trim()
+        if (cat == "不计收支" || cat == "账户互转") return true
+        val combined = listOfNotNull(
+            tx.merchant,
+            tx.productName,
+            tx.tradeType,
+            tx.note,
+            tx.rawNotification
+        ).joinToString(" ")
+        return SELF_TRANSFER_EXCLUDE_KEYWORDS.any { combined.contains(it, ignoreCase = true) }
+    }
+
+    fun defaultExclusionTag(tx: LedgerTransaction): String? = when {
+        tx.id in duplicateIds -> "重复"
+        isSelfTransferExcluded(tx) -> "本人互转/不计收支"
+        else -> null
+    }
+
+    fun defaultExclusionDetail(tx: LedgerTransaction): String? = when {
+        tx.id in duplicateIds -> duplicateReasons[tx.id]?.takeIf { it.isNotBlank() } ?: "与已有或同批账单重复"
+        isSelfTransferExcluded(tx) -> "属于本人互转/提现/内部划转，默认不勾选"
+        else -> null
+    }
+
+    val selfTransferExcludedCount: Int
+        get() = transactions.count { it.id !in duplicateIds && isSelfTransferExcluded(it) }
+
+    val recommendedTransactions: List<LedgerTransaction>
+        get() = transactions.filter { defaultExclusionTag(it) == null }
+
+    fun defaultSelectedIds(): Set<String> =
+        recommendedTransactions.mapTo(LinkedHashSet()) { it.id }
+
+    companion object {
+        private val SELF_TRANSFER_EXCLUDE_KEYWORDS = listOf(
+            "本人互转",
+            "本人转账",
+            "同名转账",
+            "同名账户",
+            "账户互转",
+            "内部转账",
+            "零钱提现",
+            "余额提现",
+            "提现到银行卡",
+            "提现至银行卡",
+            "零钱充值",
+            "零钱通转入",
+            "零钱通转出",
+            "余额宝转入",
+            "余额宝转出",
+            "不计收支"
+        )
+    }
 }
 
 object ManualImportManager {

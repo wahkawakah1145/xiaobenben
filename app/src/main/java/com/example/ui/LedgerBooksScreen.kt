@@ -73,6 +73,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.CurrencyExchangeManager
 import com.example.model.BudgetSettings
+import com.example.model.CategoryCatalog
 import com.example.model.ExchangeRateState
 import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
@@ -597,6 +598,11 @@ fun LedgerBooksScreen(
         TransactionEditorDialog(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
+            enabledCurrencyCodes = settings.enabledCurrencyCodes,
+            expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
+            incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
+            transferCategories = CategoryCatalog.activeTransferCategories(settings),
+            allTransactions = allTransactions,
             onDismiss = { editingTx = null },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
@@ -613,6 +619,17 @@ fun LedgerBooksScreen(
                     confirmed = true
                 )
                 editingTx = null
+            },
+            onBatchApplySimilar = { targetIds, type, category, channel, merchant, currencyCode, note ->
+                viewModel.batchUpdateTransactions(
+                    txIds = targetIds,
+                    type = type,
+                    category = category,
+                    channel = channel,
+                    merchant = merchant,
+                    currencyCode = currencyCode,
+                    note = note
+                )
             }
         )
     }
@@ -739,6 +756,30 @@ fun AddToBooksMultiSelectDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val allIds = books.mapTo(LinkedHashSet()) { it.id }
+                        val allSelected = checkedBookIds.containsAll(allIds)
+                        TextButton(
+                            onClick = {
+                                checkedBookIds = if (allSelected) emptySet() else allIds
+                            },
+                            modifier = Modifier.testTag("add_to_book_select_all_button")
+                        ) {
+                            Text(if (allSelected) "取消全选" else "全选")
+                        }
+                        TextButton(
+                            onClick = {
+                                checkedBookIds = (allIds - checkedBookIds).toSet()
+                            },
+                            modifier = Modifier.testTag("add_to_book_invert_button")
+                        ) {
+                            Text("反选")
+                        }
+                    }
                     books.forEach { book ->
                         val checked = book.id in checkedBookIds
                         val accent = Color(book.colorArgb.toInt())

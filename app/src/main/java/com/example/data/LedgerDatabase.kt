@@ -293,6 +293,21 @@ interface LedgerDao {
     @Query("SELECT * FROM transactions ORDER BY occurredAtMillis DESC")
     fun observeAllTransactions(): Flow<List<TransactionEntity>>
 
+    @Query("SELECT COUNT(*) || ':' || COALESCE(MAX(updatedAtMillis), 0) || ':' || COALESCE(SUM(amountCents), 0) FROM transactions")
+    fun observeTransactionsSignature(): Flow<String>
+
+    @Query("SELECT * FROM transactions ORDER BY occurredAtMillis DESC, id DESC LIMIT :limit OFFSET :offset")
+    suspend fun getTransactionsPage(limit: Int, offset: Int): List<TransactionEntity>
+
+    @Query("SELECT * FROM transactions WHERE id = :id LIMIT 1")
+    suspend fun getTransactionById(id: String): TransactionEntity?
+
+    @Query("SELECT * FROM transactions WHERE id IN (:ids)")
+    suspend fun getTransactionsByIds(ids: List<String>): List<TransactionEntity>
+
+    @Query("SELECT id FROM transactions")
+    suspend fun getAllTransactionIdsOnce(): List<String>
+
     @Query("SELECT * FROM transactions ORDER BY occurredAtMillis DESC")
     suspend fun getAllTransactionsOnce(): List<TransactionEntity>
 
@@ -307,6 +322,9 @@ interface LedgerDao {
 
     @Query("UPDATE transactions SET confirmed = 1, updatedAtMillis = :updatedAt WHERE confirmed = 0")
     suspend fun confirmAllPendingTransactions(updatedAt: Long)
+
+    @Query("UPDATE transactions SET category = :newCategory, updatedAtMillis = :updatedAt WHERE category = :oldCategory")
+    suspend fun renameTransactionCategory(oldCategory: String, newCategory: String, updatedAt: Long): Int
 
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteTransactionById(id: String)
@@ -331,6 +349,9 @@ interface LedgerDao {
 
     @Query("UPDATE parsing_rules SET enabled = :enabled, updatedAtMillis = :updatedAt WHERE id = :id")
     suspend fun setRuleEnabled(id: String, enabled: Boolean, updatedAt: Long)
+
+    @Query("UPDATE parsing_rules SET defaultCategory = :newCategory, updatedAtMillis = :updatedAt WHERE defaultCategory = :oldCategory")
+    suspend fun renameRuleCategory(oldCategory: String, newCategory: String, updatedAt: Long): Int
 
     @Query("DELETE FROM parsing_rules WHERE id = :id")
     suspend fun deleteRuleById(id: String)
@@ -376,6 +397,12 @@ interface LedgerDao {
 
     @Query("SELECT * FROM transaction_book_cross_ref")
     fun observeAllBookRefs(): Flow<List<TransactionBookCrossRefEntity>>
+
+    @Query("SELECT COUNT(*) || ':' || COALESCE(MAX(addedAtMillis), 0) FROM transaction_book_cross_ref")
+    fun observeBookRefsSignature(): Flow<String>
+
+    @Query("SELECT * FROM transaction_book_cross_ref ORDER BY addedAtMillis DESC, transactionId ASC, bookId ASC LIMIT :limit OFFSET :offset")
+    suspend fun getBookRefsPage(limit: Int, offset: Int): List<TransactionBookCrossRefEntity>
 
     @Query("SELECT * FROM transaction_book_cross_ref")
     suspend fun getAllBookRefsOnce(): List<TransactionBookCrossRefEntity>

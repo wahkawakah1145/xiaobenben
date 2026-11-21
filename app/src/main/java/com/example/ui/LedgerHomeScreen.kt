@@ -409,6 +409,11 @@ fun LedgerHomeScreen(
         FabPlacement.BOTTOM_START -> Alignment.BottomStart
     }
 
+    val listBottomPadding by androidx.compose.animation.core.animateDpAsState(
+        targetValue = if (isSelectionMode) 248.dp else 112.dp,
+        label = "home_list_bottom_padding"
+    )
+
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
@@ -418,7 +423,7 @@ fun LedgerHomeScreen(
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = listBottomPadding),
             verticalArrangement = Arrangement.spacedBy(cardSpacing)
         ) {
             if (appearance.homeHeaderOrder == HomeHeaderOrder.TIPS_TOP) {
@@ -505,7 +510,7 @@ fun LedgerHomeScreen(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("搜索对方、商品、单号、币种(如hkd/港元)或备注") },
+                        placeholder = { Text("多关键词空格隔开，搜对方/商品/分类/币种/单号/备注") },
                         leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
@@ -644,13 +649,22 @@ fun LedgerHomeScreen(
                                 }
                                 TextButton(
                                     onClick = {
+                                        selectedIds = (selectedIds - visibleFilteredIds) + (visibleFilteredIds - selectedIds)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("search_invert_select_button")
+                                ) {
+                                    Text("反选")
+                                }
+                                TextButton(
+                                    onClick = {
                                         selectedIds = if (allVisibleSelected) {
                                             selectedIds - visibleFilteredIds
                                         } else {
                                             selectedIds + visibleFilteredIds
                                         }
                                     },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                                     modifier = Modifier.testTag("search_batch_select_button")
                                 ) {
                                     Text(if (allVisibleSelected) "取消全选" else "全选结果")
@@ -806,6 +820,9 @@ fun LedgerHomeScreen(
                     } else {
                         selectedIds + visibleFilteredIds
                     }
+                },
+                onInvertSelection = {
+                    selectedIds = (selectedIds - visibleFilteredIds) + (visibleFilteredIds - selectedIds)
                 },
                 onClearSelection = { selectedIds = emptySet() },
                 onBatchEdit = { showBatchEditDialog = true },
@@ -992,6 +1009,9 @@ fun LedgerHomeScreen(
             initialTransaction = null,
             defaultCurrencyCode = baseCurrency,
             enabledCurrencyCodes = settings.enabledCurrencyCodes,
+            expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
+            incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
+            transferCategories = CategoryCatalog.activeTransferCategories(settings),
             onDismiss = { showCreateDialog = false },
             onSaveExtended = { tt, pn, ts, tno, mno ->
                 extTradeType = tt
@@ -1032,6 +1052,21 @@ fun LedgerHomeScreen(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
             enabledCurrencyCodes = settings.enabledCurrencyCodes,
+            expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
+            incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
+            transferCategories = CategoryCatalog.activeTransferCategories(settings),
+            allTransactions = confirmedTransactions,
+            onBatchApplySimilar = { matchedIds, type, category, channel, merchant, currencyCode, note ->
+                viewModel.batchUpdateTransactions(
+                    txIds = matchedIds,
+                    type = type,
+                    category = category,
+                    channel = channel,
+                    merchant = merchant,
+                    currencyCode = currencyCode,
+                    note = note
+                )
+            },
             onDismiss = { editingTransaction = null },
             onSaveExtended = { tt, pn, ts, tno, mno ->
                 extTradeType = tt
@@ -1068,6 +1103,7 @@ fun LedgerHomeScreen(
         ResolveInquiryDialog(
             inquiry = inquiry,
             defaultCurrencyCode = baseCurrency,
+            settings = settings,
             onDismiss = { resolvingInquiry = null },
             onIgnore = {
                 viewModel.dismissInquiryAsNonBill(inquiry)
@@ -1097,6 +1133,9 @@ fun LedgerHomeScreen(
     if (showBatchEditDialog && selectedIds.isNotEmpty()) {
         BatchEditTransactionsDialog(
             selectedCount = selectedIds.size,
+            expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
+            incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
+            transferCategories = CategoryCatalog.activeTransferCategories(settings),
             onDismiss = { showBatchEditDialog = false },
             onConfirm = { type, category, channel, merchant, currencyCode, note ->
                 viewModel.batchUpdateTransactions(
@@ -1426,6 +1465,7 @@ private fun NotificationInquirySectionCard(
 private fun ResolveInquiryDialog(
     inquiry: NotificationInquiry,
     defaultCurrencyCode: String,
+    settings: BudgetSettings,
     onDismiss: () -> Unit,
     onIgnore: () -> Unit,
     onConfirm: (
@@ -1495,11 +1535,11 @@ private fun ResolveInquiryDialog(
     }
     var amountError by remember { mutableStateOf<String?>(null) }
 
-    val availableCategories = remember(txType) {
+    val availableCategories = remember(txType, settings) {
         when (txType) {
-            TransactionType.INCOME -> CategoryCatalog.incomeCategories
-            TransactionType.TRANSFER -> listOf("转账红包", "其他")
-            TransactionType.EXPENSE -> CategoryCatalog.expenseCategories
+            TransactionType.INCOME -> CategoryCatalog.activeIncomeCategories(settings)
+            TransactionType.TRANSFER -> CategoryCatalog.activeTransferCategories(settings)
+            TransactionType.EXPENSE -> CategoryCatalog.activeExpenseCategories(settings)
         }
     }
     val currencyOptions = remember { CurrencyCatalog.currencies.take(6) }

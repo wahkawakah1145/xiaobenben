@@ -1141,4 +1141,239 @@ class ExampleRobolectricTest {
     org.junit.Assert.assertTrue(repo.observeParsingRules().first().any { it.id == customRule.id })
     repo.deleteParsingRule(customRule.id)
   }
+
+  @Test
+  fun `chunked database loading reads large transaction dataset across multiple pages`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val baseTime = 1_763_700_000_000L
+    val longBody = "微信支付收付款凭证详情原始通知正文".repeat(35)
+    val items = (0 until 450).map { idx ->
+      com.example.model.LedgerTransaction(
+        id = "chunk-tx-$idx",
+        amountCents = 100L + idx,
+        currencyCode = "CNY",
+        type = com.example.model.TransactionType.EXPENSE.name,
+        category = "餐饮美食",
+        merchant = "分页商户$idx",
+        channel = "微信支付",
+        rawNotification = "$longBody #$idx",
+        occurredAtMillis = baseTime + idx * 1000L,
+        confirmed = true
+      )
+    }
+    repo.importTransactions(items).getOrThrow()
+
+    val once = repo.getAllTransactionsOnce().filter { it.id.startsWith("chunk-tx-") }
+    assertEquals(450, once.size)
+    assertEquals("chunk-tx-449", once.first().id)
+
+    val observed = repo.observeTransactions().first().filter { it.id.startsWith("chunk-tx-") }
+    assertEquals(450, observed.size)
+
+    val byIds = repo.getTransactionsByIdsOnce(listOf("chunk-tx-0", "chunk-tx-250", "chunk-tx-449"))
+    assertEquals(3, byIds.size)
+
+    repo.deleteTransactions(items.map { it.id })
+  }
+
+  @Test
+  fun `multi-keyword space-separated search matches all tokens across fields`() {
+    val cal = java.util.Calendar.getInstance().apply {
+      set(2025, java.util.Calendar.NOVEMBER, 21, 13, 51, 44)
+      set(java.util.Calendar.MILLISECOND, 0)
+    }
+    val tx = com.example.model.LedgerTransaction(
+      id = "search-kw-1",
+      amountCents = 3850L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "星巴克臻选",
+      productName = "拿铁大杯",
+      channel = "花呗&红包",
+      note = "和同事午茶",
+      occurredAtMillis = cal.timeInMillis
+    )
+    org.junit.Assert.assertTrue(tx.matchesSearchQuery("星巴克 拿铁"))
+    org.junit.Assert.assertTrue(tx.matchesSearchQuery("星巴克　餐饮 2025-11-21 花呗"))
+    org.junit.Assert.assertTrue(tx.matchesSearchQuery("38.50 午茶"))
+    org.junit.Assert.assertFalse(tx.matchesSearchQuery("星巴克 微信"))
+    org.junit.Assert.assertFalse(tx.matchesSearchQuery("拿铁 2024-01-01"))
+  }
+
+  @Test
+  fun `batch import defaultSelectedIds excludes duplicates and self-transfer items`() {
+    val existingTime = java.util.Calendar.getInstance().apply {
+      set(2025, java.util.Calendar.NOVEMBER, 21, 13, 51, 30)
+      set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val existing = com.example.model.LedgerTransaction(
+      id = "exist-1",
+      amountCents = 2500L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "瑞幸咖啡",
+      channel = "支付宝",
+      occurredAtMillis = existingTime
+    )
+    val csv = """
+      交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注
+      2025-11-21 13:51:40,商户消费,瑞幸咖啡,生椰拿铁,支出,25.00,支付宝,支付成功,TX001,M001,重复项
+      2025-11-21 14:10:00,商户消费,美团外卖,牛肉面,支出,32.00,微信支付,支付成功,TX002,M002,正常新增
+      2025-11-21 15:00:00,零钱提现,微信零钱提现,提现到银行卡,不计收支,500.00,零钱,已到账,TX003,M003,本人互转
+      2025-11-21 16:00:00,工资入账,某科技公司,月薪,收入,8800.00,招商银行,已入账,TX004,M004,正常收入
+    """.trimIndent()
+    val parsed = com.example.data.ManualImportManager.parseImportedContent(
+      csv,
+      "import_select_test.csv"
+    ).getOrThrow()
+    val preview = com.example.data.ManualImportManager.annotateDuplicates(
+      preview = parsed,
+      existingTransactions = listOf(existing)
+    )
+
+    assertEquals(4, preview.transactions.size)
+    assertEquals(1, preview.duplicateCount)
+    assertEquals(1, preview.selfTransferExcludedCount)
+
+    val defaultSelected = preview.defaultSelectedIds()
+    assertEquals(2, defaultSelected.size)
+    val selectedMerchants = preview.transactions.filter { it.id in defaultSelected }.map { it.merchant }.toSet()
+    assertEquals(setOf("美团外卖", "某科技公司"), selectedMerchants)
+
+    val allIds = preview.transactions.mapTo(LinkedHashSet()) { it.id }
+    val inverted = allIds - defaultSelected
+    assertEquals(2, inverted.size)
+    val invertedMerchants = preview.transactions.filter { it.id in inverted }.map { it.merchant }.toSet()
+    assertEquals(setOf("瑞幸咖啡", "微信零钱提现"), invertedMerchants)
+  }
+
+  @Test
+  fun `custom category add and rename syncs transactions rules ai prompt and backup`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val originalSettings = repo.observeSettings().first()
+    val originalAi = repo.observeAiConfig().first()
+
+    repo.saveAiConfig(
+      originalAi.copy(
+        customSystemPrompt = "自定义提示词：可用分类包含 咖啡奶茶、餐饮美食，请返回 JSON。"
+      )
+    )
+    repo.addCustomCategory(com.example.model.TransactionType.EXPENSE, "咖啡奶茶").getOrThrow()
+
+    val tx = com.example.model.LedgerTransaction(
+      id = "cat-sync-tx-1",
+      amountCents = 1800L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "咖啡奶茶",
+      merchant = "霸王茶姬",
+      channel = "微信支付",
+      occurredAtMillis = 1_763_705_000_000L,
+      confirmed = true
+    )
+    val rule = com.example.model.CustomParsingRule(
+      id = "cat-sync-rule-1",
+      name = "奶茶规则",
+      keywordPattern = "霸王茶姬",
+      channelName = "微信支付",
+      defaultCategory = "咖啡奶茶"
+    )
+    repo.addTransaction(tx).getOrThrow()
+    repo.saveParsingRule(rule).getOrThrow()
+
+    val syncRes = repo.renameCategory(
+      type = com.example.model.TransactionType.EXPENSE,
+      oldName = "咖啡奶茶",
+      rawNewName = "精品茶饮",
+      syncTransactions = true,
+      syncRules = true,
+      syncAiPrompt = true
+    ).getOrThrow()
+
+    assertEquals(1, syncRes.updatedTransactions)
+    assertEquals(1, syncRes.updatedRules)
+    org.junit.Assert.assertTrue(syncRes.aiPromptSynced)
+
+    val updatedSettings = repo.observeSettings().first()
+    org.junit.Assert.assertTrue("精品茶饮" in com.example.model.CategoryCatalog.activeExpenseCategories(updatedSettings))
+    org.junit.Assert.assertFalse("咖啡奶茶" in com.example.model.CategoryCatalog.activeExpenseCategories(updatedSettings))
+
+    val updatedTx = repo.getTransactionsByIdsOnce(listOf("cat-sync-tx-1")).first()
+    assertEquals("精品茶饮", updatedTx.category)
+
+    val updatedRule = repo.observeParsingRules().first().first { it.id == "cat-sync-rule-1" }
+    assertEquals("精品茶饮", updatedRule.defaultCategory)
+
+    val updatedAi = repo.observeAiConfig().first()
+    org.junit.Assert.assertTrue(updatedAi.customSystemPrompt.contains("精品茶饮"))
+    org.junit.Assert.assertFalse(updatedAi.customSystemPrompt.contains("咖啡奶茶"))
+
+    val dynamicDefaultPrompt = com.example.data.AiUnderstandingManager.buildDefaultSystemPrompt(
+      com.example.model.CategoryCatalog.allActiveCategories(updatedSettings)
+    )
+    org.junit.Assert.assertTrue(dynamicDefaultPrompt.contains("精品茶饮"))
+
+    val backupJson = com.example.data.LedgerBackupCodec.encodeBackupJson(
+      transactions = listOf(updatedTx),
+      rules = listOf(updatedRule),
+      settings = updatedSettings
+    )
+    val decoded = com.example.data.LedgerBackupCodec.decodeBackupJson(backupJson)
+    org.junit.Assert.assertTrue("精品茶饮" in (decoded.settings?.expenseCategories ?: emptyList()))
+
+    // Cleanup
+    repo.deleteTransaction("cat-sync-tx-1")
+    repo.deleteParsingRule("cat-sync-rule-1")
+    repo.saveSettings(originalSettings)
+    repo.saveAiConfig(originalAi)
+  }
+
+  @Test
+  fun `similar bill criteria matches single and combined attributes accurately`() {
+    val target = com.example.model.LedgerTransaction(
+      id = "sim-target",
+      amountCents = 1500L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "交通出行",
+      merchant = "滴滴出行",
+      productName = "快车",
+      channel = "微信支付",
+      cardLastFour = "8899",
+      occurredAtMillis = 1_763_706_000_000L
+    )
+    val sameMerchantAndChannel = target.copy(id = "sim-1", amountCents = 2800L, category = "其他")
+    val sameMerchantDiffChannel = target.copy(id = "sim-2", channel = "支付宝")
+    val diffMerchantSameAmount = target.copy(id = "sim-3", merchant = "美团打车", amountCents = 1500L)
+
+    org.junit.Assert.assertTrue(
+      sameMerchantAndChannel.matchesSimilarCriteria(
+        target,
+        setOf(com.example.model.SimilarBillCriterion.MERCHANT, com.example.model.SimilarBillCriterion.CHANNEL)
+      )
+    )
+    org.junit.Assert.assertFalse(
+      sameMerchantDiffChannel.matchesSimilarCriteria(
+        target,
+        setOf(com.example.model.SimilarBillCriterion.MERCHANT, com.example.model.SimilarBillCriterion.CHANNEL)
+      )
+    )
+    org.junit.Assert.assertTrue(
+      sameMerchantDiffChannel.matchesSimilarCriteria(
+        target,
+        setOf(com.example.model.SimilarBillCriterion.MERCHANT)
+      )
+    )
+    org.junit.Assert.assertTrue(
+      diffMerchantSameAmount.matchesSimilarCriteria(
+        target,
+        setOf(com.example.model.SimilarBillCriterion.AMOUNT, com.example.model.SimilarBillCriterion.CARD_TAIL)
+      )
+    )
+  }
 }
+

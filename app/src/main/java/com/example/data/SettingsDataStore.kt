@@ -12,6 +12,7 @@ import com.example.model.AppIconStyle
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CardDensity
+import com.example.model.CategoryCatalog
 import com.example.model.CurrencyCatalog
 import com.example.model.CustomPaletteStyle
 import com.example.model.ExchangeRateState
@@ -103,6 +104,9 @@ class SettingsDataStore(private val context: Context) {
         val CUSTOM_EXCHANGE_RATE_URL = stringPreferencesKey("custom_exchange_rate_url")
         val GITHUB_UPDATE_MIRROR = stringPreferencesKey("github_update_mirror")
         val ENABLED_CURRENCY_CODES_JSON = stringPreferencesKey("enabled_currency_codes_json")
+        val EXPENSE_CATEGORIES_JSON = stringPreferencesKey("custom_expense_categories_json")
+        val INCOME_CATEGORIES_JSON = stringPreferencesKey("custom_income_categories_json")
+        val TRANSFER_CATEGORIES_JSON = stringPreferencesKey("custom_transfer_categories_json")
 
         val AI_PROVIDER_MODE = stringPreferencesKey("ai_provider_mode")
         val AI_LOCAL_MODEL_ID = stringPreferencesKey("ai_local_model_id")
@@ -143,7 +147,16 @@ class SettingsDataStore(private val context: Context) {
             } ?: CurrencyCatalog.normalizeEnabledForeignCodes(
                 CurrencyCatalog.defaultEnabledForeignCodes,
                 ensureCode = prefs[Keys.BASE_CURRENCY_CODE]
-            )
+            ),
+            expenseCategories = prefs[Keys.EXPENSE_CATEGORIES_JSON]?.let { rawJson ->
+                CategoryCatalog.normalizeCategoryList(decodeStringListJson(rawJson), CategoryCatalog.expenseCategories)
+            } ?: CategoryCatalog.expenseCategories,
+            incomeCategories = prefs[Keys.INCOME_CATEGORIES_JSON]?.let { rawJson ->
+                CategoryCatalog.normalizeCategoryList(decodeStringListJson(rawJson), CategoryCatalog.incomeCategories)
+            } ?: CategoryCatalog.incomeCategories,
+            transferCategories = prefs[Keys.TRANSFER_CATEGORIES_JSON]?.let { rawJson ->
+                CategoryCatalog.normalizeCategoryList(decodeStringListJson(rawJson), CategoryCatalog.transferCategories)
+            } ?: CategoryCatalog.transferCategories
         )
     }
 
@@ -267,6 +280,18 @@ class SettingsDataStore(private val context: Context) {
             )
             prefs[Keys.ENABLED_CURRENCY_CODES_JSON] = JSONArray().apply {
                 normalizedEnabled.forEach { put(it) }
+            }.toString()
+            prefs[Keys.EXPENSE_CATEGORIES_JSON] = JSONArray().apply {
+                CategoryCatalog.normalizeCategoryList(settings.expenseCategories, CategoryCatalog.expenseCategories)
+                    .forEach { put(it) }
+            }.toString()
+            prefs[Keys.INCOME_CATEGORIES_JSON] = JSONArray().apply {
+                CategoryCatalog.normalizeCategoryList(settings.incomeCategories, CategoryCatalog.incomeCategories)
+                    .forEach { put(it) }
+            }.toString()
+            prefs[Keys.TRANSFER_CATEGORIES_JSON] = JSONArray().apply {
+                CategoryCatalog.normalizeCategoryList(settings.transferCategories, CategoryCatalog.transferCategories)
+                    .forEach { put(it) }
             }.toString()
         }
     }

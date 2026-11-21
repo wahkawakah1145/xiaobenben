@@ -154,6 +154,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 ruleParsed.needsInquiry
             )
         val parsed = if (shouldInvokeAi) {
+            val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settings)
             val aiResult = aiManager.enhanceOrParseNotification(
                 context = applicationContext,
                 config = aiConfig,
@@ -161,7 +162,8 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 title = title,
                 content = content,
                 fallbackParsed = ruleParsed,
-                availableRules = customRules
+                availableRules = customRules,
+                activeCategories = activeCategories
             ).getOrNull()
             aiResult ?: ruleParsed
         } else {

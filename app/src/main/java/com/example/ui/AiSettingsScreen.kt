@@ -66,6 +66,7 @@ import com.example.data.AiUnderstandingManager
 import com.example.data.LocalModelCatalog
 import com.example.model.AiConfig
 import com.example.model.AiProviderMode
+import com.example.model.CategoryCatalog
 import com.example.ui.components.formatCurrency
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
@@ -87,8 +88,13 @@ fun AiSettingsScreen(
     val customModels by viewModel.customModelsState.collectAsStateWithLifecycle()
     val aiTestState by viewModel.aiTestState.collectAsStateWithLifecycle()
     val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
+    val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val aiManager = remember { AiUnderstandingManager() }
     val allRules = (rulesState as? UiState.Success)?.data ?: emptyList()
+    val activeCategories = remember(settings) { CategoryCatalog.allActiveCategories(settings) }
+    val defaultSystemPrompt = remember(activeCategories) {
+        AiUnderstandingManager.buildDefaultSystemPrompt(activeCategories)
+    }
 
     LaunchedEffect(Unit) {
         viewModel.refreshCustomModels(context)
@@ -109,11 +115,12 @@ fun AiSettingsScreen(
     var apiKeyInput by remember(aiConfig.apiKey) { mutableStateOf(aiConfig.apiKey) }
     var apiModelInput by remember(aiConfig.apiModelName) { mutableStateOf(aiConfig.apiModelName) }
     var fallbackOnly by remember(aiConfig.useAiAsFallbackOnly) { mutableStateOf(aiConfig.useAiAsFallbackOnly) }
-    val sanitizedStoredPrompt = remember(aiConfig.customSystemPrompt) {
-        AiUnderstandingManager.sanitizeStoredCustomPrompt(aiConfig.customSystemPrompt)
+    val sanitizedStoredPrompt = remember(aiConfig.customSystemPrompt, defaultSystemPrompt) {
+        val cleaned = AiUnderstandingManager.sanitizeStoredCustomPrompt(aiConfig.customSystemPrompt)
+        if (cleaned == defaultSystemPrompt) "" else cleaned
     }
-    var promptEditorInput by remember(sanitizedStoredPrompt) {
-        mutableStateOf(sanitizedStoredPrompt.ifBlank { AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT })
+    var promptEditorInput by remember(sanitizedStoredPrompt, defaultSystemPrompt) {
+        mutableStateOf(sanitizedStoredPrompt.ifBlank { defaultSystemPrompt })
     }
     var selectedPromptRuleIds by remember(aiConfig.selectedPromptRuleIds) {
         mutableStateOf(aiConfig.selectedPromptRuleIds)
@@ -123,8 +130,10 @@ fun AiSettingsScreen(
 
     var testSampleInput by remember { mutableStateOf("") }
 
-    fun normalizedCustomPromptValue(raw: String): String =
-        AiUnderstandingManager.sanitizeStoredCustomPrompt(raw)
+    fun normalizedCustomPromptValue(raw: String): String {
+        val cleaned = AiUnderstandingManager.sanitizeStoredCustomPrompt(raw)
+        return if (cleaned == defaultSystemPrompt) "" else cleaned
+    }
 
     fun currentEditedConfig(): AiConfig = AiConfig(
         providerMode = selectedMode,
@@ -635,7 +644,8 @@ fun AiSettingsScreen(
                     val selectedRuleObjects = AiUnderstandingManager.resolveSelectedRules(editedConfig, allRules)
                     val effectivePromptPreview = AiUnderstandingManager.buildEffectiveSystemPrompt(
                         config = editedConfig,
-                        selectedRules = selectedRuleObjects
+                        selectedRules = selectedRuleObjects,
+                        activeCategories = activeCategories
                     )
                     val isUsingCustomPrompt = normalizedCustomPromptValue(promptEditorInput).isNotEmpty()
 
@@ -669,9 +679,9 @@ fun AiSettingsScreen(
                                 }
                                 OutlinedButton(
                                     onClick = {
-                                        promptEditorInput = AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT
+                                        promptEditorInput = defaultSystemPrompt
                                         viewModel.saveAiConfig(currentEditedConfig().copy(customSystemPrompt = ""))
-                                        onShowMessage("已重置为最新默认预设提示词（含零钱提现/本人转账不计收支规则）")
+                                        onShowMessage("已重置为最新默认预设提示词（已同步当前分类与本人转账不计收支规则）")
                                     },
                                     modifier = Modifier
                                         .minimumInteractiveComponentSize()
@@ -739,22 +749,37 @@ fun AiSettingsScreen(
                                     )
                                 }
                                 if (allRules.isNotEmpty()) {
-                                    AssistChip(
-                                        onClick = {
-                                            selectedPromptRuleIds = if (selectedPromptRuleIds.size >= allRules.size) {
-                                                emptyList()
-                                            } else {
-                                                allRules.map { it.id }
-                                            }
-                                            viewModel.saveAiConfig(
-                                                currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
-                                            )
-                                        },
-                                        label = {
-                                            Text(if (selectedPromptRuleIds.size >= allRules.size) "全不选" else "全选")
-                                        },
-                                        modifier = Modifier.testTag("ai_prompt_rules_select_all")
-                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        AssistChip(
+                                            onClick = {
+                                                selectedPromptRuleIds = if (selectedPromptRuleIds.size >= allRules.size) {
+                                                    emptyList()
+                                                } else {
+                                                    allRules.map { it.id }
+                                                }
+                                                viewModel.saveAiConfig(
+                                                    currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
+                                                )
+                                            },
+                                            label = {
+                                                Text(if (selectedPromptRuleIds.size >= allRules.size) "全不选" else "全选")
+                                            },
+                                            modifier = Modifier.testTag("ai_prompt_rules_select_all")
+                                        )
+                                        AssistChip(
+                                            onClick = {
+                                                val currentSet = selectedPromptRuleIds.toSet()
+                                                selectedPromptRuleIds = allRules
+                                                    .map { it.id }
+                                                    .filter { it !in currentSet }
+                                                viewModel.saveAiConfig(
+                                                    currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
+                                                )
+                                            },
+                                            label = { Text("反选") },
+                                            modifier = Modifier.testTag("ai_prompt_rules_invert")
+                                        )
+                                    }
                                 }
                             }
 

@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -89,6 +91,7 @@ import com.example.model.CurrencyCatalog
 import com.example.model.IconVisualStyle
 import com.example.model.LedgerTransaction
 import com.example.model.ParseMethod
+import com.example.model.SimilarBillCriterion
 import com.example.model.TransactionType
 import com.example.ui.theme.AlipayBlue
 import com.example.ui.theme.BankAmber
@@ -568,6 +571,19 @@ fun TransactionEditorDialog(
     initialTransaction: LedgerTransaction?,
     defaultCurrencyCode: String = "CNY",
     enabledCurrencyCodes: List<String> = CurrencyCatalog.defaultEnabledForeignCodes,
+    expenseCategories: List<String> = CategoryCatalog.expenseCategories,
+    incomeCategories: List<String> = CategoryCatalog.incomeCategories,
+    transferCategories: List<String> = CategoryCatalog.transferCategories,
+    allTransactions: List<LedgerTransaction> = emptyList(),
+    onBatchApplySimilar: ((
+        matchedIds: List<String>,
+        type: TransactionType?,
+        category: String?,
+        channel: String?,
+        merchant: String?,
+        currencyCode: String?,
+        note: String?
+    ) -> Unit)? = null,
     onDismiss: () -> Unit,
     onSave: (
         amountCents: Long,
@@ -641,11 +657,52 @@ fun TransactionEditorDialog(
     var showDatePicker by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf<String?>(null) }
 
-    val availableCategories = when (selectedType) {
-        TransactionType.INCOME -> CategoryCatalog.incomeCategories
-        TransactionType.EXPENSE -> CategoryCatalog.expenseCategories
-        TransactionType.TRANSFER -> CategoryCatalog.transferCategories
+    val availableCategories = remember(selectedType, expenseCategories, incomeCategories, transferCategories, category) {
+        val base = when (selectedType) {
+            TransactionType.INCOME -> incomeCategories
+            TransactionType.EXPENSE -> expenseCategories
+            TransactionType.TRANSFER -> transferCategories
+        }
+        if (category.isNotBlank() && category !in base) base + category else base
     }
+
+    val canFindSimilar = initialTransaction != null && allTransactions.isNotEmpty() && onBatchApplySimilar != null
+    var showSimilarPanel by remember(initialTransaction?.id) { mutableStateOf(false) }
+    val availableSimilarCriteria = remember(initialTransaction) {
+        if (initialTransaction == null) {
+            emptyList()
+        } else {
+            SimilarBillCriterion.entries.filter { it.previewValue(initialTransaction) != null }
+        }
+    }
+    var selectedSimilarCriteria by remember(initialTransaction?.id) {
+        mutableStateOf(
+            if (initialTransaction != null && SimilarBillCriterion.MERCHANT.previewValue(initialTransaction) != null) {
+                setOf(SimilarBillCriterion.MERCHANT)
+            } else {
+                availableSimilarCriteria.take(1).toSet()
+            }
+        )
+    }
+    val matchedSimilarTransactions = remember(initialTransaction, allTransactions, selectedSimilarCriteria) {
+        if (initialTransaction == null || selectedSimilarCriteria.isEmpty()) {
+            emptyList()
+        } else {
+            allTransactions.filter { other ->
+                other.id != initialTransaction.id &&
+                    other.matchesSimilarCriteria(initialTransaction, selectedSimilarCriteria)
+            }
+        }
+    }
+    var selectedSimilarIds by remember(initialTransaction?.id, matchedSimilarTransactions) {
+        mutableStateOf<Set<String>>(matchedSimilarTransactions.mapTo(LinkedHashSet()) { it.id })
+    }
+    var syncTypeToSimilar by remember(initialTransaction?.id) { mutableStateOf(true) }
+    var syncCategoryToSimilar by remember(initialTransaction?.id) { mutableStateOf(true) }
+    var syncMerchantToSimilar by remember(initialTransaction?.id) { mutableStateOf(false) }
+    var syncChannelToSimilar by remember(initialTransaction?.id) { mutableStateOf(false) }
+    var syncCurrencyToSimilar by remember(initialTransaction?.id) { mutableStateOf(false) }
+    var syncNoteToSimilar by remember(initialTransaction?.id) { mutableStateOf(false) }
 
     val quickChannels = listOf("支付宝", "微信支付", "云闪付", "招商银行", "工商银行", "建设银行", "手动记账")
     val currencyInfo = CurrencyCatalog.resolve(selectedCurrency)
@@ -726,12 +783,12 @@ fun TransactionEditorDialog(
                             ),
                             onClick = {
                                 selectedType = txType
-                                if (txType == TransactionType.INCOME && category !in CategoryCatalog.incomeCategories) {
-                                    category = "工资奖金"
-                                } else if (txType == TransactionType.EXPENSE && category !in CategoryCatalog.expenseCategories) {
-                                    category = "餐饮美食"
-                                } else if (txType == TransactionType.TRANSFER) {
-                                    category = "不计收支"
+                                if (txType == TransactionType.INCOME && category !in incomeCategories) {
+                                    category = incomeCategories.firstOrNull() ?: "工资奖金"
+                                } else if (txType == TransactionType.EXPENSE && category !in expenseCategories) {
+                                    category = expenseCategories.firstOrNull() ?: "餐饮美食"
+                                } else if (txType == TransactionType.TRANSFER && category !in transferCategories) {
+                                    category = transferCategories.firstOrNull() ?: "不计收支"
                                 }
                             },
                             selected = selectedType == txType
@@ -947,6 +1004,283 @@ fun TransactionEditorDialog(
                         },
                         label = { Text("昨天此时") }
                     )
+                }
+
+                if (canFindSimilar && initialTransaction != null) {
+                    HorizontalDivider()
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.42f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showSimilarPanel = !showSimilarPanel }
+                                    .testTag("editor_similar_bills_toggle"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "查找相似账单并一键更改",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = if (matchedSimilarTransactions.isEmpty()) {
+                                            "按商户/商品/渠道/分类等条件查找同特征账单"
+                                        } else {
+                                            "当前条件匹配到 ${matchedSimilarTransactions.size} 笔其他相似账单"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = if (showSimilarPanel) "收起 ▲" else "展开 ▼",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            if (showSimilarPanel) {
+                                Text(
+                                    text = "1. 选择匹配要素（可多选，需同时满足）：",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    availableSimilarCriteria.forEach { criterion ->
+                                        val isPicked = criterion in selectedSimilarCriteria
+                                        val previewVal = criterion.previewValue(initialTransaction).orEmpty().take(12)
+                                        FilterChip(
+                                            selected = isPicked,
+                                            onClick = {
+                                                selectedSimilarCriteria = if (isPicked) {
+                                                    selectedSimilarCriteria - criterion
+                                                } else {
+                                                    selectedSimilarCriteria + criterion
+                                                }
+                                            },
+                                            label = { Text("${criterion.label}:$previewVal") },
+                                            modifier = Modifier.testTag("editor_similar_criterion_${criterion.name}")
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "命中 ${matchedSimilarTransactions.size} 笔，已选 ${selectedSimilarIds.size} 笔",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    if (matchedSimilarTransactions.isNotEmpty()) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            TextButton(
+                                                onClick = {
+                                                    val allIds = matchedSimilarTransactions.mapTo(LinkedHashSet()) { it.id }
+                                                    selectedSimilarIds = if (selectedSimilarIds.size >= allIds.size) {
+                                                        emptySet()
+                                                    } else {
+                                                        allIds
+                                                    }
+                                                }
+                                            ) {
+                                                Text(
+                                                    if (selectedSimilarIds.size >= matchedSimilarTransactions.size) "全不选" else "全选",
+                                                    style = MaterialTheme.typography.labelSmall
+                                                )
+                                            }
+                                            TextButton(
+                                                onClick = {
+                                                    val allIds = matchedSimilarTransactions.mapTo(LinkedHashSet()) { it.id }
+                                                    selectedSimilarIds = allIds - selectedSimilarIds
+                                                },
+                                                modifier = Modifier.testTag("editor_similar_invert_button")
+                                            ) {
+                                                Text("反选", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (matchedSimilarTransactions.isNotEmpty()) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        matchedSimilarTransactions.take(25).forEach { sim ->
+                                            val checked = sim.id in selectedSimilarIds
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = MaterialTheme.colorScheme.surface,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        selectedSimilarIds = if (checked) {
+                                                            selectedSimilarIds - sim.id
+                                                        } else {
+                                                            selectedSimilarIds + sim.id
+                                                        }
+                                                    }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Checkbox(
+                                                        checked = checked,
+                                                        onCheckedChange = {
+                                                            selectedSimilarIds = if (checked) {
+                                                                selectedSimilarIds - sim.id
+                                                            } else {
+                                                                selectedSimilarIds + sim.id
+                                                            }
+                                                        }
+                                                    )
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = sim.merchant,
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            fontWeight = FontWeight.Medium,
+                                                            maxLines = 1
+                                                        )
+                                                        Text(
+                                                            text = "${sim.category} · ${sim.channel} · ${formatDateHeader(sim.occurredAtMillis)}",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            maxLines = 1
+                                                        )
+                                                    }
+                                                    Text(
+                                                        text = formatCurrency(sim.amountCents, sim.currencyCode, showSign = true, type = sim.txType),
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        if (matchedSimilarTransactions.size > 25) {
+                                            Text(
+                                                text = "仅预览前 25 笔，一键更改将作用于全部已勾选的 ${selectedSimilarIds.size} 笔相似账单",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    Text(
+                                        text = "2. 选择要一键同步给相似账单的字段：",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        FilterChip(
+                                            selected = syncTypeToSimilar,
+                                            onClick = { syncTypeToSimilar = !syncTypeToSimilar },
+                                            label = { Text("收支(${selectedType.label})") }
+                                        )
+                                        FilterChip(
+                                            selected = syncCategoryToSimilar,
+                                            onClick = { syncCategoryToSimilar = !syncCategoryToSimilar },
+                                            label = { Text("分类($category)") }
+                                        )
+                                        FilterChip(
+                                            selected = syncMerchantToSimilar,
+                                            onClick = { syncMerchantToSimilar = !syncMerchantToSimilar },
+                                            label = { Text("商户") }
+                                        )
+                                        FilterChip(
+                                            selected = syncChannelToSimilar,
+                                            onClick = { syncChannelToSimilar = !syncChannelToSimilar },
+                                            label = { Text("渠道") }
+                                        )
+                                        FilterChip(
+                                            selected = syncCurrencyToSimilar,
+                                            onClick = { syncCurrencyToSimilar = !syncCurrencyToSimilar },
+                                            label = { Text("币种($selectedCurrency)") }
+                                        )
+                                        FilterChip(
+                                            selected = syncNoteToSimilar,
+                                            onClick = { syncNoteToSimilar = !syncNoteToSimilar },
+                                            label = { Text("备注") }
+                                        )
+                                    }
+
+                                    val hasAnySyncField = syncTypeToSimilar || syncCategoryToSimilar ||
+                                        syncMerchantToSimilar || syncChannelToSimilar ||
+                                        syncCurrencyToSimilar || syncNoteToSimilar
+                                    Button(
+                                        enabled = selectedSimilarIds.isNotEmpty() && hasAnySyncField,
+                                        onClick = {
+                                            val yuan = amountText.trim().toDoubleOrNull()
+                                            if (yuan == null || yuan <= 0.0 || yuan > 10_000_000.0) {
+                                                validationError = "请输入有效的交易金额（大于 0）"
+                                                return@Button
+                                            }
+                                            val parsedTimeMillis = parseDateTimeInputMillis(dateText, timeText)
+                                            if (parsedTimeMillis == null) {
+                                                validationError = "请输入有效日期和时间，例如 2026-11-19 与 08:30:00"
+                                                return@Button
+                                            }
+                                            val cents = (yuan * 100.0).roundToLong().coerceAtLeast(1L)
+                                            val cleanMerchant = merchant.trim().ifBlank { category }
+                                            val cleanChannel = channel.trim().ifBlank { "手动记账" }
+                                            val cleanNote = note.trim().ifBlank { null }
+                                            onSaveExtended?.invoke(
+                                                tradeType.trim().ifBlank { null },
+                                                productName.trim().ifBlank { null },
+                                                tradeStatus.trim().ifBlank { null },
+                                                transactionNo.trim().ifBlank { null },
+                                                merchantOrderNo.trim().ifBlank { null }
+                                            )
+                                            onSave(
+                                                cents,
+                                                selectedCurrency,
+                                                selectedType,
+                                                category,
+                                                cleanMerchant,
+                                                cleanChannel,
+                                                cardTail.trim().ifBlank { null },
+                                                cleanNote,
+                                                parsedTimeMillis
+                                            )
+                                            onBatchApplySimilar?.invoke(
+                                                selectedSimilarIds.toList(),
+                                                if (syncTypeToSimilar) selectedType else null,
+                                                if (syncCategoryToSimilar) category else null,
+                                                if (syncChannelToSimilar) cleanChannel else null,
+                                                if (syncMerchantToSimilar) cleanMerchant else null,
+                                                if (syncCurrencyToSimilar) selectedCurrency else null,
+                                                if (syncNoteToSimilar) (cleanNote ?: "") else null
+                                            )
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("editor_apply_similar_button")
+                                    ) {
+                                        Text("保存并一键更改 ${selectedSimilarIds.size + 1} 笔相似账单")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 if (validationError != null) {

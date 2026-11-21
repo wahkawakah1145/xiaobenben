@@ -55,6 +55,7 @@ fun BatchSelectionActionBar(
     selectedCount: Int,
     allVisibleSelected: Boolean,
     onToggleSelectAll: () -> Unit,
+    onInvertSelection: () -> Unit = {},
     onClearSelection: () -> Unit,
     onBatchEdit: () -> Unit,
     onBatchDelete: () -> Unit,
@@ -86,7 +87,7 @@ fun BatchSelectionActionBar(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     IconButton(
                         onClick = onClearSelection,
@@ -100,25 +101,37 @@ fun BatchSelectionActionBar(
                         )
                     }
                     Text(
-                        text = "已选择 $selectedCount 笔账单",
+                        text = "已选 $selectedCount 笔",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
 
-                TextButton(
-                    onClick = onToggleSelectAll,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("batch_select_all_button")
-                ) {
-                    Icon(
-                        imageVector = AppIcons.DoneAll,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(if (allVisibleSelected) "取消全选" else "全选当前")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = onInvertSelection,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("batch_invert_selection_button")
+                    ) {
+                        Text("反选")
+                    }
+                    TextButton(
+                        onClick = onToggleSelectAll,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("batch_select_all_button")
+                    ) {
+                        Icon(
+                            imageVector = AppIcons.DoneAll,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(if (allVisibleSelected) "取消全选" else "全选当前")
+                    }
                 }
             }
 
@@ -208,6 +221,9 @@ fun BatchSelectionActionBar(
 @Composable
 fun BatchEditTransactionsDialog(
     selectedCount: Int,
+    expenseCategories: List<String> = CategoryCatalog.expenseCategories,
+    incomeCategories: List<String> = CategoryCatalog.incomeCategories,
+    transferCategories: List<String> = CategoryCatalog.transferCategories,
     onDismiss: () -> Unit,
     onConfirm: (
         type: TransactionType?,
@@ -230,12 +246,12 @@ fun BatchEditTransactionsDialog(
     var noteInput by remember { mutableStateOf("") }
     var validationError by remember { mutableStateOf<String?>(null) }
 
-    val availableCategories = remember(selectedType) {
+    val availableCategories = remember(selectedType, expenseCategories, incomeCategories, transferCategories) {
         when (selectedType) {
-            TransactionType.INCOME -> CategoryCatalog.incomeCategories
-            TransactionType.TRANSFER -> listOf("转账红包", "其他")
-            TransactionType.EXPENSE -> CategoryCatalog.expenseCategories
-            null -> (CategoryCatalog.expenseCategories + CategoryCatalog.incomeCategories).distinct()
+            TransactionType.INCOME -> incomeCategories
+            TransactionType.TRANSFER -> transferCategories
+            TransactionType.EXPENSE -> expenseCategories
+            null -> (expenseCategories + incomeCategories + transferCategories).distinct()
         }
     }
     val quickChannels = remember {
@@ -281,9 +297,9 @@ fun BatchEditTransactionsDialog(
                                 selectedType = t
                                 if (selectedCategory != null) {
                                     val allowed = when (t) {
-                                        TransactionType.INCOME -> CategoryCatalog.incomeCategories
-                                        TransactionType.TRANSFER -> listOf("转账红包", "其他")
-                                        TransactionType.EXPENSE -> CategoryCatalog.expenseCategories
+                                        TransactionType.INCOME -> incomeCategories
+                                        TransactionType.TRANSFER -> transferCategories
+                                        TransactionType.EXPENSE -> expenseCategories
                                     }
                                     if (selectedCategory !in allowed) {
                                         selectedCategory = allowed.firstOrNull()

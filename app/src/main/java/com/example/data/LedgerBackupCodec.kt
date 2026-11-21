@@ -1,6 +1,7 @@
 package com.example.data
 
 import com.example.model.BudgetSettings
+import com.example.model.CategoryCatalog
 import com.example.model.CustomParsingRule
 import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
@@ -47,6 +48,15 @@ object LedgerBackupCodec {
                 put("githubUpdateMirror", settings.githubUpdateMirror)
                 put("enabledCurrencyCodes", JSONArray().apply {
                     settings.enabledCurrencyCodes.forEach { put(it) }
+                })
+                put("expenseCategories", JSONArray().apply {
+                    CategoryCatalog.activeExpenseCategories(settings).forEach { put(it) }
+                })
+                put("incomeCategories", JSONArray().apply {
+                    CategoryCatalog.activeIncomeCategories(settings).forEach { put(it) }
+                })
+                put("transferCategories", JSONArray().apply {
+                    CategoryCatalog.activeTransferCategories(settings).forEach { put(it) }
                 })
             })
             put("transactions", JSONArray().apply {
@@ -273,7 +283,31 @@ object LedgerBackupCodec {
                             if (c.isNotEmpty()) add(c)
                         }
                     }
-                } ?: currentSettings.enabledCurrencyCodes
+                } ?: currentSettings.enabledCurrencyCodes,
+                expenseCategories = s.optJSONArray("expenseCategories")?.let { arr ->
+                    CategoryCatalog.normalizeCategoryList(
+                        buildList(arr.length()) {
+                            for (i in 0 until arr.length()) add(arr.optString(i))
+                        },
+                        currentSettings.expenseCategories
+                    )
+                } ?: currentSettings.expenseCategories,
+                incomeCategories = s.optJSONArray("incomeCategories")?.let { arr ->
+                    CategoryCatalog.normalizeCategoryList(
+                        buildList(arr.length()) {
+                            for (i in 0 until arr.length()) add(arr.optString(i))
+                        },
+                        currentSettings.incomeCategories
+                    )
+                } ?: currentSettings.incomeCategories,
+                transferCategories = s.optJSONArray("transferCategories")?.let { arr ->
+                    CategoryCatalog.normalizeCategoryList(
+                        buildList(arr.length()) {
+                            for (i in 0 until arr.length()) add(arr.optString(i))
+                        },
+                        currentSettings.transferCategories
+                    )
+                } ?: currentSettings.transferCategories
             )
         }
 

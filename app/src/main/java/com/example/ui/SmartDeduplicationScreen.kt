@@ -7,6 +7,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -61,6 +63,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.model.CategoryCatalog
 import com.example.model.LedgerTransaction
 import com.example.parser.DeduplicationChannelFilter
 import com.example.parser.DeduplicationTimeWindow
@@ -78,6 +81,7 @@ import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SmartDeduplicationScreen(
     transactionsState: UiState<List<LedgerTransaction>>,
@@ -156,7 +160,7 @@ fun SmartDeduplicationScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 36.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item(key = "dedup_header") {
@@ -322,9 +326,10 @@ fun SmartDeduplicationScreen(
                             }
 
                             if (visibleGroups.isNotEmpty()) {
-                                Row(
+                                FlowRow(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     OutlinedButton(
                                         onClick = {
@@ -332,17 +337,28 @@ fun SmartDeduplicationScreen(
                                                 group.items.filter { it.id != group.suggestedKeepId }.map { it.id }
                                             }.toSet()
                                         },
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.testTag("dedup_smart_select_button")
                                     ) {
                                         Icon(AppIcons.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("智能勾选重复项")
                                     }
                                     OutlinedButton(
-                                        onClick = { selectedDeleteIds = emptySet() },
-                                        modifier = Modifier.weight(1f)
+                                        onClick = {
+                                            val allVisible = visibleGroups
+                                                .flatMap { it.items }
+                                                .mapTo(LinkedHashSet()) { it.id }
+                                            selectedDeleteIds = (selectedDeleteIds - allVisible) + (allVisible - selectedDeleteIds)
+                                        },
+                                        modifier = Modifier.testTag("dedup_invert_selection_button")
                                     ) {
-                                        Text("全部保留 (取消勾选)")
+                                        Text("反选")
+                                    }
+                                    OutlinedButton(
+                                        onClick = { selectedDeleteIds = emptySet() },
+                                        modifier = Modifier.testTag("dedup_clear_selection_button")
+                                    ) {
+                                        Text("全部保留")
                                     }
                                 }
                             }
@@ -516,6 +532,11 @@ fun SmartDeduplicationScreen(
         TransactionEditorDialog(
             initialTransaction = tx,
             defaultCurrencyCode = settings.baseCurrencyCode,
+            enabledCurrencyCodes = settings.enabledCurrencyCodes,
+            expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
+            incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
+            transferCategories = CategoryCatalog.activeTransferCategories(settings),
+            allTransactions = allTransactions,
             onDismiss = { editingTransaction = null },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
@@ -532,6 +553,17 @@ fun SmartDeduplicationScreen(
                     confirmed = true
                 )
                 editingTransaction = null
+            },
+            onBatchApplySimilar = { targetIds, type, category, channel, merchant, currencyCode, note ->
+                viewModel.batchUpdateTransactions(
+                    txIds = targetIds,
+                    type = type,
+                    category = category,
+                    channel = channel,
+                    merchant = merchant,
+                    currencyCode = currencyCode,
+                    note = note
+                )
             }
         )
     }
