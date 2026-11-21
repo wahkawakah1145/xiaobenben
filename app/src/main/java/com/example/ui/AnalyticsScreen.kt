@@ -267,14 +267,24 @@ fun AnalyticsScreen(
     }
 
     val channelData = remember(periodExpenseTxs, exchangeRates.ratesToCny, baseCurrency) {
-        periodExpenseTxs
-            .groupBy { it.channel }
-            .mapValues { (_, list) -> list.sumOf { toBase(it) } }
-            .entries
+        val sums = LinkedHashMap<String, Long>()
+        periodExpenseTxs.forEach { tx ->
+            val cents = toBase(tx)
+            com.example.model.ChannelSplitter.splitChannels(tx.channel).forEach { subChannel ->
+                sums[subChannel] = (sums[subChannel] ?: 0L) + cents
+            }
+        }
+        sums.entries
             .sortedByDescending { it.value }
             .map { entry ->
                 ChartDatum(entry.key, entry.value, channelBrandColor(entry.key))
             }
+    }
+    val channelTotalCents = remember(channelData, totalExpense) {
+        channelData.sumOf { it.cents }.coerceAtLeast(if (totalExpense > 0L) totalExpense else 0L)
+    }
+    val hasCompositeChannels = remember(periodExpenseTxs) {
+        periodExpenseTxs.any { it.splitChannels.size > 1 }
     }
 
     val filteredCategoryTxs = remember(periodExpenseTxs, selectedCategoryFilter) {
@@ -285,7 +295,9 @@ fun AnalyticsScreen(
 
     val filteredChannelTxs = remember(periodExpenseTxs, selectedChannelFilter) {
         selectedChannelFilter?.let { target ->
-            periodExpenseTxs.filter { it.channel == target }.sortedByDescending { it.occurredAtMillis }
+            periodExpenseTxs
+                .filter { com.example.model.ChannelSplitter.matchesChannel(it.channel, target) }
+                .sortedByDescending { it.occurredAtMillis }
         } ?: emptyList()
     }
 
@@ -801,7 +813,11 @@ fun AnalyticsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("渠道分布", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    text = "点击图例或渠道行可筛选条目（完整展示全部渠道）",
+                                    text = if (hasCompositeChannels) {
+                                        "组合支付已按「&」等符号拆分分别统计 · 点击图例筛选明细"
+                                    } else {
+                                        "点击图例或渠道行可筛选条目（完整展示全部渠道）"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -847,7 +863,7 @@ fun AnalyticsScreen(
                                     ) {
                                         DonutPieChart(
                                             slices = channelData,
-                                            totalCents = totalExpense,
+                                            totalCents = channelTotalCents.coerceAtLeast(1L),
                                             selectedLabel = selectedChannelFilter,
                                             modifier = Modifier.fillMaxSize()
                                         )
@@ -883,13 +899,14 @@ fun AnalyticsScreen(
                                         channelData
                                     }
                                     val collapsedChannelCount = (channelData.size - displayedChannelData.size).coerceAtLeast(0)
+                                    val channelDenom = channelTotalCents.coerceAtLeast(1L)
 
                                     Column(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         displayedChannelData.forEach { datum ->
-                                            val pct = datum.cents * 100.0 / totalExpense
+                                            val pct = datum.cents * 100.0 / channelDenom
                                             val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
                                             val isSelected = selectedChannelFilter == datum.label
                                             ClickableLegendRow(
@@ -937,10 +954,11 @@ fun AnalyticsScreen(
                                     channelData
                                 }
                                 val collapsedChannelRowCount = (channelData.size - displayedChannelRows.size).coerceAtLeast(0)
+                                val channelDenom = channelTotalCents.coerceAtLeast(1L)
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     displayedChannelRows.forEach { datum ->
-                                        val ratio = (datum.cents.toFloat() / totalExpense.toFloat()).coerceIn(0f, 1f)
-                                        val pct = datum.cents * 100.0 / totalExpense
+                                        val ratio = (datum.cents.toFloat() / channelDenom.toFloat()).coerceIn(0f, 1f)
+                                        val pct = datum.cents * 100.0 / channelDenom
                                         val pctText = if (pct > 0.0 && pct < 1.0) "%.1f%%".format(pct) else "${pct.toInt()}%"
                                         val isSelected = selectedChannelFilter == datum.label
                                         ClickableBreakdownRow(

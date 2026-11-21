@@ -101,8 +101,11 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
+import com.example.parser.QuickAnalysisReport
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -200,7 +203,7 @@ fun LedgerHomeScreen(
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showBatchEditDialog by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
-    var quickAnalysisDialogContent by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var quickAnalysisDialogContent by remember { mutableStateOf<Pair<String, QuickAnalysisReport>?>(null) }
     var showAddToBooksDialog by remember { mutableStateOf(false) }
 
     val filterOptions = listOf("全部", "支出", "收入", "外币", "支付宝", "微信支付", "银行卡", "云闪付")
@@ -245,6 +248,9 @@ fun LedgerHomeScreen(
     var customStartDateText by remember { mutableStateOf("") }
     var customEndDateText by remember { mutableStateOf("") }
     var pickingDateTarget by remember { mutableStateOf<String?>(null) } // "start" | "end"
+    var selectedTimeOfDaySlot by remember { mutableStateOf(TimeOfDaySlot.ALL) }
+    var customStartTimeText by remember { mutableStateOf("") }
+    var customEndTimeText by remember { mutableStateOf("") }
     var minAmountInput by remember { mutableStateOf("") }
     var maxAmountInput by remember { mutableStateOf("") }
 
@@ -275,10 +281,29 @@ fun LedgerHomeScreen(
     val customEndMillis = remember(customEndDateText) {
         if (customEndDateText.isBlank()) null else parseDateTimeInputMillis(customEndDateText, "23:59")?.plus(59_999L)
     }
-    val activeRangeFilterCount = remember(listTimeDimension, customStartDateText, customEndDateText, minAmountInput, maxAmountInput) {
+    val effectiveStartMinuteOfDay = remember(selectedTimeOfDaySlot, customStartTimeText) {
+        parseTimeOfDayMinutes(customStartTimeText) ?: selectedTimeOfDaySlot.startMinute
+    }
+    val effectiveEndMinuteOfDay = remember(selectedTimeOfDaySlot, customEndTimeText) {
+        parseTimeOfDayMinutes(customEndTimeText) ?: selectedTimeOfDaySlot.endMinute
+    }
+    val hasTimeOfDayFilter = selectedTimeOfDaySlot != TimeOfDaySlot.ALL ||
+        customStartTimeText.isNotBlank() ||
+        customEndTimeText.isNotBlank()
+    val activeRangeFilterCount = remember(
+        listTimeDimension,
+        customStartDateText,
+        customEndDateText,
+        selectedTimeOfDaySlot,
+        customStartTimeText,
+        customEndTimeText,
+        minAmountInput,
+        maxAmountInput
+    ) {
         var count = 0
         if (listTimeDimension != HomeStatsDimension.ALL_TIME) count++
         if (customStartDateText.isNotBlank() || customEndDateText.isNotBlank()) count++
+        if (selectedTimeOfDaySlot != TimeOfDaySlot.ALL || customStartTimeText.isNotBlank() || customEndTimeText.isNotBlank()) count++
         if (minAmountInput.isNotBlank() || maxAmountInput.isNotBlank()) count++
         count
     }
@@ -290,6 +315,8 @@ fun LedgerHomeScreen(
         listTimeDimension,
         customStartMillis,
         customEndMillis,
+        effectiveStartMinuteOfDay,
+        effectiveEndMinuteOfDay,
         minAmountCents,
         maxAmountCents,
         exchangeRates.ratesToCny,
@@ -313,6 +340,11 @@ fun LedgerHomeScreen(
                 val matchesSearch = tx.matchesSearchQuery(q)
                 val matchesStart = customStartMillis == null || tx.occurredAtMillis >= customStartMillis
                 val matchesEnd = customEndMillis == null || tx.occurredAtMillis <= customEndMillis
+                val matchesTimeSlot = matchesTimeOfDayRange(
+                    occurredAtMillis = tx.occurredAtMillis,
+                    startMinute = effectiveStartMinuteOfDay,
+                    endMinute = effectiveEndMinuteOfDay
+                )
                 val matchesAmount = if (minAmountCents != null || maxAmountCents != null) {
                     val baseCents = CurrencyExchangeManager.convertCents(
                         tx.amountCents,
@@ -325,7 +357,7 @@ fun LedgerHomeScreen(
                 } else {
                     true
                 }
-                matchesFilter && matchesSearch && matchesStart && matchesEnd && matchesAmount
+                matchesFilter && matchesSearch && matchesStart && matchesEnd && matchesTimeSlot && matchesAmount
             }
         }
     }
@@ -335,6 +367,7 @@ fun LedgerHomeScreen(
         listTimeDimension != HomeStatsDimension.ALL_TIME ||
         customStartDateText.isNotBlank() ||
         customEndDateText.isNotBlank() ||
+        hasTimeOfDayFilter ||
         minAmountInput.isNotBlank() ||
         maxAmountInput.isNotBlank()
 
@@ -510,7 +543,7 @@ fun LedgerHomeScreen(
                             },
                             label = {
                                 Text(
-                                    if (activeRangeFilterCount > 0) "范围($activeRangeFilterCount)" else "时间/金额"
+                                    if (activeRangeFilterCount > 0) "范围($activeRangeFilterCount)" else "日期/时段/金额"
                                 )
                             },
                             modifier = Modifier.testTag("home_range_filter_toggle")
@@ -531,6 +564,9 @@ fun LedgerHomeScreen(
                             listTimeDimension = listTimeDimension,
                             customStartDateText = customStartDateText,
                             customEndDateText = customEndDateText,
+                            selectedTimeOfDaySlot = selectedTimeOfDaySlot,
+                            customStartTimeText = customStartTimeText,
+                            customEndTimeText = customEndTimeText,
                             minAmountInput = minAmountInput,
                             maxAmountInput = maxAmountInput,
                             onSelectTimeDimension = { dim ->
@@ -548,12 +584,28 @@ fun LedgerHomeScreen(
                             },
                             onPickStartDate = { pickingDateTarget = "start" },
                             onPickEndDate = { pickingDateTarget = "end" },
+                            onSelectTimeOfDaySlot = { slot ->
+                                selectedTimeOfDaySlot = slot
+                                customStartTimeText = ""
+                                customEndTimeText = ""
+                            },
+                            onStartTimeChange = {
+                                customStartTimeText = it
+                                if (it.isNotBlank()) selectedTimeOfDaySlot = TimeOfDaySlot.ALL
+                            },
+                            onEndTimeChange = {
+                                customEndTimeText = it
+                                if (it.isNotBlank()) selectedTimeOfDaySlot = TimeOfDaySlot.ALL
+                            },
                             onMinAmountChange = { minAmountInput = it },
                             onMaxAmountChange = { maxAmountInput = it },
                             onResetAll = {
                                 listTimeDimension = HomeStatsDimension.ALL_TIME
                                 customStartDateText = ""
                                 customEndDateText = ""
+                                selectedTimeOfDaySlot = TimeOfDaySlot.ALL
+                                customStartTimeText = ""
+                                customEndTimeText = ""
                                 minAmountInput = ""
                                 maxAmountInput = ""
                             }
@@ -582,8 +634,8 @@ fun LedgerHomeScreen(
                                         } else {
                                             "当前筛选结果快速分析 (${targetList.size} 笔)"
                                         }
-                                        val text = viewModel.buildQuickSelectionSummary(targetList, title)
-                                        quickAnalysisDialogContent = "快速分析" to text
+                                        val report = viewModel.buildQuickSelectionReport(targetList, title)
+                                        quickAnalysisDialogContent = "快速分析" to report
                                     },
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                                     modifier = Modifier.testTag("search_quick_analyze_button")
@@ -760,11 +812,11 @@ fun LedgerHomeScreen(
                 onBatchDelete = { showBatchDeleteConfirm = true },
                 onQuickAnalyze = {
                     val selectedItems = confirmedTransactions.filter { it.id in selectedIds }
-                    val summary = viewModel.buildQuickSelectionSummary(
+                    val report = viewModel.buildQuickSelectionReport(
                         transactions = selectedItems,
                         scopeTitle = "已选账单快速分析 (${selectedItems.size} 笔)"
                     )
-                    quickAnalysisDialogContent = "快速分析" to summary
+                    quickAnalysisDialogContent = "快速分析" to report
                 },
                 onAddToBooks = { showAddToBooksDialog = true },
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -1062,10 +1114,11 @@ fun LedgerHomeScreen(
         )
     }
 
-    quickAnalysisDialogContent?.let { (dlgTitle, dlgBody) ->
+    quickAnalysisDialogContent?.let { (dlgTitle, report) ->
         QuickAnalysisTextDialog(
             title = dlgTitle,
-            summaryText = dlgBody,
+            summaryText = report.plainText,
+            report = report,
             onDismiss = { quickAnalysisDialogContent = null }
         )
     }
@@ -2213,6 +2266,95 @@ private fun HomeStatsDimensionPickerDialog(
     )
 }
 
+enum class TimeOfDaySlot(
+    val label: String,
+    val startMinute: Int?,
+    val endMinute: Int?
+) {
+    ALL("全天", null, null),
+    EARLY_MORNING("凌晨 00-06", 0, 359),
+    MORNING("上午 06-12", 360, 719),
+    NOON("午间 11-14", 660, 839),
+    AFTERNOON("下午 12-18", 720, 1079),
+    EVENING("晚间 18-24", 1080, 1439)
+}
+
+internal fun autoFormatDateInput(previous: String, rawInput: String): String {
+    val normalized = rawInput.replace('/', '-').replace('.', '-')
+    val cleaned = normalized.filter { it.isDigit() || it == '-' }
+    val isDeleting = rawInput.length < previous.length
+
+    if (!isDeleting && cleaned.count { it == '-' } >= 2) {
+        val parts = cleaned.split('-')
+        val year = parts.getOrNull(0).orEmpty().filter { it.isDigit() }.take(4)
+        val monthRaw = parts.getOrNull(1).orEmpty().filter { it.isDigit() }.take(2)
+        val dayRaw = parts.getOrNull(2).orEmpty().filter { it.isDigit() }.take(2)
+        if (year.length == 4 && monthRaw.isNotEmpty()) {
+            val month = if (monthRaw.length == 1) "0$monthRaw" else monthRaw
+            return if (dayRaw.isEmpty()) "$year-$month-" else "$year-$month-$dayRaw"
+        }
+    }
+
+    val digits = cleaned.filter { it.isDigit() }.take(8)
+    if (digits.isEmpty()) return ""
+    return when {
+        digits.length < 4 -> digits
+        digits.length == 4 -> if (isDeleting) digits else "$digits-"
+        digits.length == 5 -> "${digits.substring(0, 4)}-${digits.substring(4)}"
+        digits.length == 6 -> {
+            val base = "${digits.substring(0, 4)}-${digits.substring(4, 6)}"
+            if (isDeleting) base else "$base-"
+        }
+        else -> "${digits.substring(0, 4)}-${digits.substring(4, 6)}-${digits.substring(6)}"
+    }
+}
+
+internal fun autoFormatTimeOfDayInput(previous: String, rawInput: String): String {
+    val normalized = rawInput.replace('：', ':')
+    val cleaned = normalized.filter { it.isDigit() || it == ':' }
+    val isDeleting = rawInput.length < previous.length
+    val digits = cleaned.filter { it.isDigit() }.take(4)
+    if (digits.isEmpty()) return ""
+    return when {
+        digits.length < 2 -> digits
+        digits.length == 2 -> if (isDeleting) digits else "$digits:"
+        else -> "${digits.substring(0, 2)}:${digits.substring(2)}"
+    }
+}
+
+internal fun parseTimeOfDayMinutes(input: String): Int? {
+    val trimmed = input.trim().replace('：', ':')
+    if (trimmed.isEmpty()) return null
+    val match = Regex("""^(\d{1,2}):(\d{2})$""").matchEntire(trimmed) ?: return null
+    val hour = match.groupValues[1].toIntOrNull() ?: return null
+    val minute = match.groupValues[2].toIntOrNull() ?: return null
+    if (hour == 24 && minute == 0) return 1439
+    if (hour !in 0..23 || minute !in 0..59) return null
+    return hour * 60 + minute
+}
+
+internal fun matchesTimeOfDayRange(
+    occurredAtMillis: Long,
+    startMinute: Int?,
+    endMinute: Int?
+): Boolean {
+    if (startMinute == null && endMinute == null) return true
+    val cal = Calendar.getInstance().apply { timeInMillis = occurredAtMillis }
+    val minuteOfDay = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+    return when {
+        startMinute != null && endMinute != null -> {
+            if (startMinute <= endMinute) {
+                minuteOfDay in startMinute..endMinute
+            } else {
+                // Support overnight window e.g. 22:00 ~ 02:00
+                minuteOfDay >= startMinute || minuteOfDay <= endMinute
+            }
+        }
+        startMinute != null -> minuteOfDay >= startMinute
+        else -> minuteOfDay <= endMinute!!
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HomeRangeFilterPanel(
@@ -2220,6 +2362,9 @@ private fun HomeRangeFilterPanel(
     listTimeDimension: HomeStatsDimension,
     customStartDateText: String,
     customEndDateText: String,
+    selectedTimeOfDaySlot: TimeOfDaySlot,
+    customStartTimeText: String,
+    customEndTimeText: String,
     minAmountInput: String,
     maxAmountInput: String,
     onSelectTimeDimension: (HomeStatsDimension) -> Unit,
@@ -2227,10 +2372,47 @@ private fun HomeRangeFilterPanel(
     onEndDateChange: (String) -> Unit,
     onPickStartDate: () -> Unit,
     onPickEndDate: () -> Unit,
+    onSelectTimeOfDaySlot: (TimeOfDaySlot) -> Unit,
+    onStartTimeChange: (String) -> Unit,
+    onEndTimeChange: (String) -> Unit,
     onMinAmountChange: (String) -> Unit,
     onMaxAmountChange: (String) -> Unit,
     onResetAll: () -> Unit
 ) {
+    var startDateField by remember {
+        mutableStateOf(TextFieldValue(customStartDateText, TextRange(customStartDateText.length)))
+    }
+    var endDateField by remember {
+        mutableStateOf(TextFieldValue(customEndDateText, TextRange(customEndDateText.length)))
+    }
+    var startTimeField by remember {
+        mutableStateOf(TextFieldValue(customStartTimeText, TextRange(customStartTimeText.length)))
+    }
+    var endTimeField by remember {
+        mutableStateOf(TextFieldValue(customEndTimeText, TextRange(customEndTimeText.length)))
+    }
+
+    LaunchedEffect(customStartDateText) {
+        if (startDateField.text != customStartDateText) {
+            startDateField = TextFieldValue(customStartDateText, TextRange(customStartDateText.length))
+        }
+    }
+    LaunchedEffect(customEndDateText) {
+        if (endDateField.text != customEndDateText) {
+            endDateField = TextFieldValue(customEndDateText, TextRange(customEndDateText.length))
+        }
+    }
+    LaunchedEffect(customStartTimeText) {
+        if (startTimeField.text != customStartTimeText) {
+            startTimeField = TextFieldValue(customStartTimeText, TextRange(customStartTimeText.length))
+        }
+    }
+    LaunchedEffect(customEndTimeText) {
+        if (endTimeField.text != customEndTimeText) {
+            endTimeField = TextFieldValue(customEndTimeText, TextRange(customEndTimeText.length))
+        }
+    }
+
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -2248,7 +2430,7 @@ private fun HomeRangeFilterPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("时间与金额范围筛选", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text("时间、时段与金额筛选", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 TextButton(
                     onClick = onResetAll,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
@@ -2258,7 +2440,7 @@ private fun HomeRangeFilterPanel(
                 }
             }
 
-            Text("快捷时段", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("快捷日期", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -2276,13 +2458,18 @@ private fun HomeRangeFilterPanel(
                 }
             }
 
-            Text("自定义日期区间", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("自定义日期区间（输入数字自动补全 -）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    value = customStartDateText,
-                    onValueChange = { onStartDateChange(it.take(10)) },
+                    value = startDateField,
+                    onValueChange = { incoming ->
+                        val formatted = autoFormatDateInput(startDateField.text, incoming.text)
+                        startDateField = TextFieldValue(formatted, TextRange(formatted.length))
+                        onStartDateChange(formatted)
+                    },
                     label = { Text("起始日期") },
                     placeholder = { Text("yyyy-MM-dd") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     trailingIcon = {
                         IconButton(onClick = onPickStartDate) {
                             Icon(AppIcons.CalendarMonth, contentDescription = "选择起始日期", modifier = Modifier.size(18.dp))
@@ -2294,10 +2481,15 @@ private fun HomeRangeFilterPanel(
                         .testTag("filter_start_date_input")
                 )
                 OutlinedTextField(
-                    value = customEndDateText,
-                    onValueChange = { onEndDateChange(it.take(10)) },
+                    value = endDateField,
+                    onValueChange = { incoming ->
+                        val formatted = autoFormatDateInput(endDateField.text, incoming.text)
+                        endDateField = TextFieldValue(formatted, TextRange(formatted.length))
+                        onEndDateChange(formatted)
+                    },
                     label = { Text("结束日期") },
                     placeholder = { Text("yyyy-MM-dd") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     trailingIcon = {
                         IconButton(onClick = onPickEndDate) {
                             Icon(AppIcons.CalendarMonth, contentDescription = "选择结束日期", modifier = Modifier.size(18.dp))
@@ -2307,6 +2499,56 @@ private fun HomeRangeFilterPanel(
                     modifier = Modifier
                         .weight(1f)
                         .testTag("filter_end_date_input")
+                )
+            }
+
+            Text("可选时段（每日发生时间）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                TimeOfDaySlot.entries.forEach { slot ->
+                    val isSlotSelected = selectedTimeOfDaySlot == slot &&
+                        customStartTimeText.isBlank() &&
+                        customEndTimeText.isBlank()
+                    FilterChip(
+                        selected = isSlotSelected,
+                        onClick = { onSelectTimeOfDaySlot(slot) },
+                        label = { Text(slot.label) },
+                        modifier = Modifier.testTag("filter_time_slot_${slot.name}")
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = startTimeField,
+                    onValueChange = { incoming ->
+                        val formatted = autoFormatTimeOfDayInput(startTimeField.text, incoming.text)
+                        startTimeField = TextFieldValue(formatted, TextRange(formatted.length))
+                        onStartTimeChange(formatted)
+                    },
+                    label = { Text("起始时段") },
+                    placeholder = { Text("HH:mm") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("filter_start_time_input")
+                )
+                OutlinedTextField(
+                    value = endTimeField,
+                    onValueChange = { incoming ->
+                        val formatted = autoFormatTimeOfDayInput(endTimeField.text, incoming.text)
+                        endTimeField = TextFieldValue(formatted, TextRange(formatted.length))
+                        onEndTimeChange(formatted)
+                    },
+                    label = { Text("结束时段") },
+                    placeholder = { Text("HH:mm") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("filter_end_time_input")
                 )
             }
 

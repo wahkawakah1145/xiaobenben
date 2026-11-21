@@ -34,4 +34,11 @@ class MainActivity : ComponentActivity() {
             openLocalBackupOnStart = true
         }
     }
+
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) {
+            (application as? LedgerApplication)?.requestLightBackgroundTrim(aggressive = false)
+        }
+    }
 }

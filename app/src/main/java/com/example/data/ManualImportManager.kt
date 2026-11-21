@@ -13,6 +13,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
@@ -23,34 +24,50 @@ data class ImportPreviewResult(
     val transactions: List<LedgerTransaction>,
     val skippedCount: Int,
     val detectedHeaderRowOneBased: Int? = null,
-    val detectedColumnsSummary: String = ""
-)
+    val detectedColumnsSummary: String = "",
+    val duplicateIds: Set<String> = emptySet(),
+    val duplicateReasons: Map<String, String> = emptyMap()
+) {
+    val newTransactions: List<LedgerTransaction>
+        get() = if (duplicateIds.isEmpty()) transactions else transactions.filter { it.id !in duplicateIds }
+
+    val duplicateCount: Int
+        get() = duplicateIds.size
+}
 
 object ManualImportManager {
 
-    private val dateFormats = listOf(
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA),
-        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA),
-        SimpleDateFormat("yyyy-M-d H:mm:ss", Locale.CHINA),
-        SimpleDateFormat("yyyy-M-d H:mm", Locale.CHINA),
-        SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.CHINA),
-        SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.CHINA),
-        SimpleDateFormat("yyyy/M/d H:mm:ss", Locale.CHINA),
-        SimpleDateFormat("yyyy/M/d H:mm", Locale.CHINA),
-        SimpleDateFormat("yyyy年MM月dd日 HH:mm:ss", Locale.CHINA),
-        SimpleDateFormat("yyyy年MM月dd日 HH:mm", Locale.CHINA),
-        SimpleDateFormat("yyyy年M月d日 H:mm:ss", Locale.CHINA),
-        SimpleDateFormat("yyyy年M月d日 H:mm", Locale.CHINA),
-        SimpleDateFormat("yyyy-MM-dd", Locale.CHINA),
-        SimpleDateFormat("yyyy/MM/dd", Locale.CHINA),
-        SimpleDateFormat("yyyyMMdd HH:mm:ss", Locale.CHINA),
-        SimpleDateFormat("yyyyMMdd", Locale.CHINA)
+    private val dateTimePatterns = listOf(
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd HH:mm",
+        "yyyy-M-d H:mm:ss",
+        "yyyy-M-d H:mm",
+        "yyyy/MM/dd HH:mm:ss",
+        "yyyy/MM/dd HH:mm",
+        "yyyy/M/d H:mm:ss",
+        "yyyy/M/d H:mm",
+        "yyyy.MM.dd HH:mm:ss",
+        "yyyy.MM.dd HH:mm",
+        "yyyy年MM月dd日 HH:mm:ss",
+        "yyyy年MM月dd日 HH:mm",
+        "yyyy年M月d日 H:mm:ss",
+        "yyyy年M月d日 H:mm",
+        "yyyyMMdd HH:mm:ss",
+        "yyyyMMdd HH:mm",
+        "yyyyMMddHHmmss",
+        "yyyyMMddHHmm",
+        "yyyy-MM-dd",
+        "yyyy/MM/dd",
+        "yyyy.MM.dd",
+        "yyyy年MM月dd日",
+        "yyyyMMdd"
     )
 
     private data class ColumnMapping(
         val headerRowIndex: Int,
         val score: Int,
         val headers: List<String>,
+        val dateCol: Int,
         val timeCol: Int,
         val tradeTypeCol: Int,
         val typeCol: Int,
@@ -60,6 +77,7 @@ object ManualImportManager {
         val amountCol: Int,
         val expenseAmountCol: Int,
         val incomeAmountCol: Int,
+        val balanceCol: Int,
         val currencyCol: Int,
         val categoryCol: Int,
         val statusCol: Int,
@@ -69,6 +87,115 @@ object ManualImportManager {
     ) {
         val hasUsableAmountColumn: Boolean
             get() = amountCol >= 0 || expenseAmountCol >= 0 || incomeAmountCol >= 0
+    }
+
+    /**
+     * Marks imported entries that duplicate either existing database records or earlier entries
+     * within the same import batch.
+     */
+    fun annotateDuplicates(
+        preview: ImportPreviewResult,
+        existingTransactions: List<LedgerTransaction>
+    ): ImportPreviewResult {
+        if (preview.transactions.isEmpty()) return preview
+
+        val existingTxNos = HashSet<String>(existingTransactions.size)
+        val existingOrderNos = HashSet<String>(existingTransactions.size)
+        val existingBuckets = HashMap<Triple<Long, String, String>, MutableList<LedgerTransaction>>()
+
+        existingTransactions.forEach { tx ->
+            normalizeOrderNo(tx.transactionNo)?.let { existingTxNos.add(it) }
+            normalizeOrderNo(tx.merchantOrderNo)?.let { existingOrderNos.add(it) }
+            val key = Triple(tx.amountCents, tx.currencyCode.uppercase(Locale.US), tx.type.uppercase(Locale.US))
+            existingBuckets.getOrPut(key) { mutableListOf() }.add(tx)
+        }
+
+        val batchTxNos = HashSet<String>()
+        val batchOrderNos = HashSet<String>()
+        val batchBuckets = HashMap<Triple<Long, String, String>, MutableList<LedgerTransaction>>()
+
+        val duplicateIds = LinkedHashSet<String>()
+        val duplicateReasons = LinkedHashMap<String, String>()
+
+        for (candidate in preview.transactions) {
+            val candTxNo = normalizeOrderNo(candidate.transactionNo)
+            val candOrderNo = normalizeOrderNo(candidate.merchantOrderNo)
+            val key = Triple(
+                candidate.amountCents,
+                candidate.currencyCode.uppercase(Locale.US),
+                candidate.type.uppercase(Locale.US)
+            )
+
+            var reason: String? = null
+            when {
+                candTxNo != null && candTxNo in existingTxNos -> {
+                    reason = "与已有账单交易单号/日志号一致"
+                }
+                candOrderNo != null && candOrderNo in existingOrderNos -> {
+                    reason = "与已有账单商户单号一致"
+                }
+                existingBuckets[key]?.any { existing -> isLikelySameTransaction(candidate, existing) } == true -> {
+                    reason = "与已有账单时间/金额/商户重复"
+                }
+                candTxNo != null && candTxNo in batchTxNos -> {
+                    reason = "导入内容内交易单号/日志号重复"
+                }
+                candOrderNo != null && candOrderNo in batchOrderNos -> {
+                    reason = "导入内容内商户单号重复"
+                }
+                batchBuckets[key]?.any { earlier -> isLikelySameTransaction(candidate, earlier) } == true -> {
+                    reason = "导入内容内重复条目"
+                }
+            }
+
+            if (reason != null) {
+                duplicateIds.add(candidate.id)
+                duplicateReasons[candidate.id] = reason
+            } else {
+                candTxNo?.let { batchTxNos.add(it) }
+                candOrderNo?.let { batchOrderNos.add(it) }
+                batchBuckets.getOrPut(key) { mutableListOf() }.add(candidate)
+            }
+        }
+
+        return preview.copy(
+            duplicateIds = duplicateIds,
+            duplicateReasons = duplicateReasons
+        )
+    }
+
+    private fun normalizeOrderNo(raw: String?): String? {
+        val cleaned = raw?.trim()?.replace(Regex("""\s+"""), "")?.uppercase(Locale.US).orEmpty()
+        return cleaned.takeIf { it.length >= 4 }
+    }
+
+    private fun normalizeCompareText(raw: String?): String =
+        raw?.trim()?.lowercase(Locale.ROOT)?.replace(Regex("""[\s\-_()（）·•]+"""), "").orEmpty()
+
+    private fun isLikelySameTransaction(a: LedgerTransaction, b: LedgerTransaction): Boolean {
+        val diffMs = abs(a.occurredAtMillis - b.occurredAtMillis)
+        if (diffMs > 60_000L) return false
+
+        // If both carry distinct non-blank transaction numbers, treat them as separate bills.
+        val aNo = normalizeOrderNo(a.transactionNo)
+        val bNo = normalizeOrderNo(b.transactionNo)
+        if (aNo != null && bNo != null && aNo != bNo) return false
+
+        // If both carry balanceAfterCents at the exact same second and balances differ, they are distinct.
+        if (a.balanceAfterCents != null && b.balanceAfterCents != null && a.balanceAfterCents != b.balanceAfterCents) {
+            return false
+        }
+
+        val ma = normalizeCompareText(a.merchant)
+        val mb = normalizeCompareText(b.merchant)
+        val merchantMatch = ma.isNotEmpty() && mb.isNotEmpty() && (ma == mb || ma.contains(mb) || mb.contains(ma))
+        if (merchantMatch) return true
+
+        val ca = normalizeCompareText(a.channel)
+        val cb = normalizeCompareText(b.channel)
+        val channelMatch = ca.isNotEmpty() && cb.isNotEmpty() && (ca == cb || ca.contains(cb) || cb.contains(ca))
+        val sameSecond = (a.occurredAtMillis / 1000L) == (b.occurredAtMillis / 1000L)
+        return sameSecond && channelMatch
     }
 
     fun parseImportedBytes(
@@ -200,8 +327,8 @@ object ManualImportManager {
                 continue
             }
             val amountCents = when {
-                o.has("amountCents") -> o.optLong("amountCents", 0L)
-                o.has("amount") -> (o.optDouble("amount", 0.0) * 100.0).roundToLong()
+                o.has("amountCents") -> abs(o.optLong("amountCents", 0L))
+                o.has("amount") -> (abs(o.optDouble("amount", 0.0)) * 100.0).roundToLong()
                 else -> 0L
             }
             if (amountCents <= 0L) {
@@ -220,9 +347,16 @@ object ManualImportManager {
                 .ifBlank { ChinaNotificationParser.inferCategory(merchant, productName ?: note.orEmpty(), type) }
             val occurredAt = when {
                 o.optLong("occurredAtMillis", 0L) > 0L -> o.optLong("occurredAtMillis")
+                o.has("date") && o.has("time") -> parseDateAndTimeMillis(o.optString("date"), o.optString("time"))
                 o.has("time") -> parseDateMillis(o.optString("time"))
                 o.has("date") -> parseDateMillis(o.optString("date"))
                 else -> System.currentTimeMillis()
+            }
+            val balanceAfterCents = when {
+                o.has("balanceAfterCents") && !o.isNull("balanceAfterCents") -> o.optLong("balanceAfterCents")
+                o.has("balance") && !o.isNull("balance") ->
+                    cleanNumericAmount(o.optString("balance"))?.let { (it * 100.0).roundToLong() }
+                else -> null
             }
             val rawTx = LedgerTransaction(
                 id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
@@ -242,6 +376,7 @@ object ManualImportManager {
                 tradeStatus = cleanOptionalCell(o.optString("tradeStatus")),
                 transactionNo = cleanOptionalCell(o.optString("transactionNo")),
                 merchantOrderNo = cleanOptionalCell(o.optString("merchantOrderNo")),
+                balanceAfterCents = balanceAfterCents,
                 occurredAtMillis = occurredAt,
                 confirmed = true
             )
@@ -273,7 +408,8 @@ object ManualImportManager {
         if (multiColLines < 2) return false
         val rows = lines.map { splitDelimitedLine(it, delimiter) }
         return detectHeaderRow(rows) != null || lines.any {
-            it.contains("金额") || it.contains("交易时间") || it.contains("交易对方") ||
+            it.contains("金额") || it.contains("交易时间") || it.contains("交易日期") ||
+                it.contains("交易对方") || it.contains("对手信息") ||
                 it.contains("amount", ignoreCase = true)
         }
     }
@@ -313,6 +449,15 @@ object ManualImportManager {
         val items = mutableListOf<LedgerTransaction>()
         var skipped = 0
 
+        // Bank exports (e.g. Agricultural Bank of China / 农业银行) encode direction by sign
+        // (-70.43 for expense, +100.00 or 100.00 for income) when there is no separate 收/支 column.
+        val signedAmountMode = mapping.typeCol < 0 &&
+            mapping.amountCol >= 0 &&
+            ((mapping.headerRowIndex + 1) until rows.size).any { rowIdx ->
+                val raw = cleanNumericAmount(rows[rowIdx].getOrNull(mapping.amountCol))
+                raw != null && raw < 0.0
+            }
+
         for (i in (mapping.headerRowIndex + 1) until rows.size) {
             val cols = rows[i]
             if (cols.count { it.isNotBlank() } < 2) {
@@ -320,7 +465,7 @@ object ManualImportManager {
                 continue
             }
 
-            val resolvedAmountAndType = resolveAmountAndType(cols, mapping)
+            val resolvedAmountAndType = resolveAmountAndType(cols, mapping, signedAmountMode)
             if (resolvedAmountAndType == null) {
                 skipped++
                 continue
@@ -345,6 +490,11 @@ object ManualImportManager {
             val tradeStatus = cleanOptionalCell(cols.getOrNull(mapping.statusCol))
             val transactionNo = cleanOptionalCell(cols.getOrNull(mapping.transactionNoCol))
             val merchantOrderNo = cleanOptionalCell(cols.getOrNull(mapping.merchantOrderNoCol))
+            val balanceAfterCents = if (mapping.balanceCol >= 0) {
+                cleanNumericAmount(cols.getOrNull(mapping.balanceCol))?.let { (it * 100.0).roundToLong() }
+            } else {
+                null
+            }
 
             val merchant = rawMerchant
                 ?: productName
@@ -362,8 +512,13 @@ object ManualImportManager {
                 ?: cols.getOrNull(mapping.expenseAmountCol)
                 ?: cols.getOrNull(mapping.incomeAmountCol)
             val currency = resolveCurrencyCode(cols.getOrNull(mapping.currencyCol), amountRawForCurrency)
+            val rawDate = cols.getOrNull(mapping.dateCol).orEmpty()
             val rawTime = cols.getOrNull(mapping.timeCol).orEmpty()
-            val occurredAt = parseDateMillis(rawTime, allowExcelSerial = fromExcel)
+            val occurredAt = parseDateAndTimeMillis(
+                rawDate = rawDate,
+                rawTime = rawTime,
+                allowExcelSerial = fromExcel
+            )
 
             val explicitCategory = cleanOptionalCell(cols.getOrNull(mapping.categoryCol))
             val contextForInfer = listOfNotNull(productName, tradeType, note).joinToString(" ")
@@ -385,6 +540,7 @@ object ManualImportManager {
                 tradeStatus = tradeStatus?.take(40),
                 transactionNo = transactionNo?.take(80),
                 merchantOrderNo = merchantOrderNo?.take(80),
+                balanceAfterCents = balanceAfterCents,
                 occurredAtMillis = occurredAt,
                 confirmed = true
             )
@@ -404,19 +560,21 @@ object ManualImportManager {
         require(items.isNotEmpty()) { "$baseFormatLabel 中未找到有效账单记录（已定位第 ${mapping.headerRowIndex + 1} 行为表头）" }
 
         val mappedColumns = buildList {
+            if (mapping.dateCol >= 0) add("日期:${mapping.headers.getOrNull(mapping.dateCol)}")
             if (mapping.timeCol >= 0) add("时间:${mapping.headers.getOrNull(mapping.timeCol)}")
-            if (mapping.tradeTypeCol >= 0) add("交易类型:${mapping.headers.getOrNull(mapping.tradeTypeCol)}")
+            if (mapping.tradeTypeCol >= 0) add("摘要/类型:${mapping.headers.getOrNull(mapping.tradeTypeCol)}")
             if (mapping.merchantCol >= 0) add("对方:${mapping.headers.getOrNull(mapping.merchantCol)}")
             if (mapping.productCol >= 0) add("商品:${mapping.headers.getOrNull(mapping.productCol)}")
             if (mapping.typeCol >= 0) add("收/支:${mapping.headers.getOrNull(mapping.typeCol)}")
             if (mapping.amountCol >= 0) add("金额:${mapping.headers.getOrNull(mapping.amountCol)}")
             if (mapping.expenseAmountCol >= 0) add("支出:${mapping.headers.getOrNull(mapping.expenseAmountCol)}")
             if (mapping.incomeAmountCol >= 0) add("收入:${mapping.headers.getOrNull(mapping.incomeAmountCol)}")
-            if (mapping.channelCol >= 0) add("支付方式:${mapping.headers.getOrNull(mapping.channelCol)}")
+            if (mapping.balanceCol >= 0) add("余额:${mapping.headers.getOrNull(mapping.balanceCol)}")
+            if (mapping.channelCol >= 0) add("渠道:${mapping.headers.getOrNull(mapping.channelCol)}")
             if (mapping.statusCol >= 0) add("状态:${mapping.headers.getOrNull(mapping.statusCol)}")
-            if (mapping.transactionNoCol >= 0) add("交易单号:${mapping.headers.getOrNull(mapping.transactionNoCol)}")
+            if (mapping.transactionNoCol >= 0) add("单号/日志号:${mapping.headers.getOrNull(mapping.transactionNoCol)}")
             if (mapping.merchantOrderNoCol >= 0) add("商户单号:${mapping.headers.getOrNull(mapping.merchantOrderNoCol)}")
-            if (mapping.noteCol >= 0) add("备注:${mapping.headers.getOrNull(mapping.noteCol)}")
+            if (mapping.noteCol >= 0) add("附言/备注:${mapping.headers.getOrNull(mapping.noteCol)}")
         }.joinToString(" · ")
 
         return ImportPreviewResult(
@@ -492,7 +650,7 @@ object ManualImportManager {
                     val lowerKey = key.lowercase()
                     row.forEachIndexed { idx, cell ->
                         if (idx in used || cell.isBlank() || cell.length > 28) return@forEachIndexed
-                        val normalized = cell.lowercase().replace(" ", "")
+                        val normalized = cell.lowercase().replace(Regex("""[\s\u3000]+"""), "")
                         if (excludeKeys.any { normalized.contains(it.lowercase()) }) return@forEachIndexed
                         if (normalized == lowerKey) {
                             used.add(idx)
@@ -504,7 +662,7 @@ object ManualImportManager {
                     val lowerKey = key.lowercase()
                     row.forEachIndexed { idx, cell ->
                         if (idx in used || cell.isBlank() || cell.length > 28) return@forEachIndexed
-                        val normalized = cell.lowercase().replace(" ", "")
+                        val normalized = cell.lowercase().replace(Regex("""[\s\u3000]+"""), "")
                         if (excludeKeys.any { normalized.contains(it.lowercase()) }) return@forEachIndexed
                         if (normalized.contains(lowerKey)) {
                             used.add(idx)
@@ -515,9 +673,18 @@ object ManualImportManager {
                 return -1
             }
 
+            val dateCol = findBestCol(
+                exactKeys = listOf("交易日期", "记账日期", "入账日期", "发生日期", "日期", "date", "tradedate"),
+                containsKeys = listOf("交易日期", "记账日期", "入账日期", "日期", "date"),
+                excludeKeys = listOf("时间", "time")
+            )
             val timeCol = findBestCol(
-                exactKeys = listOf("交易时间", "记账时间", "创建时间", "入账时间", "日期", "时间", "time", "date", "datetime"),
-                containsKeys = listOf("交易时间", "记账时间", "日期", "时间", "date", "time")
+                exactKeys = listOf("交易时间", "记账时间", "创建时间", "入账时间", "时间", "time", "datetime", "timestamp"),
+                containsKeys = listOf("交易时间", "记账时间", "时间", "time", "timestamp")
+            )
+            val balanceCol = findBestCol(
+                exactKeys = listOf("本次余额", "账户余额", "交易后余额", "余额", "可用余额", "balance"),
+                containsKeys = listOf("余额", "balance")
             )
             val expenseAmountCol = findBestCol(
                 exactKeys = listOf("支出金额", "支出", "借方金额", "付款金额", "expense", "debit"),
@@ -528,7 +695,7 @@ object ManualImportManager {
                 containsKeys = listOf("收入金额", "贷方金额", "收款金额", "收入(")
             )
             val amountCol = findBestCol(
-                exactKeys = listOf("金额(元)", "金额（元）", "金额", "交易金额", "实付金额", "amount", "money", "total"),
+                exactKeys = listOf("金额(元)", "金额（元）", "金额", "交易金额", "实付金额", "发生额", "amount", "money", "total"),
                 containsKeys = listOf("金额", "发生额", "实付", "amount", "price", "value"),
                 excludeKeys = listOf("余额", "balance")
             )
@@ -537,38 +704,41 @@ object ManualImportManager {
                 containsKeys = listOf("收/支", "收支", "借贷")
             )
             val tradeTypeCol = findBestCol(
-                exactKeys = listOf("交易类型", "业务类型", "类型", "tradetype", "type"),
-                containsKeys = listOf("交易类型", "业务类型", "type"),
+                exactKeys = listOf("交易类型", "业务类型", "交易摘要", "业务摘要", "摘要", "类型", "tradetype", "type", "summary"),
+                containsKeys = listOf("交易类型", "业务类型", "交易摘要", "摘要", "type"),
                 excludeKeys = listOf("收支", "收/支")
             )
             val merchantCol = findBestCol(
-                exactKeys = listOf("交易对方", "商户", "商户名称", "对方名称", "交易对象", "收款方", "merchant", "payee", "counterparty"),
-                containsKeys = listOf("交易对方", "商户", "交易对象", "对方", "payee", "merchant"),
-                excludeKeys = listOf("单号", "订单号", "order")
+                exactKeys = listOf(
+                    "交易对方", "对手信息", "交易对手", "对手名称", "对手户名", "对方户名",
+                    "商户", "商户名称", "对方名称", "交易对象", "收款方", "merchant", "payee", "counterparty"
+                ),
+                containsKeys = listOf("交易对方", "对手信息", "交易对手", "对手", "商户", "交易对象", "对方", "payee", "merchant"),
+                excludeKeys = listOf("单号", "订单号", "order", "账号", "卡号")
             )
             val productCol = findBestCol(
                 exactKeys = listOf("商品", "商品名称", "商品说明", "product", "item"),
                 containsKeys = listOf("商品", "product", "item")
             )
             val channelCol = findBestCol(
-                exactKeys = listOf("支付方式", "收/付款方式", "付款方式", "渠道", "账户", "交易渠道", "channel", "account", "method"),
-                containsKeys = listOf("支付方式", "付款方式", "渠道", "账户", "银行", "channel", "account")
+                exactKeys = listOf("支付方式", "收/付款方式", "付款方式", "交易渠道", "渠道", "账户", "channel", "account", "method"),
+                containsKeys = listOf("支付方式", "付款方式", "交易渠道", "渠道", "账户", "银行", "channel", "account")
             )
             val statusCol = findBestCol(
                 exactKeys = listOf("当前状态", "交易状态", "状态", "status", "state"),
                 containsKeys = listOf("状态", "status")
             )
             val transactionNoCol = findBestCol(
-                exactKeys = listOf("交易单号", "交易订单号", "流水号", "transactionno", "trade_no"),
-                containsKeys = listOf("交易单号", "交易订单", "流水号", "transaction")
+                exactKeys = listOf("交易单号", "交易订单号", "流水号", "日志号", "交易日志号", "核心流水号", "凭证号", "transactionno", "trade_no"),
+                containsKeys = listOf("交易单号", "交易订单", "流水号", "日志号", "transaction")
             )
             val merchantOrderNoCol = findBestCol(
                 exactKeys = listOf("商户单号", "商家订单号", "商户订单号", "merchantorderno", "orderno"),
                 containsKeys = listOf("商户单号", "商家订单", "商户订单", "order")
             )
             val noteCol = findBestCol(
-                exactKeys = listOf("备注", "摘要", "说明", "附言", "note", "memo", "remark"),
-                containsKeys = listOf("备注", "摘要", "说明", "附言", "note", "memo", "remark")
+                exactKeys = listOf("交易附言", "附言", "备注", "说明", "用途", "note", "memo", "remark"),
+                containsKeys = listOf("附言", "备注", "说明", "用途", "note", "memo", "remark")
             )
             val currencyCol = findBestCol(
                 exactKeys = listOf("币种", "货币", "currency"),
@@ -583,6 +753,7 @@ object ManualImportManager {
                 headerRowIndex = r,
                 score = 0,
                 headers = row,
+                dateCol = dateCol,
                 timeCol = timeCol,
                 tradeTypeCol = tradeTypeCol,
                 typeCol = typeCol,
@@ -592,6 +763,7 @@ object ManualImportManager {
                 amountCol = amountCol,
                 expenseAmountCol = expenseAmountCol,
                 incomeAmountCol = incomeAmountCol,
+                balanceCol = balanceCol,
                 currencyCol = currencyCol,
                 categoryCol = categoryCol,
                 statusCol = statusCol,
@@ -605,12 +777,14 @@ object ManualImportManager {
             if (amountCol >= 0) score += 4
             if (expenseAmountCol >= 0) score += 3
             if (incomeAmountCol >= 0) score += 3
+            if (dateCol >= 0) score += 3
             if (timeCol >= 0) score += 3
             if (merchantCol >= 0) score += 3
             if (typeCol >= 0) score += 2
             if (tradeTypeCol >= 0) score += 2
             if (channelCol >= 0) score += 2
             if (productCol >= 0) score += 2
+            if (balanceCol >= 0) score += 1
             if (statusCol >= 0) score += 1
             if (transactionNoCol >= 0) score += 1
             if (merchantOrderNoCol >= 0) score += 1
@@ -619,7 +793,7 @@ object ManualImportManager {
             if (currencyCol >= 0) score += 1
 
             val hasDataBelow = ((r + 1) until minOf(rows.size, r + 15)).any { nextIdx ->
-                resolveAmountAndType(rows[nextIdx], candidate) != null
+                resolveAmountAndType(rows[nextIdx], candidate, signedAmountMode = false) != null
             }
             if (hasDataBelow) score += 5
 
@@ -638,7 +812,8 @@ object ManualImportManager {
 
     private fun resolveAmountAndType(
         cols: List<String>,
-        mapping: ColumnMapping
+        mapping: ColumnMapping,
+        signedAmountMode: Boolean = false
     ): Pair<Long, TransactionType>? {
         val rawAmountText = cols.getOrNull(mapping.amountCol)?.trim()
         val mainRaw = cleanNumericAmount(rawAmountText)
@@ -646,6 +821,7 @@ object ManualImportManager {
             val type = when {
                 mainRaw < 0 -> TransactionType.EXPENSE
                 rawAmountText?.startsWith("+") == true -> TransactionType.INCOME
+                signedAmountMode && mainRaw > 0 -> TransactionType.INCOME
                 else -> TransactionType.EXPENSE
             }
             val cents = (abs(mainRaw) * 100.0).roundToLong().coerceAtLeast(1L)
@@ -816,29 +992,193 @@ object ManualImportManager {
         else -> fallback
     }
 
-    private fun parseDateMillis(raw: String, allowExcelSerial: Boolean = false): Long {
+    /**
+     * Intelligently parses either a combined date+time pair (e.g. "20251121" + "135144",
+     * "20251121" + "95144", "2025-11-21" + "13:51:44") or a single date/time/numeric timestamp.
+     */
+    fun parseDateAndTimeMillis(
+        rawDate: String,
+        rawTime: String,
+        allowExcelSerial: Boolean = false
+    ): Long {
+        val datePart = rawDate.trim()
+        val timePart = rawTime.trim()
+        if (datePart.isEmpty() && timePart.isEmpty()) return System.currentTimeMillis()
+        if (datePart.isEmpty()) return parseDateMillis(timePart, allowExcelSerial)
+        if (timePart.isEmpty()) return parseDateMillis(datePart, allowExcelSerial)
+
+        // If timePart already contains a full date+time or epoch timestamp, prefer it directly.
+        if (timePart.length >= 10 && (timePart.contains("-") || timePart.contains("/") || timePart.all { it.isDigit() })) {
+            tryParseSmartTimestamp(timePart, allowExcelSerial)?.let { return it }
+        }
+
+        val dateYmd = parseDateOnlyYmd(datePart, allowExcelSerial)
+        val timeHms = parseTimeOnlyHms(timePart, allowExcelSerial)
+        if (dateYmd != null && timeHms != null) {
+            return Calendar.getInstance().apply {
+                set(Calendar.YEAR, dateYmd.first)
+                set(Calendar.MONTH, dateYmd.second - 1)
+                set(Calendar.DAY_OF_MONTH, dateYmd.third)
+                set(Calendar.HOUR_OF_DAY, timeHms.first)
+                set(Calendar.MINUTE, timeHms.second)
+                set(Calendar.SECOND, timeHms.third)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+        }
+
+        return parseDateMillis("$datePart $timePart", allowExcelSerial)
+    }
+
+    private fun parseDateOnlyYmd(raw: String, allowExcelSerial: Boolean): Triple<Int, Int, Int>? {
         val cleaned = raw.trim()
-        if (cleaned.isEmpty()) return System.currentTimeMillis()
+        if (cleaned.isEmpty()) return null
+        if (cleaned.length == 8 && cleaned.all { it.isDigit() }) {
+            val y = cleaned.substring(0, 4).toIntOrNull() ?: return null
+            val m = cleaned.substring(4, 6).toIntOrNull() ?: return null
+            val d = cleaned.substring(6, 8).toIntOrNull() ?: return null
+            if (y in 1990..2100 && m in 1..12 && d in 1..31) return Triple(y, m, d)
+        }
+        val sepMatch = Regex("""^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?$""").matchEntire(cleaned)
+        if (sepMatch != null) {
+            val y = sepMatch.groupValues[1].toIntOrNull() ?: return null
+            val m = sepMatch.groupValues[2].toIntOrNull() ?: return null
+            val d = sepMatch.groupValues[3].toIntOrNull() ?: return null
+            if (y in 1990..2100 && m in 1..12 && d in 1..31) return Triple(y, m, d)
+        }
         if (allowExcelSerial) {
             cleaned.toDoubleOrNull()?.let { serial ->
                 val formatted = XlsxTableReader.excelSerialToFormattedDate(serial)
                 if (formatted != null) {
-                    for (fmt in dateFormats) {
-                        runCatching {
-                            val parsed = fmt.parse(formatted)
-                            if (parsed != null) return parsed.time
-                        }
+                    val dateHead = formatted.substringBefore(' ')
+                    return parseDateOnlyYmd(dateHead, allowExcelSerial = false)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun parseTimeOnlyHms(raw: String, allowExcelSerial: Boolean): Triple<Int, Int, Int>? {
+        val cleaned = raw.trim().replace('：', ':')
+        if (cleaned.isEmpty()) return null
+        val colonMatch = Regex("""^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$""").matchEntire(cleaned)
+        if (colonMatch != null) {
+            val h = colonMatch.groupValues[1].toIntOrNull() ?: return null
+            val m = colonMatch.groupValues[2].toIntOrNull() ?: return null
+            val s = colonMatch.groupValues[3].takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 0
+            if (h in 0..23 && m in 0..59 && s in 0..59) return Triple(h, m, s)
+        }
+        // Pure numeric time like "135144", "95144" (09:51:44), "0951" (09:51:00)
+        if (cleaned.all { it.isDigit() }) {
+            val padded = when (cleaned.length) {
+                6 -> cleaned
+                5 -> "0$cleaned"
+                4 -> "${cleaned}00"
+                3 -> "0${cleaned}00"
+                else -> null
+            }
+            if (padded != null) {
+                val h = padded.substring(0, 2).toIntOrNull() ?: return null
+                val m = padded.substring(2, 4).toIntOrNull() ?: return null
+                val s = padded.substring(4, 6).toIntOrNull() ?: return null
+                if (h in 0..23 && m in 0..59 && s in 0..59) return Triple(h, m, s)
+            }
+        }
+        if (allowExcelSerial) {
+            cleaned.toDoubleOrNull()?.let { frac ->
+                if (frac >= 0.0 && frac < 1.0) {
+                    val totalSeconds = (frac * 86_400.0).roundToLong().toInt().coerceIn(0, 86_399)
+                    return Triple(totalSeconds / 3600, (totalSeconds % 3600) / 60, totalSeconds % 60)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun tryParseSmartTimestamp(raw: String, allowExcelSerial: Boolean): Long? {
+        val cleaned = raw.trim()
+        if (cleaned.isEmpty()) return null
+
+        // Pure numeric timestamps: epoch millis (13 digits), epoch seconds (10 digits),
+        // compact yyyyMMddHHmmss (14 digits), yyyyMMddHHmm (12 digits), yyyyMMdd (8 digits)
+        if (cleaned.all { it.isDigit() }) {
+            when (cleaned.length) {
+                13 -> {
+                    val ms = cleaned.toLongOrNull()
+                    if (ms != null && ms in 946_684_800_000L..4_102_444_800_000L) return ms
+                }
+                10 -> {
+                    val sec = cleaned.toLongOrNull()
+                    if (sec != null && sec in 946_684_800L..4_102_444_800L) return sec * 1000L
+                }
+                14 -> {
+                    val y = cleaned.substring(0, 4).toIntOrNull()
+                    val mo = cleaned.substring(4, 6).toIntOrNull()
+                    val d = cleaned.substring(6, 8).toIntOrNull()
+                    val h = cleaned.substring(8, 10).toIntOrNull()
+                    val mi = cleaned.substring(10, 12).toIntOrNull()
+                    val s = cleaned.substring(12, 14).toIntOrNull()
+                    if (y != null && mo != null && d != null && h != null && mi != null && s != null &&
+                        y in 1990..2100 && mo in 1..12 && d in 1..31 && h in 0..23 && mi in 0..59 && s in 0..59
+                    ) {
+                        return Calendar.getInstance().apply {
+                            set(y, mo - 1, d, h, mi, s)
+                            set(Calendar.MILLISECOND, 0)
+                        }.timeInMillis
+                    }
+                }
+                12 -> {
+                    val y = cleaned.substring(0, 4).toIntOrNull()
+                    val mo = cleaned.substring(4, 6).toIntOrNull()
+                    val d = cleaned.substring(6, 8).toIntOrNull()
+                    val h = cleaned.substring(8, 10).toIntOrNull()
+                    val mi = cleaned.substring(10, 12).toIntOrNull()
+                    if (y != null && mo != null && d != null && h != null && mi != null &&
+                        y in 1990..2100 && mo in 1..12 && d in 1..31 && h in 0..23 && mi in 0..59
+                    ) {
+                        return Calendar.getInstance().apply {
+                            set(y, mo - 1, d, h, mi, 0)
+                            set(Calendar.MILLISECOND, 0)
+                        }.timeInMillis
+                    }
+                }
+                8 -> {
+                    parseDateOnlyYmd(cleaned, allowExcelSerial = false)?.let { (y, mo, d) ->
+                        return Calendar.getInstance().apply {
+                            set(y, mo - 1, d, 0, 0, 0)
+                            set(Calendar.MILLISECOND, 0)
+                        }.timeInMillis
                     }
                 }
             }
         }
-        val normalized = cleaned.replace('T', ' ').substringBefore('.').trim()
-        for (fmt in dateFormats) {
-            runCatching {
-                val parsed = fmt.parse(normalized)
-                if (parsed != null) return parsed.time
+
+        if (allowExcelSerial) {
+            cleaned.toDoubleOrNull()?.let { serial ->
+                val formatted = XlsxTableReader.excelSerialToFormattedDate(serial)
+                if (formatted != null) {
+                    parseWithPatterns(formatted)?.let { return it }
+                }
             }
         }
-        return ChinaNotificationParser.extractOccurredAtMillis(normalized) ?: System.currentTimeMillis()
+
+        val normalized = cleaned.replace('T', ' ').substringBefore('.').trim()
+        return parseWithPatterns(normalized)
+    }
+
+    private fun parseWithPatterns(normalized: String): Long? {
+        for (pattern in dateTimePatterns) {
+            val parsed = runCatching {
+                SimpleDateFormat(pattern, Locale.CHINA).apply { isLenient = false }.parse(normalized)
+            }.getOrNull()
+            if (parsed != null) return parsed.time
+        }
+        return null
+    }
+
+    private fun parseDateMillis(raw: String, allowExcelSerial: Boolean = false): Long {
+        val cleaned = raw.trim()
+        if (cleaned.isEmpty()) return System.currentTimeMillis()
+        tryParseSmartTimestamp(cleaned, allowExcelSerial)?.let { return it }
+        return ChinaNotificationParser.extractOccurredAtMillis(cleaned) ?: System.currentTimeMillis()
     }
 }

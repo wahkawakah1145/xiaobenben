@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,6 +15,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -58,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
@@ -65,6 +69,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.CurrencyExchangeManager
 import com.example.model.BudgetSettings
 import com.example.model.ExchangeRateState
@@ -72,6 +78,8 @@ import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionBookLink
 import com.example.model.TransactionType
+import com.example.parser.QuickAnalysisBreakdownItem
+import com.example.parser.QuickAnalysisReport
 import com.example.ui.components.ChannelBadge
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
@@ -122,7 +130,7 @@ fun LedgerBooksScreen(
     var editingBook by remember { mutableStateOf<LedgerBook?>(null) }
     var deletingBook by remember { mutableStateOf<LedgerBook?>(null) }
     var expandedBookId by remember { mutableStateOf<String?>(null) }
-    var quickSummaryBook by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var quickSummaryBook by remember { mutableStateOf<Pair<String, QuickAnalysisReport>?>(null) }
     var inspectingTx by remember { mutableStateOf<LedgerTransaction?>(null) }
     var editingTx by remember { mutableStateOf<LedgerTransaction?>(null) }
 
@@ -401,11 +409,11 @@ fun LedgerBooksScreen(
                                 OutlinedButton(
                                     enabled = bookTxList.isNotEmpty(),
                                     onClick = {
-                                        val summary = viewModel.buildQuickSelectionSummary(
+                                        val report = viewModel.buildQuickSelectionReport(
                                             transactions = bookTxList,
                                             scopeTitle = "账本「${book.name}」统计摘要"
                                         )
-                                        quickSummaryBook = "账本「${book.name}」" to summary
+                                        quickSummaryBook = "账本「${book.name}」" to report
                                     },
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                                     modifier = Modifier
@@ -554,10 +562,11 @@ fun LedgerBooksScreen(
         )
     }
 
-    quickSummaryBook?.let { (title, body) ->
+    quickSummaryBook?.let { (title, report) ->
         QuickAnalysisTextDialog(
             title = title,
-            summaryText = body,
+            summaryText = report.plainText,
+            report = report,
             onDismiss = { quickSummaryBook = null }
         )
     }
@@ -844,66 +853,551 @@ fun AddToBooksMultiSelectDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun QuickAnalysisTextDialog(
     title: String,
     summaryText: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    report: QuickAnalysisReport? = null
 ) {
     val clipboard = LocalClipboardManager.current
-    var copied by remember(summaryText) { mutableStateOf(false) }
+    val copyPlainText = report?.plainText ?: summaryText
+    var copied by remember(copyPlainText) { mutableStateOf(false) }
+    var showPlainTextPreview by remember(copyPlainText) { mutableStateOf(report == null) }
+    val numberFont = LocalNumberFontFamily.current
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(AppIcons.Insights, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        },
-        text = {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("quick_analysis_dialog_text")
-            ) {
-                SelectionContainer {
-                    Text(
-                        text = summaryText,
-                        style = MaterialTheme.typography.bodySmall,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(26.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 24.dp)
+                .widthIn(max = 520.dp)
+                .testTag("quick_analysis_dialog_root")
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Header banner with subtle theme-aligned gradient
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.48f)
+                                )
+                            )
+                        )
+                        .padding(start = 18.dp, end = 10.dp, top = 16.dp, bottom = 14.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = AppIcons.Insights,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (report != null) {
+                                    Text(
+                                        text = report.scopeTitle,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.minimumInteractiveComponentSize()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "关闭",
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+
+                        if (report != null) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                QuickAnalysisMetaPill(text = report.dateRange)
+                                QuickAnalysisMetaPill(text = "共 ${report.totalCount} 笔")
+                                if (report.expenseCount > 0) {
+                                    QuickAnalysisMetaPill(text = "支出 ${report.expenseCount}")
+                                }
+                                if (report.incomeCount > 0) {
+                                    QuickAnalysisMetaPill(text = "收入 ${report.incomeCount}")
+                                }
+                                if (report.transferCount > 0) {
+                                    QuickAnalysisMetaPill(text = "转账 ${report.transferCount}")
+                                }
+                                if (report.foreignCount > 0) {
+                                    QuickAnalysisMetaPill(text = "含 ${report.foreignCount} 笔外币")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Scrollable structured analysis body
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 460.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (report != null) {
+                        // 3-column KPI cards
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            QuickAnalysisKpiCard(
+                                label = "支出合计",
+                                value = formatCurrency(report.totalExpenseCents, report.baseCurrencyCode),
+                                valueColor = ExpenseCoral,
+                                modifier = Modifier.weight(1f)
+                            )
+                            QuickAnalysisKpiCard(
+                                label = "收入合计",
+                                value = formatCurrency(report.totalIncomeCents, report.baseCurrencyCode),
+                                valueColor = IncomeJade,
+                                modifier = Modifier.weight(1f)
+                            )
+                            QuickAnalysisKpiCard(
+                                label = "净收支",
+                                value = (if (report.netCents >= 0L) "+" else "-") +
+                                    formatCurrency(kotlin.math.abs(report.netCents), report.baseCurrencyCode),
+                                valueColor = if (report.netCents >= 0L) IncomeJade else ExpenseCoral,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        // Secondary metric strip
+                        if (report.expenseCount > 0 || report.transferCount > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                FlowRow(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    if (report.expenseCount > 0) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "笔均支出",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = formatCurrency(report.avgExpenseCents, report.baseCurrencyCode),
+                                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = numberFont),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                    if (report.transferCount > 0) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "转账/不计收支",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = formatCurrency(report.totalTransferCents, report.baseCurrencyCode),
+                                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = numberFont),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "统计主币种",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = report.baseCurrencyCode,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Largest expense / income highlights
+                        if (report.largestExpense != null || report.largestIncome != null) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "单笔极值",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    report.largestExpense?.let { peak ->
+                                        QuickAnalysisHighlightRow(
+                                            tag = "最高支出",
+                                            accent = ExpenseCoral,
+                                            merchant = peak.merchant,
+                                            dateText = peak.dateText,
+                                            amountText = formatCurrency(peak.amountCents, report.baseCurrencyCode)
+                                        )
+                                    }
+                                    if (report.largestExpense != null && report.largestIncome != null) {
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                                    }
+                                    report.largestIncome?.let { peak ->
+                                        QuickAnalysisHighlightRow(
+                                            tag = "最高收入",
+                                            accent = IncomeJade,
+                                            merchant = peak.merchant,
+                                            dateText = peak.dateText,
+                                            amountText = formatCurrency(peak.amountCents, report.baseCurrencyCode)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Category breakdown bars
+                        if (report.topCategories.isNotEmpty()) {
+                            QuickAnalysisBreakdownCard(
+                                sectionTitle = "分类支出分布",
+                                subtitle = null,
+                                items = report.topCategories,
+                                baseCurrencyCode = report.baseCurrencyCode,
+                                barColor = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        // Channel breakdown bars
+                        if (report.topChannels.isNotEmpty()) {
+                            QuickAnalysisBreakdownCard(
+                                sectionTitle = "渠道支出分布",
+                                subtitle = if (report.hasCompositeChannels) "组合支付渠道已按 & 等分隔符分别统计" else null,
+                                items = report.topChannels,
+                                baseCurrencyCode = report.baseCurrencyCode,
+                                barColor = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+
+                        // Toggleable raw plain text preview
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "复制后仍为纯文本摘要，便于直接粘贴分享",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { showPlainTextPreview = !showPlainTextPreview },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("quick_analysis_toggle_plaintext")
+                            ) {
+                                Text(if (showPlainTextPreview) "收起纯文本" else "查看纯文本")
+                            }
+                        }
+                    }
+
+                    AnimatedVisibility(visible = showPlainTextPreview) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("quick_analysis_dialog_text")
+                        ) {
+                            SelectionContainer {
+                                Text(
+                                    text = copyPlainText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                // Bottom actions
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(copyPlainText))
+                            copied = true
+                        },
                         modifier = Modifier
-                            .verticalScroll(rememberScrollState())
-                            .padding(12.dp)
+                            .weight(1f)
+                            .minimumInteractiveComponentSize()
+                            .testTag("quick_analysis_copy_button")
+                    ) {
+                        Icon(
+                            imageVector = if (copied) Icons.Rounded.Check else AppIcons.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (copied) "已复制纯文本" else "复制纯文本")
+                    }
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("quick_analysis_close_button")
+                    ) {
+                        Text("关闭")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickAnalysisMetaPill(text: String) {
+    Surface(
+        shape = RoundedCornerShape(99.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
+        )
+    }
+}
+
+@Composable
+private fun QuickAnalysisKpiCard(
+    label: String,
+    value: String,
+    valueColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val numberFont = LocalNumberFontFamily.current
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                color = valueColor,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuickAnalysisHighlightRow(
+    tag: String,
+    accent: Color,
+    merchant: String,
+    dateText: String,
+    amountText: String
+) {
+    val numberFont = LocalNumberFontFamily.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = accent.copy(alpha = 0.14f)
+        ) {
+            Text(
+                text = tag,
+                style = MaterialTheme.typography.labelSmall,
+                color = accent,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = merchant,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = dateText,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            text = amountText,
+            style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+            color = accent,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+private fun QuickAnalysisBreakdownCard(
+    sectionTitle: String,
+    subtitle: String?,
+    items: List<QuickAnalysisBreakdownItem>,
+    baseCurrencyCode: String,
+    barColor: Color
+) {
+    val numberFont = LocalNumberFontFamily.current
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = sectionTitle,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = {
-                    clipboard.setText(AnnotatedString(summaryText))
-                    copied = true
-                },
-                modifier = Modifier.testTag("quick_analysis_copy_button")
-            ) {
-                Icon(
-                    imageVector = if (copied) Icons.Rounded.Check else AppIcons.ContentCopy,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(if (copied) "已复制" else "复制文本")
-            }
-        },
-        confirmButton = {
-            Button(onClick = onDismiss) {
-                Text("关闭")
+            items.forEach { item ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${item.label} · ${item.count} 笔",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "${formatCurrency(item.amountCents, baseCurrencyCode)} (${"%.1f".format(item.sharePercent)}%)",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = numberFont),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                    ) {
+                        val fraction = (item.sharePercent / 100.0).toFloat().coerceIn(0.03f, 1f)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(fraction)
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(barColor.copy(alpha = 0.85f))
+                        )
+                    }
+                }
             }
         }
-    )
+    }
 }
+

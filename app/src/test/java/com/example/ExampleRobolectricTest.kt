@@ -921,4 +921,224 @@ class ExampleRobolectricTest {
     com.example.data.AppHttpClient.trimIdleResources()
     com.example.data.LedgerDatabase.trimMemoryIfOpen()
   }
+
+  @Test
+  fun `parses ABC bank csv export with split numeric date time signed amounts balance and spaced log header`() {
+    val csv = """
+      交易日期,交易时间,交易摘要,交易金额,本次余额,对手信息,日 志 号,交易渠道,交易附言
+      20251121,135144,京东金融,-70.43,2423.71,京东肯特瑞基金销售有限公司,1524375468,京东金融,
+      20251121,90508,工资入账,5200.00,7623.71,示例科技有限公司,1524379999,代发工资,11月薪资
+    """.trimIndent()
+    val parsed = com.example.data.ManualImportManager.parseImportedContent(csv, "abc_statement.csv").getOrThrow()
+    assertEquals(2, parsed.transactions.size)
+
+    val tx1 = parsed.transactions[0]
+    assertEquals(com.example.model.TransactionType.EXPENSE, tx1.txType)
+    assertEquals(7043L, tx1.amountCents)
+    assertEquals(242371L, tx1.balanceAfterCents)
+    assertEquals("京东肯特瑞基金销售有限公司", tx1.merchant)
+    assertEquals("1524375468", tx1.transactionNo)
+    assertEquals("京东金融", tx1.channel)
+    assertEquals("京东金融", tx1.tradeType)
+
+    val cal1 = java.util.Calendar.getInstance().apply { timeInMillis = tx1.occurredAtMillis }
+    assertEquals(2025, cal1.get(java.util.Calendar.YEAR))
+    assertEquals(java.util.Calendar.NOVEMBER, cal1.get(java.util.Calendar.MONTH))
+    assertEquals(21, cal1.get(java.util.Calendar.DAY_OF_MONTH))
+    assertEquals(13, cal1.get(java.util.Calendar.HOUR_OF_DAY))
+    assertEquals(51, cal1.get(java.util.Calendar.MINUTE))
+    assertEquals(44, cal1.get(java.util.Calendar.SECOND))
+
+    val tx2 = parsed.transactions[1]
+    assertEquals(com.example.model.TransactionType.INCOME, tx2.txType)
+    assertEquals(520000L, tx2.amountCents)
+    assertEquals(762371L, tx2.balanceAfterCents)
+    assertEquals("11月薪资", tx2.note)
+    val cal2 = java.util.Calendar.getInstance().apply { timeInMillis = tx2.occurredAtMillis }
+    assertEquals(9, cal2.get(java.util.Calendar.HOUR_OF_DAY))
+    assertEquals(5, cal2.get(java.util.Calendar.MINUTE))
+    assertEquals(8, cal2.get(java.util.Calendar.SECOND))
+  }
+
+  @Test
+  fun `smart numeric timestamp parser converts compact digits and epoch numbers`() {
+    val compact14 = com.example.data.ManualImportManager.parseDateAndTimeMillis("20251121135144", "", allowExcelSerial = false)
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = compact14 }
+    assertEquals(2025, cal.get(java.util.Calendar.YEAR))
+    assertEquals(13, cal.get(java.util.Calendar.HOUR_OF_DAY))
+    assertEquals(51, cal.get(java.util.Calendar.MINUTE))
+    assertEquals(44, cal.get(java.util.Calendar.SECOND))
+
+    val epochSec = com.example.data.ManualImportManager.parseDateAndTimeMillis("1763704304", "", allowExcelSerial = false)
+    assertEquals(1763704304_000L, epochSec)
+    val epochMs = com.example.data.ManualImportManager.parseDateAndTimeMillis("1763704304123", "", allowExcelSerial = false)
+    assertEquals(1763704304123L, epochMs)
+  }
+
+  @Test
+  fun `manual import annotateDuplicates detects existing and intra-batch duplicates and isolates new items`() {
+    val csv = """
+      交易日期,交易时间,交易摘要,交易金额,本次余额,对手信息,日 志 号,交易渠道,交易附言
+      20251121,135144,京东金融,-70.43,2423.71,京东肯特瑞基金销售有限公司,1524375468,京东金融,第一条
+      20251121,135144,京东金融,-70.43,2423.71,京东肯特瑞基金销售有限公司,1524375468,京东金融,文件内重复
+      20251121,140000,便利店,-15.50,2408.21,全家便利店,1524375999,银行卡,新增条目
+    """.trimIndent()
+    val rawPreview = com.example.data.ManualImportManager.parseImportedContent(csv, "abc.csv").getOrThrow()
+    val existing = listOf(
+      com.example.model.LedgerTransaction(
+        id = "existing-1",
+        amountCents = 7043L,
+        currencyCode = "CNY",
+        type = com.example.model.TransactionType.EXPENSE.name,
+        category = "其他",
+        merchant = "京东肯特瑞基金销售有限公司",
+        channel = "京东金融",
+        transactionNo = "1524375468",
+        occurredAtMillis = rawPreview.transactions[0].occurredAtMillis
+      )
+    )
+    val annotated = com.example.data.ManualImportManager.annotateDuplicates(rawPreview, existing)
+    assertEquals(3, annotated.transactions.size)
+    assertEquals(2, annotated.duplicateCount)
+    assertEquals(1, annotated.newTransactions.size)
+    assertEquals("全家便利店", annotated.newTransactions.first().merchant)
+  }
+
+  @Test
+  fun `composite channel splitter splits ampersand channels and quick analysis outputs clean plain text`() {
+    val parts = com.example.model.ChannelSplitter.splitChannels("花呗&红包&现金抵价券")
+    assertEquals(listOf("花呗", "红包", "现金抵价券"), parts)
+    org.junit.Assert.assertTrue(com.example.model.ChannelSplitter.matchesChannel("花呗&红包&现金抵价券", "红包"))
+    org.junit.Assert.assertFalse(com.example.model.ChannelSplitter.matchesChannel("花呗&红包", "余额宝"))
+
+    val tx1 = com.example.model.LedgerTransaction(
+      id = "ch-1",
+      amountCents = 10000L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "购物消费",
+      merchant = "淘宝旗舰店",
+      channel = "花呗&红包&现金抵价券",
+      occurredAtMillis = 1_763_704_304_000L,
+      confirmed = true
+    )
+    val report = com.example.parser.LocalSpendingAnalyzer.generateQuickSelectionReport(
+      transactions = listOf(tx1),
+      scopeTitle = "筛选测试"
+    )
+    org.junit.Assert.assertTrue(report.hasCompositeChannels)
+    assertEquals(3, report.topChannels.size)
+    org.junit.Assert.assertTrue(report.topChannels.map { it.label }.containsAll(listOf("花呗", "红包", "现金抵价券")))
+    org.junit.Assert.assertTrue(report.plainText.contains("支出合计"))
+    org.junit.Assert.assertFalse(report.plainText.contains("**"))
+    org.junit.Assert.assertFalse(report.plainText.contains("##"))
+  }
+
+  @Test
+  fun `search filter date auto-hyphen and time-of-day slot matching behave accurately`() {
+    assertEquals("2025-", com.example.ui.autoFormatDateInput("202", "2025"))
+    assertEquals("2025", com.example.ui.autoFormatDateInput("2025-", "2025"))
+    assertEquals("2025-11-", com.example.ui.autoFormatDateInput("2025-1", "2025-11"))
+    assertEquals("2025-11-21", com.example.ui.autoFormatDateInput("", "20251121"))
+    assertEquals("2025-03-", com.example.ui.autoFormatDateInput("2025-3", "2025-3-"))
+
+    assertEquals("09:", com.example.ui.autoFormatTimeOfDayInput("0", "09"))
+    assertEquals("09:30", com.example.ui.autoFormatTimeOfDayInput("09:3", "09:30"))
+    assertEquals(570, com.example.ui.parseTimeOfDayMinutes("09:30"))
+
+    val calMorning = java.util.Calendar.getInstance().apply {
+      set(2025, java.util.Calendar.NOVEMBER, 21, 9, 30, 0)
+    }
+    val calLateNight = java.util.Calendar.getInstance().apply {
+      set(2025, java.util.Calendar.NOVEMBER, 21, 23, 15, 0)
+    }
+    org.junit.Assert.assertTrue(
+      com.example.ui.matchesTimeOfDayRange(
+        calMorning.timeInMillis,
+        com.example.ui.TimeOfDaySlot.MORNING.startMinute,
+        com.example.ui.TimeOfDaySlot.MORNING.endMinute
+      )
+    )
+    org.junit.Assert.assertFalse(
+      com.example.ui.matchesTimeOfDayRange(
+        calLateNight.timeInMillis,
+        com.example.ui.TimeOfDaySlot.MORNING.startMinute,
+        com.example.ui.TimeOfDaySlot.MORNING.endMinute
+      )
+    )
+    // Overnight range 22:00 ~ 02:00
+    org.junit.Assert.assertTrue(
+      com.example.ui.matchesTimeOfDayRange(calLateNight.timeInMillis, 22 * 60, 2 * 60)
+    )
+  }
+
+  @Test
+  fun `backup codec and Room v8 persist balanceAfterCents accurately`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = com.example.data.LedgerRepository(context)
+    val tx = com.example.model.LedgerTransaction(
+      id = "bal-tx-1",
+      amountCents = 7043L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "其他",
+      merchant = "京东肯特瑞",
+      channel = "京东金融",
+      balanceAfterCents = 242371L,
+      occurredAtMillis = 1_763_704_304_000L,
+      confirmed = true
+    )
+    repository.addTransaction(tx).getOrThrow()
+    val stored = repository.getAllTransactionsOnce().firstOrNull { it.id == "bal-tx-1" }
+    org.junit.Assert.assertNotNull(stored)
+    assertEquals(242371L, stored!!.balanceAfterCents)
+
+    val json = com.example.data.LedgerBackupCodec.encodeBackupJson(
+      transactions = listOf(tx),
+      rules = emptyList(),
+      settings = com.example.model.BudgetSettings()
+    )
+    val decoded = com.example.data.LedgerBackupCodec.decodeBackupJson(json)
+    assertEquals(242371L, decoded.transactions.first().balanceAfterCents)
+    repository.deleteTransaction("bal-tx-1")
+  }
+
+  @Test
+  fun `deleting a custom rule triggers undo banner and undoLastDelete restores the rule`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val vm = com.example.viewmodel.LedgerViewModel(repo)
+    val customRule = com.example.model.CustomParsingRule(
+      id = "undo-test-rule-1",
+      name = "可撤回测试规则",
+      keywordPattern = "UndoTestMerchant",
+      channelName = "支付宝",
+      defaultCategory = "餐饮美食"
+    )
+    repo.saveParsingRule(customRule).getOrThrow()
+    org.junit.Assert.assertTrue(repo.observeParsingRules().first().any { it.id == customRule.id })
+
+    vm.deleteCustomRule(customRule.id)
+    var deadline = System.currentTimeMillis() + 3000L
+    while (vm.deleteUndoBanner.value == null && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+    val banner = vm.deleteUndoBanner.value
+    org.junit.Assert.assertNotNull(banner)
+    assertEquals(1, banner!!.deletedRules.size)
+    assertEquals(customRule.id, banner.deletedRules.first().id)
+    org.junit.Assert.assertFalse(repo.observeParsingRules().first().any { it.id == customRule.id })
+
+    vm.undoLastDelete()
+    deadline = System.currentTimeMillis() + 3000L
+    while (repo.observeParsingRules().first().none { it.id == customRule.id } && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+    org.junit.Assert.assertTrue(repo.observeParsingRules().first().any { it.id == customRule.id })
+    repo.deleteParsingRule(customRule.id)
+  }
 }

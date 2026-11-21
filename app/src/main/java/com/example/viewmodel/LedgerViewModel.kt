@@ -113,7 +113,8 @@ sealed interface AiTestState {
 data class DeleteUndoBanner(
     val id: Long = System.nanoTime(),
     val message: String,
-    val deletedItems: List<LedgerTransaction>
+    val deletedItems: List<LedgerTransaction> = emptyList(),
+    val deletedRules: List<CustomParsingRule> = emptyList()
 )
 
 class LedgerViewModel(
@@ -310,9 +311,26 @@ class LedgerViewModel(
         _deleteUndoBanner.value = null
         viewModelScope.launch {
             runCatching {
-                repository.mergeTransactionsFromBackup(banner.deletedItems)
+                if (banner.deletedRules.isNotEmpty()) {
+                    repository.mergeRulesFromBackup(banner.deletedRules)
+                }
+                if (banner.deletedItems.isNotEmpty()) {
+                    repository.mergeTransactionsFromBackup(banner.deletedItems)
+                }
             }.onSuccess {
-                _actionMessage.value = "已撤销删除，恢复 ${banner.deletedItems.size} 笔账单"
+                _actionMessage.value = when {
+                    banner.deletedRules.isNotEmpty() && banner.deletedItems.isEmpty() -> {
+                        if (banner.deletedRules.size == 1) {
+                            "已撤销删除，恢复规则「${banner.deletedRules.first().name}」"
+                        } else {
+                            "已撤销删除，恢复 ${banner.deletedRules.size} 条规则"
+                        }
+                    }
+                    banner.deletedItems.isNotEmpty() -> {
+                        "已撤销删除，恢复 ${banner.deletedItems.size} 笔账单"
+                    }
+                    else -> "已撤销删除"
+                }
             }.onFailure { err ->
                 _actionMessage.value = "撤销失败：${err.localizedMessage ?: "请重试"}"
             }
@@ -731,7 +749,20 @@ class LedgerViewModel(
 
     fun deleteCustomRule(ruleId: String) {
         viewModelScope.launch {
+            val targetRule = (rulesState.value as? UiState.Success)?.data
+                ?.firstOrNull { it.id == ruleId }
+                ?: repository.getRulesOnce().firstOrNull { it.id == ruleId }
             repository.deleteParsingRule(ruleId)
+                .onSuccess {
+                    if (targetRule != null) {
+                        _deleteUndoBanner.value = DeleteUndoBanner(
+                            message = "已删除规则「${targetRule.name}」",
+                            deletedRules = listOf(targetRule)
+                        )
+                    } else {
+                        _actionMessage.value = "已删除识别规则"
+                    }
+                }
                 .onFailure { _actionMessage.value = "删除规则失败" }
         }
     }
@@ -812,19 +843,24 @@ class LedgerViewModel(
         }
     }
 
-    fun buildQuickSelectionSummary(
+    fun buildQuickSelectionReport(
         transactions: List<LedgerTransaction>,
         scopeTitle: String = "选中账单快速分析"
-    ): String {
+    ): com.example.parser.QuickAnalysisReport {
         val settings = settingsState.value
         val rates = exchangeRateState.value.ratesToCny
-        return LocalSpendingAnalyzer.generateQuickSelectionSummary(
+        return LocalSpendingAnalyzer.generateQuickSelectionReport(
             transactions = transactions,
             baseCurrencyCode = settings.baseCurrencyCode,
             ratesToCny = rates,
             scopeTitle = scopeTitle
         )
     }
+
+    fun buildQuickSelectionSummary(
+        transactions: List<LedgerTransaction>,
+        scopeTitle: String = "选中账单快速分析"
+    ): String = buildQuickSelectionReport(transactions, scopeTitle).plainText
 
     fun saveAppearanceSettings(settings: AppearanceSettings) {
         viewModelScope.launch {
@@ -1023,24 +1059,31 @@ class LedgerViewModel(
         useRuleMatching: Boolean = true,
         useAiUnderstanding: Boolean = false
     ) {
-        val rules = (rulesState.value as? UiState.Success)?.data ?: emptyList()
-        if (!useAiUnderstanding) {
-            ManualImportManager.parseImportedContent(
-                rawContent = rawContent,
-                fileNameHint = fileNameHint,
-                customRules = rules,
-                useRuleMatching = useRuleMatching
-            )
-                .onSuccess { preview ->
-                    _importUiState.value = ImportUiState.Ready(preview)
-                }
-                .onFailure { err ->
-                    _importUiState.value = ImportUiState.Error(err.message ?: "无法解析导入内容")
-                }
-            return
-        }
-
         viewModelScope.launch {
+            val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
+            val existingTransactions = repository.getAllTransactionsOnce()
+            if (!useAiUnderstanding) {
+                _importUiState.value = ImportUiState.Parsing("正在解析内容并比对已有账单去重...")
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    ManualImportManager.parseImportedContent(
+                        rawContent = rawContent,
+                        fileNameHint = fileNameHint,
+                        customRules = rules,
+                        useRuleMatching = useRuleMatching
+                    ).map { preview ->
+                        ManualImportManager.annotateDuplicates(preview, existingTransactions)
+                    }
+                }
+                result
+                    .onSuccess { preview ->
+                        _importUiState.value = ImportUiState.Ready(preview)
+                    }
+                    .onFailure { err ->
+                        _importUiState.value = ImportUiState.Error(err.message ?: "无法解析导入内容")
+                    }
+                return@launch
+            }
+
             _importUiState.value = ImportUiState.Parsing("正在解析并调用 AI 理解增强账单...")
             val baseResult = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 ManualImportManager.parseImportedContent(
@@ -1054,9 +1097,11 @@ class LedgerViewModel(
             if (context == null || aiConfig.providerMode == AiProviderMode.DISABLED) {
                 baseResult
                     .onSuccess { preview ->
-                        _importUiState.value = ImportUiState.Ready(
-                            preview.copy(formatLabel = "${preview.formatLabel}（AI 未开启，已按常规模式解析）")
+                        val annotated = ManualImportManager.annotateDuplicates(
+                            preview.copy(formatLabel = "${preview.formatLabel}（AI 未开启，已按常规模式解析）"),
+                            existingTransactions
                         )
+                        _importUiState.value = ImportUiState.Ready(annotated)
                     }
                     .onFailure { err ->
                         _importUiState.value = ImportUiState.Error(err.message ?: "无法解析导入内容（请先在「设置 -> AI理解」启用本地模型或在线 API）")
@@ -1072,12 +1117,14 @@ class LedgerViewModel(
                     rules = rules,
                     items = basePreview.transactions
                 )
-                _importUiState.value = ImportUiState.Ready(
+                val annotated = ManualImportManager.annotateDuplicates(
                     basePreview.copy(
                         formatLabel = "${basePreview.formatLabel} + AI理解",
                         transactions = enhanced
-                    )
+                    ),
+                    existingTransactions
                 )
+                _importUiState.value = ImportUiState.Ready(annotated)
             } else {
                 val lines = rawContent.lines().map { it.trim() }.filter { it.isNotEmpty() }.take(30)
                 val aiItems = mutableListOf<LedgerTransaction>()
@@ -1115,13 +1162,15 @@ class LedgerViewModel(
                     }
                 }
                 if (aiItems.isNotEmpty()) {
-                    _importUiState.value = ImportUiState.Ready(
+                    val annotated = ManualImportManager.annotateDuplicates(
                         ImportPreviewResult(
                             formatLabel = "AI 理解文本导入",
                             transactions = aiItems,
                             skippedCount = skipped
-                        )
+                        ),
+                        existingTransactions
                     )
+                    _importUiState.value = ImportUiState.Ready(annotated)
                 } else {
                     _importUiState.value = ImportUiState.Error(
                         baseResult.exceptionOrNull()?.message ?: "规则与 AI 均未能从文本中提取有效账单"
@@ -1138,10 +1187,11 @@ class LedgerViewModel(
         useRuleMatching: Boolean = true,
         useAiUnderstanding: Boolean = false
     ) {
-        val rules = (rulesState.value as? UiState.Success)?.data ?: emptyList()
         viewModelScope.launch {
+            val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
+            val existingTransactions = repository.getAllTransactionsOnce()
             _importUiState.value = ImportUiState.Parsing(
-                if (useAiUnderstanding) "正在读取文档并调用 AI 理解增强..." else "正在解析所选文档..."
+                if (useAiUnderstanding) "正在读取文档并调用 AI 理解增强..." else "正在解析所选文档并识别重复条目..."
             )
             val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 ManualImportManager.parseImportedBytes(
@@ -1162,16 +1212,21 @@ class LedgerViewModel(
                                 rules = rules,
                                 items = preview.transactions
                             )
-                            _importUiState.value = ImportUiState.Ready(
+                            val annotated = ManualImportManager.annotateDuplicates(
                                 preview.copy(
                                     formatLabel = "${preview.formatLabel} + AI理解",
                                     transactions = enhanced
-                                )
+                                ),
+                                existingTransactions
                             )
+                            _importUiState.value = ImportUiState.Ready(annotated)
                             return@onSuccess
                         }
                     }
-                    _importUiState.value = ImportUiState.Ready(preview)
+                    val annotated = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        ManualImportManager.annotateDuplicates(preview, existingTransactions)
+                    }
+                    _importUiState.value = ImportUiState.Ready(annotated)
                 }
                 .onFailure { err ->
                     _importUiState.value = ImportUiState.Error(err.message ?: "无法解析所选文件")
@@ -1219,12 +1274,25 @@ class LedgerViewModel(
         }
     }
 
-    fun commitManualImport(items: List<LedgerTransaction>) {
+    fun commitManualImport(items: List<LedgerTransaction>, skippedDuplicateCount: Int = 0) {
         viewModelScope.launch {
+            if (items.isEmpty()) {
+                _importUiState.value = ImportUiState.Idle
+                _actionMessage.value = if (skippedDuplicateCount > 0) {
+                    "识别到的 $skippedDuplicateCount 笔账单均已存在，未重复导入"
+                } else {
+                    "没有可导入的新增账单"
+                }
+                return@launch
+            }
             repository.importTransactions(items)
                 .onSuccess { count ->
                     _importUiState.value = ImportUiState.Idle
-                    _actionMessage.value = "成功导入 $count 笔账单"
+                    _actionMessage.value = if (skippedDuplicateCount > 0) {
+                        "成功导入 $count 笔新账单（已自动跳过 $skippedDuplicateCount 笔重复）"
+                    } else {
+                        "成功导入 $count 笔账单"
+                    }
                 }
                 .onFailure { err ->
                     _actionMessage.value = "导入失败：${err.localizedMessage ?: "请重试"}"

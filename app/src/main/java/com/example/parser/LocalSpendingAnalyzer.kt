@@ -2,10 +2,51 @@ package com.example.parser
 
 import com.example.data.CurrencyExchangeManager
 import com.example.model.AnalyticsGranularity
+import com.example.model.ChannelSplitter
 import com.example.model.CurrencyCatalog
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionType
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import kotlin.math.abs
+
+data class QuickAnalysisBreakdownItem(
+    val label: String,
+    val amountCents: Long,
+    val count: Int,
+    val sharePercent: Double
+)
+
+data class QuickAnalysisHighlightTx(
+    val merchant: String,
+    val amountCents: Long,
+    val dateText: String
+)
+
+data class QuickAnalysisReport(
+    val scopeTitle: String,
+    val baseCurrencyCode: String,
+    val currencySymbol: String,
+    val dateRange: String,
+    val totalCount: Int,
+    val expenseCount: Int,
+    val incomeCount: Int,
+    val transferCount: Int,
+    val foreignCount: Int,
+    val totalExpenseCents: Long,
+    val totalIncomeCents: Long,
+    val totalTransferCents: Long,
+    val netCents: Long,
+    val avgExpenseCents: Long,
+    val largestExpense: QuickAnalysisHighlightTx?,
+    val largestIncome: QuickAnalysisHighlightTx?,
+    val topCategories: List<QuickAnalysisBreakdownItem>,
+    val topChannels: List<QuickAnalysisBreakdownItem>,
+    val hasCompositeChannels: Boolean,
+    val plainText: String
+)
 
 object LocalSpendingAnalyzer {
 
@@ -51,10 +92,14 @@ object LocalSpendingAnalyzer {
             .mapValues { (_, list) -> list.sumOf { toBase(it) } }
             .maxByOrNull { it.value }
 
-        val topChannel = expenses
-            .groupBy { it.channel }
-            .mapValues { (_, list) -> list.sumOf { toBase(it) } }
-            .maxByOrNull { it.value }
+        val channelSums = LinkedHashMap<String, Long>()
+        expenses.forEach { tx ->
+            val cents = toBase(tx)
+            ChannelSplitter.splitChannels(tx.channel).forEach { subChannel ->
+                channelSums[subChannel] = (channelSums[subChannel] ?: 0L) + cents
+            }
+        }
+        val topChannel = channelSums.maxByOrNull { it.value }
 
         val largestTx = expenses.maxByOrNull { toBase(it) }
 
@@ -112,16 +157,38 @@ object LocalSpendingAnalyzer {
         }.trim()
     }
 
-    fun generateQuickSelectionSummary(
+    fun generateQuickSelectionReport(
         transactions: List<LedgerTransaction>,
         baseCurrencyCode: String = "CNY",
         ratesToCny: Map<String, Double> = CurrencyCatalog.defaultRatesToCny,
         scopeTitle: String = "选中账单快速分析"
-    ): String {
-        if (transactions.isEmpty()) {
-            return "当前未选中任何账单记录。"
-        }
+    ): QuickAnalysisReport {
         val symbol = CurrencyCatalog.resolve(baseCurrencyCode).symbol
+        if (transactions.isEmpty()) {
+            return QuickAnalysisReport(
+                scopeTitle = scopeTitle,
+                baseCurrencyCode = baseCurrencyCode,
+                currencySymbol = symbol,
+                dateRange = "-",
+                totalCount = 0,
+                expenseCount = 0,
+                incomeCount = 0,
+                transferCount = 0,
+                foreignCount = 0,
+                totalExpenseCents = 0L,
+                totalIncomeCents = 0L,
+                totalTransferCents = 0L,
+                netCents = 0L,
+                avgExpenseCents = 0L,
+                largestExpense = null,
+                largestIncome = null,
+                topCategories = emptyList(),
+                topChannels = emptyList(),
+                hasCompositeChannels = false,
+                plainText = "当前未选中任何账单记录。"
+            )
+        }
+
         fun toBase(tx: LedgerTransaction): Long =
             CurrencyExchangeManager.convertCents(tx.amountCents, tx.currencyCode, baseCurrencyCode, ratesToCny)
 
@@ -133,29 +200,76 @@ object LocalSpendingAnalyzer {
         val totalIncome = incomes.sumOf { toBase(it) }
         val totalTransfer = transfers.sumOf { toBase(it) }
         val net = totalIncome - totalExpense
+        val avgExpenseCents = if (expenses.isNotEmpty()) totalExpense / expenses.size else 0L
 
         val sortedTimes = transactions.map { it.occurredAtMillis }.sorted()
-        val dateFmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA)
-        val firstDate = dateFmt.format(java.util.Date(sortedTimes.first()))
-        val lastDate = dateFmt.format(java.util.Date(sortedTimes.last()))
+        val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
+        val firstDate = dateFmt.format(Date(sortedTimes.first()))
+        val lastDate = dateFmt.format(Date(sortedTimes.last()))
         val dateRange = if (firstDate == lastDate) firstDate else "$firstDate 至 $lastDate"
 
         val foreignCount = transactions.count { !it.currencyCode.equals(baseCurrencyCode, ignoreCase = true) }
 
-        val topCategories = expenses
-            .groupBy { it.category }
-            .map { (cat, list) -> Triple(cat, list.sumOf { toBase(it) }, list.size) }
-            .sortedByDescending { it.second }
+        val topCategories = if (totalExpense > 0L) {
+            expenses
+                .groupBy { it.category }
+                .map { (cat, list) ->
+                    val cents = list.sumOf { toBase(it) }
+                    QuickAnalysisBreakdownItem(
+                        label = cat,
+                        amountCents = cents,
+                        count = list.size,
+                        sharePercent = cents * 100.0 / totalExpense.toDouble()
+                    )
+                }
+                .sortedByDescending { it.amountCents }
+        } else {
+            emptyList()
+        }
 
-        val topChannels = expenses
-            .groupBy { it.channel }
-            .map { (ch, list) -> Triple(ch, list.sumOf { toBase(it) }, list.size) }
-            .sortedByDescending { it.second }
+        var hasCompositeChannels = false
+        val channelMap = LinkedHashMap<String, Pair<Long, Int>>()
+        expenses.forEach { tx ->
+            val cents = toBase(tx)
+            val subChannels = ChannelSplitter.splitChannels(tx.channel)
+            if (subChannels.size > 1) hasCompositeChannels = true
+            subChannels.forEach { sub ->
+                val prev = channelMap[sub]
+                channelMap[sub] = ((prev?.first ?: 0L) + cents) to ((prev?.second ?: 0) + 1)
+            }
+        }
+        val channelSumTotal = channelMap.values.sumOf { it.first }
+        val topChannels = if (channelSumTotal > 0L) {
+            channelMap.entries
+                .map { (ch, pair) ->
+                    QuickAnalysisBreakdownItem(
+                        label = ch,
+                        amountCents = pair.first,
+                        count = pair.second,
+                        sharePercent = pair.first * 100.0 / channelSumTotal.toDouble()
+                    )
+                }
+                .sortedByDescending { it.amountCents }
+        } else {
+            emptyList()
+        }
 
-        val largestExpense = expenses.maxByOrNull { toBase(it) }
-        val largestIncome = incomes.maxByOrNull { toBase(it) }
+        val largestExpense = expenses.maxByOrNull { toBase(it) }?.let { tx ->
+            QuickAnalysisHighlightTx(
+                merchant = tx.merchant,
+                amountCents = toBase(tx),
+                dateText = dateFmt.format(Date(tx.occurredAtMillis))
+            )
+        }
+        val largestIncome = incomes.maxByOrNull { toBase(it) }?.let { tx ->
+            QuickAnalysisHighlightTx(
+                merchant = tx.merchant,
+                amountCents = toBase(tx),
+                dateText = dateFmt.format(Date(tx.occurredAtMillis))
+            )
+        }
 
-        return buildString {
+        val plainText = buildString {
             appendLine("【$scopeTitle】")
             appendLine("统计范围：$dateRange · 共 ${transactions.size} 笔（支出 ${expenses.size} / 收入 ${incomes.size}${if (transfers.isNotEmpty()) " / 转账 ${transfers.size}" else ""}）")
             if (foreignCount > 0) {
@@ -168,33 +282,65 @@ object LocalSpendingAnalyzer {
                 appendLine("• 转账合计：$symbol%.2f".format(totalTransfer / 100.0))
             }
             val netPrefix = if (net >= 0L) "+" else "-"
-            appendLine("• 净收支：$netPrefix$symbol%.2f".format(kotlin.math.abs(net) / 100.0))
+            appendLine("• 净收支：$netPrefix$symbol%.2f".format(abs(net) / 100.0))
             if (expenses.isNotEmpty()) {
-                val avgExpense = totalExpense / 100.0 / expenses.size.toDouble()
-                appendLine("• 笔均支出：$symbol%.2f".format(avgExpense))
+                appendLine("• 笔均支出：$symbol%.2f".format(totalExpense / 100.0 / expenses.size.toDouble()))
             }
-            largestExpense?.let { tx ->
-                appendLine("• 单笔最高支出：${tx.merchant}（$symbol%.2f · ${dateFmt.format(java.util.Date(tx.occurredAtMillis))}）".format(toBase(tx) / 100.0))
+            largestExpense?.let { hi ->
+                appendLine("• 单笔最高支出：${hi.merchant}（$symbol%.2f · ${hi.dateText}）".format(hi.amountCents / 100.0))
             }
-            largestIncome?.let { tx ->
-                appendLine("• 单笔最高收入：${tx.merchant}（$symbol%.2f · ${dateFmt.format(java.util.Date(tx.occurredAtMillis))}）".format(toBase(tx) / 100.0))
+            largestIncome?.let { hi ->
+                appendLine("• 单笔最高收入：${hi.merchant}（$symbol%.2f · ${hi.dateText}）".format(hi.amountCents / 100.0))
             }
             if (topCategories.isNotEmpty() && totalExpense > 0L) {
                 appendLine()
                 appendLine("分类支出分布：")
-                topCategories.take(6).forEachIndexed { idx, (cat, cents, count) ->
-                    val pct = cents * 100.0 / totalExpense.toDouble()
-                    appendLine("  ${idx + 1}. $cat：$symbol%.2f（%.1f%% · ${count}笔）".format(cents / 100.0, pct))
+                topCategories.take(6).forEachIndexed { idx, item ->
+                    appendLine("  ${idx + 1}. ${item.label}：$symbol%.2f（%.1f%% · ${item.count}笔）".format(item.amountCents / 100.0, item.sharePercent))
                 }
             }
-            if (topChannels.isNotEmpty() && totalExpense > 0L) {
+            if (topChannels.isNotEmpty() && channelSumTotal > 0L) {
                 appendLine()
-                appendLine("渠道支出分布：")
-                topChannels.take(5).forEachIndexed { idx, (ch, cents, count) ->
-                    val pct = cents * 100.0 / totalExpense.toDouble()
-                    appendLine("  ${idx + 1}. $ch：$symbol%.2f（%.1f%% · ${count}笔）".format(cents / 100.0, pct))
+                appendLine(if (hasCompositeChannels) "渠道支出分布（组合渠道已按符号拆分统计）：" else "渠道支出分布：")
+                topChannels.take(6).forEachIndexed { idx, item ->
+                    appendLine("  ${idx + 1}. ${item.label}：$symbol%.2f（%.1f%% · ${item.count}笔）".format(item.amountCents / 100.0, item.sharePercent))
                 }
             }
         }.trim()
+
+        return QuickAnalysisReport(
+            scopeTitle = scopeTitle,
+            baseCurrencyCode = baseCurrencyCode,
+            currencySymbol = symbol,
+            dateRange = dateRange,
+            totalCount = transactions.size,
+            expenseCount = expenses.size,
+            incomeCount = incomes.size,
+            transferCount = transfers.size,
+            foreignCount = foreignCount,
+            totalExpenseCents = totalExpense,
+            totalIncomeCents = totalIncome,
+            totalTransferCents = totalTransfer,
+            netCents = net,
+            avgExpenseCents = avgExpenseCents,
+            largestExpense = largestExpense,
+            largestIncome = largestIncome,
+            topCategories = topCategories,
+            topChannels = topChannels,
+            hasCompositeChannels = hasCompositeChannels,
+            plainText = plainText
+        )
     }
+
+    fun generateQuickSelectionSummary(
+        transactions: List<LedgerTransaction>,
+        baseCurrencyCode: String = "CNY",
+        ratesToCny: Map<String, Double> = CurrencyCatalog.defaultRatesToCny,
+        scopeTitle: String = "选中账单快速分析"
+    ): String = generateQuickSelectionReport(
+        transactions = transactions,
+        baseCurrencyCode = baseCurrencyCode,
+        ratesToCny = ratesToCny,
+        scopeTitle = scopeTitle
+    ).plainText
 }

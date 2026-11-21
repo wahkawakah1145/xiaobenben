@@ -41,6 +41,7 @@ data class TransactionEntity(
     val tradeStatus: String? = null,
     val transactionNo: String? = null,
     val merchantOrderNo: String? = null,
+    val balanceAfterCents: Long? = null,
     val occurredAtMillis: Long,
     val confirmed: Boolean,
     val recordedBaseCurrencyCode: String = "CNY",
@@ -66,6 +67,7 @@ data class TransactionEntity(
         tradeStatus = tradeStatus,
         transactionNo = transactionNo,
         merchantOrderNo = merchantOrderNo,
+        balanceAfterCents = balanceAfterCents,
         occurredAtMillis = occurredAtMillis,
         confirmed = confirmed,
         recordedBaseCurrencyCode = recordedBaseCurrencyCode,
@@ -93,6 +95,7 @@ data class TransactionEntity(
             tradeStatus = tx.tradeStatus,
             transactionNo = tx.transactionNo,
             merchantOrderNo = tx.merchantOrderNo,
+            balanceAfterCents = tx.balanceAfterCents,
             occurredAtMillis = tx.occurredAtMillis,
             confirmed = tx.confirmed,
             recordedBaseCurrencyCode = tx.recordedBaseCurrencyCode.uppercase().ifBlank { "CNY" },
@@ -401,7 +404,7 @@ interface LedgerDao {
         LedgerBookEntity::class,
         TransactionBookCrossRefEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -508,6 +511,12 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN balanceAfterCents INTEGER")
+            }
+        }
+
         /**
          * Safely releases idle SQLite page memory in background without closing DB
          * or interrupting active NotificationListener / Accessibility background writes.
@@ -530,7 +539,15 @@ abstract class LedgerDatabase : RoomDatabase() {
                     LedgerDatabase::class.java,
                     "smart_ledger.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6,
+                        MIGRATION_6_7,
+                        MIGRATION_7_8
+                    )
                     .addCallback(object : Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)
@@ -540,6 +557,7 @@ abstract class LedgerDatabase : RoomDatabase() {
                         override fun onOpen(db: SupportSQLiteDatabase) {
                             super.onOpen(db)
                             runCatching { db.execSQL("PRAGMA cache_size = -512") }
+                            runCatching { db.execSQL("PRAGMA wal_autocheckpoint = 200") }
                             runCatching { db.query("PRAGMA incremental_vacuum").close() }
                         }
                     })

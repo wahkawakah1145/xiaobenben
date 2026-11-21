@@ -73,6 +73,7 @@ object LedgerBackupCodec {
                         tx.tradeStatus?.takeIf { it.isNotBlank() }?.let { put("tradeStatus", it.take(40)) }
                         tx.transactionNo?.takeIf { it.isNotBlank() }?.let { put("transactionNo", it.take(80)) }
                         tx.merchantOrderNo?.takeIf { it.isNotBlank() }?.let { put("merchantOrderNo", it.take(80)) }
+                        tx.balanceAfterCents?.let { put("balanceAfterCents", it) }
                         put("occurredAtMillis", tx.occurredAtMillis)
                         if (!tx.confirmed) put("confirmed", false)
                         if (!tx.recordedBaseCurrencyCode.equals("CNY", ignoreCase = true)) {
@@ -169,6 +170,11 @@ object LedgerBackupCodec {
                         tradeStatus = o.optString("tradeStatus").takeIf { it.isNotBlank() && it != "null" },
                         transactionNo = o.optString("transactionNo").takeIf { it.isNotBlank() && it != "null" },
                         merchantOrderNo = o.optString("merchantOrderNo").takeIf { it.isNotBlank() && it != "null" },
+                        balanceAfterCents = if (o.has("balanceAfterCents") && !o.isNull("balanceAfterCents")) {
+                            o.optLong("balanceAfterCents")
+                        } else {
+                            null
+                        },
                         occurredAtMillis = o.optLong("occurredAtMillis", System.currentTimeMillis()),
                         confirmed = o.optBoolean("confirmed", true),
                         recordedBaseCurrencyCode = o.optString("recordedBaseCurrencyCode", "CNY").ifBlank { "CNY" },

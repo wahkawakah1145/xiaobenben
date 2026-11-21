@@ -598,6 +598,7 @@ data class LedgerTransaction(
     val tradeStatus: String? = null,
     val transactionNo: String? = null,
     val merchantOrderNo: String? = null,
+    val balanceAfterCents: Long? = null,
     val occurredAtMillis: Long = System.currentTimeMillis(),
     val confirmed: Boolean = true,
     val recordedBaseCurrencyCode: String = "CNY",
@@ -609,12 +610,14 @@ data class LedgerTransaction(
     val txSourceApp: SourceApp get() = SourceApp.fromRaw(sourceApp)
     val txParseMethod: ParseMethod get() = ParseMethod.fromRaw(parseMethod)
     val currencyInfo: CurrencyInfo get() = CurrencyCatalog.resolve(currencyCode)
+    val splitChannels: List<String> get() = ChannelSplitter.splitChannels(channel)
 
     fun matchesSearchQuery(rawQuery: String): Boolean {
         val q = rawQuery.trim()
         if (q.isEmpty()) return true
         val amountStr = "%.2f".format(java.util.Locale.US, amountCents / 100.0)
         val amountCompact = if (amountCents % 100L == 0L) (amountCents / 100L).toString() else amountStr
+        val balanceStr = balanceAfterCents?.let { "%.2f".format(java.util.Locale.US, it / 100.0) }
         return merchant.contains(q, ignoreCase = true) ||
             category.contains(q, ignoreCase = true) ||
             channel.contains(q, ignoreCase = true) ||
@@ -624,6 +627,7 @@ data class LedgerTransaction(
             CurrencyCatalog.matchesQuery(currencyInfo, q) ||
             amountStr.contains(q, ignoreCase = true) ||
             amountCompact.contains(q, ignoreCase = true) ||
+            (balanceStr?.contains(q, ignoreCase = true) == true) ||
             (cardLastFour?.contains(q, ignoreCase = true) == true) ||
             (tradeType?.contains(q, ignoreCase = true) == true) ||
             (productName?.contains(q, ignoreCase = true) == true) ||
@@ -632,6 +636,27 @@ data class LedgerTransaction(
             (merchantOrderNo?.contains(q, ignoreCase = true) == true) ||
             (note?.contains(q, ignoreCase = true) == true) ||
             (rawNotification?.contains(q, ignoreCase = true) == true)
+    }
+}
+
+object ChannelSplitter {
+    private val COMPOSITE_DELIMITER_REGEX = Regex("""[&＆+＋、/|｜;；,，]+""")
+
+    fun splitChannels(rawChannel: String?): List<String> {
+        val cleaned = rawChannel?.trim().orEmpty()
+        if (cleaned.isEmpty()) return listOf("未知渠道")
+        val parts = cleaned
+            .split(COMPOSITE_DELIMITER_REGEX)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it != "-" && it != "/" }
+            .distinct()
+        return if (parts.isEmpty()) listOf(cleaned) else parts
+    }
+
+    fun matchesChannel(rawChannel: String?, targetChannel: String): Boolean {
+        val target = targetChannel.trim()
+        if (target.isEmpty()) return false
+        return splitChannels(rawChannel).any { it.equals(target, ignoreCase = true) }
     }
 }
 

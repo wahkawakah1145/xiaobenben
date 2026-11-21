@@ -429,6 +429,10 @@ fun TransactionDetailSheet(
                 transaction.tradeType?.takeIf { it.isNotBlank() }?.let { "交易类型" to it },
                 transaction.productName?.takeIf { it.isNotBlank() }?.let { "商品" to it },
                 transaction.tradeStatus?.takeIf { it.isNotBlank() }?.let { "当前状态" to it },
+                transaction.balanceAfterCents?.let { bal ->
+                    val prefix = if (bal < 0L) "-" else ""
+                    "本次余额" to "$prefix${formatCurrency(kotlin.math.abs(bal), transaction.currencyCode)}"
+                },
                 transaction.transactionNo?.takeIf { it.isNotBlank() }?.let { "交易单号" to it },
                 transaction.merchantOrderNo?.takeIf { it.isNotBlank() }?.let { "商户单号" to it }
             )
