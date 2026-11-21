@@ -615,8 +615,8 @@ class ExampleRobolectricTest {
 
     val sameYearCompact = com.example.ui.components.formatItemTimeCompact(nowMillis, nowYear = 2026)
     val prevYearCompact = com.example.ui.components.formatItemTimeCompact(prevYearCal.timeInMillis, nowYear = 2026)
-    assertEquals("14:30", sameYearCompact)
-    assertEquals("2025-12-20 09:15", prevYearCompact)
+    assertEquals("14:30:00", sameYearCompact)
+    assertEquals("2025-12-20 09:15:00", prevYearCompact)
   }
 
   @Test

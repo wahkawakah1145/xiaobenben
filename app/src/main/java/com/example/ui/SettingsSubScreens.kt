@@ -352,7 +352,6 @@ fun WebDavSettingsScreen(
 }
 
 @OptIn(ExperimentalLayoutApi::class)
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CurrencySettingsScreen(
     settings: BudgetSettings,
