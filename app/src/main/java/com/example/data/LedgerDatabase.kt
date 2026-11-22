@@ -326,6 +326,9 @@ interface LedgerDao {
     @Query("UPDATE transactions SET category = :newCategory, updatedAtMillis = :updatedAt WHERE category = :oldCategory")
     suspend fun renameTransactionCategory(oldCategory: String, newCategory: String, updatedAt: Long): Int
 
+    @Query("UPDATE parsing_rules SET channelName = :newChannel, updatedAtMillis = :updatedAt WHERE channelName = :oldChannel")
+    suspend fun renameRuleChannel(oldChannel: String, newChannel: String, updatedAt: Long): Int
+
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteTransactionById(id: String)
 

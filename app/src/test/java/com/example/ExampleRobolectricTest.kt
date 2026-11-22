@@ -1778,7 +1778,358 @@ class ExampleRobolectricTest {
     repo.saveSettings(originalSettings)
     repo.saveAiConfig(originalAi)
   }
+
+  @Test
+  fun `channel normalization attributes huabei and yuebao to alipay and lingqian to wechat pay while parser recognizes custom channels`() {
+    assertEquals("支付宝", com.example.model.ChannelCatalog.normalizeRecognizedChannel("花呗"))
+    assertEquals("支付宝", com.example.model.ChannelCatalog.normalizeRecognizedChannel("蚂蚁花呗"))
+    assertEquals("支付宝", com.example.model.ChannelCatalog.normalizeRecognizedChannel("余额宝"))
+    assertEquals("微信支付", com.example.model.ChannelCatalog.normalizeRecognizedChannel("零钱"))
+    assertEquals("微信支付", com.example.model.ChannelCatalog.normalizeRecognizedChannel("微信零钱"))
+    assertEquals("微信支付", com.example.model.ChannelCatalog.normalizeRecognizedChannel("零钱通"))
+    assertEquals("支付宝&红包", com.example.model.ChannelCatalog.normalizeRecognizedChannel("花呗&红包"))
+    assertEquals("支付宝", com.example.model.ChannelCatalog.normalizeRecognizedChannel("花呗&余额宝"))
+    assertEquals("微信支付", com.example.model.ChannelCatalog.normalizeRecognizedChannel("零钱&零钱通"))
+
+    val huabeiParsed = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "com.android.mms",
+      title = "消费提醒",
+      content = "您使用花呗在瑞幸咖啡付款¥19.90元"
+    )
+    org.junit.Assert.assertNotNull(huabeiParsed)
+    assertEquals("支付宝", huabeiParsed!!.channel)
+
+    val lingqianParsed = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "com.android.mms",
+      title = "支付通知",
+      content = "您通过零钱通向全家便利店支付¥12.50元"
+    )
+    org.junit.Assert.assertNotNull(lingqianParsed)
+    assertEquals("微信支付", lingqianParsed!!.channel)
+
+    val customParsed = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "com.campus.card",
+      title = "消费通知",
+      content = "您使用校园一卡通在第一食堂消费¥14.00元",
+      customChannels = listOf("支付宝", "微信支付", "校园一卡通")
+    )
+    org.junit.Assert.assertNotNull(customParsed)
+    assertEquals("校园一卡通", customParsed!!.channel)
+  }
+
+  @Test
+  fun `channel management adds renames composite channels syncs rules and ai prompt and round-trips in backup`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val originalSettings = repo.observeSettings().first()
+    val originalAi = repo.observeAiConfig().first()
+
+    val tx = com.example.model.LedgerTransaction(
+      id = "ch-mgmt-tx-1",
+      amountCents = 4500L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "地铁食堂",
+      channel = "数字人民币&红包",
+      occurredAtMillis = 1_763_724_000_000L,
+      confirmed = true
+    )
+    val rule = com.example.model.CustomParsingRule(
+      id = "ch-mgmt-rule-1",
+      name = "数币规则",
+      keywordPattern = "数字人民币",
+      channelName = "数字人民币",
+      defaultCategory = "自动",
+      defaultType = "AUTO"
+    )
+    repo.addTransaction(tx).getOrThrow()
+    repo.saveParsingRule(rule).getOrThrow()
+    repo.saveAiConfig(originalAi.copy(customSystemPrompt = "自定义渠道含 数字人民币 支付"))
+
+    repo.addCustomChannel("数字人民币", syncAiPrompt = true).getOrThrow()
+    org.junit.Assert.assertTrue("数字人民币" in com.example.model.ChannelCatalog.activeChannels(repo.observeSettings().first()))
+
+    val renameResult = repo.renameChannel(
+      oldName = "数字人民币",
+      rawNewName = "数币钱包",
+      syncTransactions = true,
+      syncRules = true,
+      syncAiPrompt = true
+    ).getOrThrow()
+    assertEquals(1, renameResult.updatedTransactions)
+    assertEquals(1, renameResult.updatedRules)
+    org.junit.Assert.assertTrue(renameResult.aiPromptSynced)
+
+    val updatedTx = repo.getAllTransactionsOnce().firstOrNull { it.id == tx.id }
+    assertEquals("数币钱包&红包", updatedTx?.channel)
+    assertEquals("数币钱包", repo.observeParsingRules().first().first { it.id == rule.id }.channelName)
+    org.junit.Assert.assertTrue(repo.observeAiConfig().first().customSystemPrompt.contains("数币钱包"))
+
+    val settingsAfterRename = repo.observeSettings().first()
+    val backupJson = com.example.data.LedgerBackupCodec.encodeBackupJson(
+      transactions = emptyList(),
+      rules = emptyList(),
+      settings = settingsAfterRename
+    )
+    val decoded = com.example.data.LedgerBackupCodec.decodeBackupJson(backupJson)
+    org.junit.Assert.assertTrue("数币钱包" in (decoded.settings?.customChannels ?: emptyList()))
+
+    val deleteResult = repo.deleteChannel(
+      targetName = "数币钱包",
+      fallbackChannel = "其他",
+      syncTransactions = true,
+      syncRules = true,
+      syncAiPrompt = true
+    ).getOrThrow()
+    assertEquals(1, deleteResult.updatedTransactions)
+    assertEquals("其他&红包", repo.getAllTransactionsOnce().firstOrNull { it.id == tx.id }?.channel)
+
+    // Cleanup
+    repo.deleteTransaction(tx.id)
+    repo.deleteParsingRule(rule.id)
+    repo.saveSettings(originalSettings)
+    repo.saveAiConfig(originalAi)
+  }
+
+  @Test
+  fun `smart deduplication convert to non counting transfer can be undone restoring original type and category`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val vm = com.example.viewmodel.LedgerViewModel(repo)
+
+    val dupTx = com.example.model.LedgerTransaction(
+      id = "dedup-conv-tx-1",
+      amountCents = 3200L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "麦当劳",
+      channel = "支付宝",
+      occurredAtMillis = 1_763_725_000_000L,
+      confirmed = true
+    )
+    repo.addTransaction(dupTx).getOrThrow()
+
+    vm.convertTransactionsToNonCountingTransfer(listOf(dupTx.id))
+    var deadline = System.currentTimeMillis() + 3000L
+    while (vm.deleteUndoBanner.value == null && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+    val converted = repo.getAllTransactionsOnce().firstOrNull { it.id == dupTx.id }
+    assertEquals(com.example.model.TransactionType.TRANSFER.name, converted?.type)
+    assertEquals("不计收支", converted?.category)
+    org.junit.Assert.assertTrue(vm.deleteUndoBanner.value?.isBatchModify == true)
+
+    vm.undoLastDelete()
+    deadline = System.currentTimeMillis() + 3000L
+    while (repo.getAllTransactionsOnce().firstOrNull { it.id == dupTx.id }?.type != com.example.model.TransactionType.EXPENSE.name && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+    val restored = repo.getAllTransactionsOnce().firstOrNull { it.id == dupTx.id }
+    assertEquals(com.example.model.TransactionType.EXPENSE.name, restored?.type)
+    assertEquals("餐饮美食", restored?.category)
+
+    // Cleanup
+    repo.deleteTransaction(dupTx.id)
+  }
+
+  @Test
+  fun `ledger export manager generates valid csv xlsx and json streams with optional analysis text`() {
+    val txs = listOf(
+      com.example.model.LedgerTransaction(
+        id = "exp-tx-1",
+        amountCents = 8850L,
+        currencyCode = "CNY",
+        type = com.example.model.TransactionType.EXPENSE.name,
+        category = "餐饮美食",
+        merchant = "海底捞火锅",
+        productName = "双人套餐",
+        channel = "支付宝",
+        occurredAtMillis = 1_763_726_000_000L,
+        confirmed = true
+      ),
+      com.example.model.LedgerTransaction(
+        id = "exp-tx-2",
+        amountCents = 500000L,
+        currencyCode = "CNY",
+        type = com.example.model.TransactionType.INCOME.name,
+        category = "工资薪资",
+        merchant = "科技公司",
+        channel = "招商银行",
+        occurredAtMillis = 1_763_727_000_000L,
+        confirmed = true
+      )
+    )
+
+    // 1. CSV with analysis text
+    val csvWithOut = java.io.ByteArrayOutputStream()
+    val csvRes = com.example.data.LedgerExportManager.exportToStream(
+      outputStream = csvWithOut,
+      format = com.example.data.LedgerExportFormat.CSV,
+      transactions = txs,
+      scopeTitle = "测试账单",
+      includeAnalysisText = true,
+      bookName = "旅行账本"
+    )
+    assertEquals(2, csvRes.exportedCount)
+    org.junit.Assert.assertTrue(csvRes.includedAnalysis)
+    val csvText = csvWithOut.toString("UTF-8")
+    org.junit.Assert.assertTrue(csvText.startsWith("\uFEFF"))
+    org.junit.Assert.assertTrue(csvText.contains("# "))
+    org.junit.Assert.assertTrue(csvText.contains("海底捞火锅"))
+    org.junit.Assert.assertTrue(csvText.contains("交易时间,收/支,分类"))
+
+    // 1b. CSV without analysis text
+    val csvNoOut = java.io.ByteArrayOutputStream()
+    com.example.data.LedgerExportManager.exportToStream(
+      outputStream = csvNoOut,
+      format = com.example.data.LedgerExportFormat.CSV,
+      transactions = txs,
+      includeAnalysisText = false
+    )
+    val csvNoText = csvNoOut.toString("UTF-8")
+    org.junit.Assert.assertFalse(csvNoText.contains("# ====="))
+    org.junit.Assert.assertTrue(csvNoText.contains("海底捞火锅"))
+
+    // 2. XLSX with analysis sheet (verify ZIP entries & round-trip via XlsxTableReader)
+    val xlsxOut = java.io.ByteArrayOutputStream()
+    com.example.data.LedgerExportManager.exportToStream(
+      outputStream = xlsxOut,
+      format = com.example.data.LedgerExportFormat.XLSX,
+      transactions = txs,
+      includeAnalysisText = true,
+      bookName = "旅行账本"
+    )
+    val xlsxBytes = xlsxOut.toByteArray()
+    val zipNames = mutableSetOf<String>()
+    java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(xlsxBytes)).use { zis ->
+      var entry = zis.nextEntry
+      while (entry != null) {
+        zipNames.add(entry.name)
+        entry = zis.nextEntry
+      }
+    }
+    org.junit.Assert.assertTrue("xl/worksheets/sheet1.xml" in zipNames)
+    org.junit.Assert.assertTrue("xl/worksheets/sheet2.xml" in zipNames)
+    val sheets = com.example.data.XlsxTableReader.readSheets(xlsxBytes)
+    assertEquals(2, sheets.size)
+    org.junit.Assert.assertTrue(sheets[0].rows.size >= 3)
+    org.junit.Assert.assertTrue(sheets[0].rows.any { row -> row.any { cell -> cell.contains("海底捞火锅") } })
+    org.junit.Assert.assertTrue(sheets[1].rows.any { row -> row.any { cell -> cell.contains("旅行账本") } })
+
+    // 3. JSON with analysis
+    val jsonOut = java.io.ByteArrayOutputStream()
+    com.example.data.LedgerExportManager.exportToStream(
+      outputStream = jsonOut,
+      format = com.example.data.LedgerExportFormat.JSON,
+      transactions = txs,
+      includeAnalysisText = true,
+      bookName = "旅行账本"
+    )
+    val root = org.json.JSONObject(jsonOut.toString("UTF-8"))
+    assertEquals("旅行账本", root.getString("bookName"))
+    assertEquals(2, root.getJSONArray("transactions").length())
+    org.junit.Assert.assertTrue(root.has("analysis"))
+    org.junit.Assert.assertTrue(root.getJSONObject("analysis").getString("plainText").contains("旅行账本"))
+  }
+
+  @Test
+  fun `settings search catalog finds matching items and highlights matched keywords with primary color`() {
+    val channelHits = com.example.ui.SettingsSearchCatalog.search("花呗 渠道")
+    org.junit.Assert.assertTrue(channelHits.any { it.route == com.example.ui.ROUTE_SETTINGS_CHANNELS })
+
+    val oledHits = com.example.ui.SettingsSearchCatalog.search("oled")
+    org.junit.Assert.assertTrue(oledHits.any { it.id == "dark_mode_oled" })
+
+    val exportHits = com.example.ui.SettingsSearchCatalog.search("xlsx 导出")
+    org.junit.Assert.assertTrue(exportHits.any { it.id == "local_backup_and_export" })
+
+    val highlightColor = androidx.compose.ui.graphics.Color(0xFF1A73E8)
+    val annotated = com.example.ui.buildHighlightedSettingsAnnotatedString(
+      text = "深色模式与 OLED 纯黑背景",
+      rawQuery = "oled 纯黑",
+      highlightColor = highlightColor
+    )
+    assertEquals("深色模式与 OLED 纯黑背景", annotated.text)
+    val highlightedSubstrings = annotated.spanStyles
+      .filter { it.item.color == highlightColor }
+      .map { annotated.text.substring(it.start, it.end) }
+    org.junit.Assert.assertTrue("OLED" in highlightedSubstrings)
+    org.junit.Assert.assertTrue("纯黑" in highlightedSubstrings)
+  }
+
+  @Test
+  fun `spending trend calculator builds buckets across granularities and filters by category and channel`() {
+    val cal = java.util.Calendar.getInstance().apply {
+      set(2026, java.util.Calendar.NOVEMBER, 15, 14, 30, 0)
+      set(java.util.Calendar.MILLISECOND, 0)
+    }
+    val refMillis = cal.timeInMillis
+    val txs = listOf(
+      com.example.model.LedgerTransaction(
+        id = "trend-1",
+        amountCents = 5000L,
+        currencyCode = "CNY",
+        type = com.example.model.TransactionType.EXPENSE.name,
+        category = "餐饮美食",
+        merchant = "餐厅A",
+        channel = "支付宝",
+        occurredAtMillis = refMillis,
+        confirmed = true
+      ),
+      com.example.model.LedgerTransaction(
+        id = "trend-2",
+        amountCents = 20000L,
+        currencyCode = "CNY",
+        type = com.example.model.TransactionType.EXPENSE.name,
+        category = "购物消费",
+        merchant = "商城B",
+        channel = "微信支付",
+        occurredAtMillis = refMillis,
+        confirmed = true
+      )
+    )
+
+    val (yearTitle, yearPoints) = com.example.ui.components.SpendingTrendCalculator.buildSeries(
+      transactions = txs,
+      granularity = com.example.model.AnalyticsGranularity.YEAR,
+      periodOffset = 0,
+      referenceTimeMillis = refMillis
+    )
+    assertEquals("2026年（按月）", yearTitle)
+    assertEquals(12, yearPoints.size)
+    assertEquals(25000L, yearPoints[10].expenseCents)
+
+    val (_, filteredMonthPoints) = com.example.ui.components.SpendingTrendCalculator.buildSeries(
+      transactions = txs,
+      granularity = com.example.model.AnalyticsGranularity.MONTH,
+      periodOffset = 0,
+      categoryFilter = "餐饮美食",
+      channelFilter = "支付宝",
+      referenceTimeMillis = refMillis
+    )
+    assertEquals(30, filteredMonthPoints.size)
+    assertEquals(5000L, filteredMonthPoints[14].expenseCents)
+    assertEquals(1, filteredMonthPoints[14].txCount)
+
+    val (_, dayPoints) = com.example.ui.components.SpendingTrendCalculator.buildSeries(
+      transactions = txs,
+      granularity = com.example.model.AnalyticsGranularity.DAY,
+      periodOffset = 0,
+      referenceTimeMillis = refMillis
+    )
+    assertEquals(24, dayPoints.size)
+    assertEquals(25000L, dayPoints[14].expenseCents)
+  }
 }
+
 
 
 

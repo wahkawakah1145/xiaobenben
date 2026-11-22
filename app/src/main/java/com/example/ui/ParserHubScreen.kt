@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -110,17 +111,32 @@ fun ParserHubScreen(
         }
     }
 
+    val listState = rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = listState,
+        route = ROUTE_SETTINGS_PARSER,
+        sectionKeysInOrder = listOf("parser_arrival_banner", "test_bench", "custom_rules_header")
+    )
+
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
     ) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            item(key = "parser_arrival_banner") {
+                SettingsSearchArrivalBanner(
+                    route = ROUTE_SETTINGS_PARSER,
+                    onDismiss = { viewModel.clearSettingsHighlight() }
+                )
+            }
+
             // 1. Streamlined Notification Test Bench
             item(key = "test_bench") {
                 Card(
@@ -128,14 +144,16 @@ fun ParserHubScreen(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_PARSER, "test_bench")
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = "通知解析测试",
+                            text = settingsHighlightedText("通知解析测试", ROUTE_SETTINGS_PARSER),
                             style = MaterialTheme.typography.titleMedium
                         )
 
@@ -410,7 +428,10 @@ fun ParserHubScreen(
             // 2. Editable Parsing Rules
             item(key = "custom_rules_header") {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_PARSER, "custom_rules_header")
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -419,7 +440,10 @@ fun ParserHubScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Icon(AppIcons.Rule, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Text("识别规则（点击可编辑）", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = settingsHighlightedText("识别规则（点击可编辑）", ROUTE_SETTINGS_PARSER),
+                            style = MaterialTheme.typography.titleMedium
+                        )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(onClick = { viewModel.resetDefaultRules() }) {

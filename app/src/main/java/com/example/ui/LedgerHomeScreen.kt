@@ -154,6 +154,7 @@ import java.util.TimeZone
 import kotlin.math.roundToLong
 import kotlin.random.Random
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LedgerHomeScreen(
     transactionsState: UiState<List<LedgerTransaction>>,
@@ -204,6 +205,7 @@ fun LedgerHomeScreen(
     var showBatchEditDialog by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     var quickAnalysisDialogContent by remember { mutableStateOf<Pair<String, QuickAnalysisReport>?>(null) }
+    var exportDialogPayload by remember { mutableStateOf<Pair<String, List<LedgerTransaction>>?>(null) }
     var showAddToBooksDialog by remember { mutableStateOf(false) }
 
     val filterOptions = listOf("全部", "支出", "收入", "外币", "支付宝", "微信支付", "银行卡", "云闪付")
@@ -507,171 +509,215 @@ fun LedgerHomeScreen(
                 }
             }
 
-            item(key = "search_and_filters") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text("多关键词空格隔开，搜对方/商品/分类/币种/单号/备注") },
-                        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(
-                                    onClick = { searchQuery = "" },
-                                    modifier = Modifier.testTag("ledger_search_clear_button")
-                                ) {
-                                    Icon(Icons.Rounded.Close, contentDescription = "清空搜索")
-                                }
-                            }
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
+            stickyHeader(key = "search_and_filters") {
+                val isSearchPinned by remember(listState) {
+                    derivedStateOf {
+                        val firstVisibleKey = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.key
+                        firstVisibleKey == "search_and_filters" && listState.firstVisibleItemScrollOffset > 0
+                    }
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.background,
+                    tonalElevation = if (isSearchPinned) 2.dp else 0.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("home_sticky_search_header")
+                ) {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("ledger_search_input")
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(top = 4.dp, bottom = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(
-                            selected = showAdvancedFilters || activeRangeFilterCount > 0,
-                            onClick = { showAdvancedFilters = !showAdvancedFilters },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = AppIcons.Tune,
-                                    contentDescription = "时间与金额范围筛选",
-                                    modifier = Modifier.size(16.dp)
-                                )
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("多关键词空格隔开，搜对方/商品/分类/币种/单号/备注") },
+                            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = { searchQuery = "" },
+                                        modifier = Modifier.testTag("ledger_search_clear_button")
+                                    ) {
+                                        Icon(Icons.Rounded.Close, contentDescription = "清空搜索")
+                                    }
+                                }
                             },
-                            label = {
-                                Text(
-                                    if (activeRangeFilterCount > 0) "范围($activeRangeFilterCount)" else "日期/时段/金额"
-                                )
-                            },
-                            modifier = Modifier.testTag("home_range_filter_toggle")
+                            singleLine = true,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("ledger_search_input")
                         )
-                        filterOptions.forEach { option ->
-                            FilterChip(
-                                selected = selectedFilter == option,
-                                onClick = { selectedFilter = option },
-                                label = { Text(option) },
-                                modifier = Modifier.testTag("filter_chip_$option")
-                            )
-                        }
-                    }
 
-                    AnimatedVisibility(visible = showAdvancedFilters) {
-                        HomeRangeFilterPanel(
-                            baseCurrencyCode = baseCurrency,
-                            listTimeDimension = listTimeDimension,
-                            customStartDateText = customStartDateText,
-                            customEndDateText = customEndDateText,
-                            selectedTimeOfDaySlot = selectedTimeOfDaySlot,
-                            customStartTimeText = customStartTimeText,
-                            customEndTimeText = customEndTimeText,
-                            minAmountInput = minAmountInput,
-                            maxAmountInput = maxAmountInput,
-                            onSelectTimeDimension = { dim ->
-                                listTimeDimension = dim
-                                customStartDateText = ""
-                                customEndDateText = ""
-                            },
-                            onStartDateChange = {
-                                customStartDateText = it
-                                if (it.isNotBlank()) listTimeDimension = HomeStatsDimension.ALL_TIME
-                            },
-                            onEndDateChange = {
-                                customEndDateText = it
-                                if (it.isNotBlank()) listTimeDimension = HomeStatsDimension.ALL_TIME
-                            },
-                            onPickStartDate = { pickingDateTarget = "start" },
-                            onPickEndDate = { pickingDateTarget = "end" },
-                            onSelectTimeOfDaySlot = { slot ->
-                                selectedTimeOfDaySlot = slot
-                                customStartTimeText = ""
-                                customEndTimeText = ""
-                            },
-                            onStartTimeChange = {
-                                customStartTimeText = it
-                                if (it.isNotBlank()) selectedTimeOfDaySlot = TimeOfDaySlot.ALL
-                            },
-                            onEndTimeChange = {
-                                customEndTimeText = it
-                                if (it.isNotBlank()) selectedTimeOfDaySlot = TimeOfDaySlot.ALL
-                            },
-                            onMinAmountChange = { minAmountInput = it },
-                            onMaxAmountChange = { maxAmountInput = it },
-                            onResetAll = {
-                                listTimeDimension = HomeStatsDimension.ALL_TIME
-                                customStartDateText = ""
-                                customEndDateText = ""
-                                selectedTimeOfDaySlot = TimeOfDaySlot.ALL
-                                customStartTimeText = ""
-                                customEndTimeText = ""
-                                minAmountInput = ""
-                                maxAmountInput = ""
-                            }
-                        )
-                    }
-
-                    if (hasAnyListFilter && filteredTransactions.isNotEmpty()) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "筛选结果 ${filteredTransactions.size} 笔（长按可多选）",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.weight(1f)
+                            FilterChip(
+                                selected = showAdvancedFilters || activeRangeFilterCount > 0,
+                                onClick = { showAdvancedFilters = !showAdvancedFilters },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = AppIcons.Tune,
+                                        contentDescription = "时间与金额范围筛选",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        if (activeRangeFilterCount > 0) "范围($activeRangeFilterCount)" else "日期/时段/金额"
+                                    )
+                                },
+                                modifier = Modifier.testTag("home_range_filter_toggle")
                             )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                TextButton(
-                                    onClick = {
-                                        val selectedInFiltered = filteredTransactions.filter { it.id in selectedIds }
-                                        val targetList = if (selectedInFiltered.isNotEmpty()) selectedInFiltered else filteredTransactions
-                                        val title = if (selectedInFiltered.isNotEmpty()) {
-                                            "已选搜索结果快速分析 (${targetList.size} 笔)"
-                                        } else {
-                                            "当前筛选结果快速分析 (${targetList.size} 笔)"
-                                        }
-                                        val report = viewModel.buildQuickSelectionReport(targetList, title)
-                                        quickAnalysisDialogContent = "快速分析" to report
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.testTag("search_quick_analyze_button")
-                                ) {
-                                    Text("快速分析")
+                            filterOptions.forEach { option ->
+                                FilterChip(
+                                    selected = selectedFilter == option,
+                                    onClick = { selectedFilter = option },
+                                    label = { Text(option) },
+                                    modifier = Modifier.testTag("filter_chip_$option")
+                                )
+                            }
+                        }
+
+                        AnimatedVisibility(visible = showAdvancedFilters) {
+                            HomeRangeFilterPanel(
+                                baseCurrencyCode = baseCurrency,
+                                listTimeDimension = listTimeDimension,
+                                customStartDateText = customStartDateText,
+                                customEndDateText = customEndDateText,
+                                selectedTimeOfDaySlot = selectedTimeOfDaySlot,
+                                customStartTimeText = customStartTimeText,
+                                customEndTimeText = customEndTimeText,
+                                minAmountInput = minAmountInput,
+                                maxAmountInput = maxAmountInput,
+                                onSelectTimeDimension = { dim ->
+                                    listTimeDimension = dim
+                                    customStartDateText = ""
+                                    customEndDateText = ""
+                                },
+                                onStartDateChange = {
+                                    customStartDateText = it
+                                    if (it.isNotBlank()) listTimeDimension = HomeStatsDimension.ALL_TIME
+                                },
+                                onEndDateChange = {
+                                    customEndDateText = it
+                                    if (it.isNotBlank()) listTimeDimension = HomeStatsDimension.ALL_TIME
+                                },
+                                onPickStartDate = { pickingDateTarget = "start" },
+                                onPickEndDate = { pickingDateTarget = "end" },
+                                onSelectTimeOfDaySlot = { slot ->
+                                    selectedTimeOfDaySlot = slot
+                                    customStartTimeText = ""
+                                    customEndTimeText = ""
+                                },
+                                onStartTimeChange = {
+                                    customStartTimeText = it
+                                    if (it.isNotBlank()) selectedTimeOfDaySlot = TimeOfDaySlot.ALL
+                                },
+                                onEndTimeChange = {
+                                    customEndTimeText = it
+                                    if (it.isNotBlank()) selectedTimeOfDaySlot = TimeOfDaySlot.ALL
+                                },
+                                onMinAmountChange = { minAmountInput = it },
+                                onMaxAmountChange = { maxAmountInput = it },
+                                onResetAll = {
+                                    listTimeDimension = HomeStatsDimension.ALL_TIME
+                                    customStartDateText = ""
+                                    customEndDateText = ""
+                                    selectedTimeOfDaySlot = TimeOfDaySlot.ALL
+                                    customStartTimeText = ""
+                                    customEndTimeText = ""
+                                    minAmountInput = ""
+                                    maxAmountInput = ""
                                 }
-                                TextButton(
-                                    onClick = {
-                                        selectedIds = (selectedIds - visibleFilteredIds) + (visibleFilteredIds - selectedIds)
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                    modifier = Modifier.testTag("search_invert_select_button")
+                            )
+                        }
+
+                        if (hasAnyListFilter && filteredTransactions.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "筛选 ${filteredTransactions.size} 笔（长按多选）",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.horizontalScroll(rememberScrollState())
                                 ) {
-                                    Text("反选")
-                                }
-                                TextButton(
-                                    onClick = {
-                                        selectedIds = if (allVisibleSelected) {
-                                            selectedIds - visibleFilteredIds
-                                        } else {
-                                            selectedIds + visibleFilteredIds
-                                        }
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                    modifier = Modifier.testTag("search_batch_select_button")
-                                ) {
-                                    Text(if (allVisibleSelected) "取消全选" else "全选结果")
+                                    TextButton(
+                                        onClick = {
+                                            val selectedInFiltered = filteredTransactions.filter { it.id in selectedIds }
+                                            val targetList = if (selectedInFiltered.isNotEmpty()) selectedInFiltered else filteredTransactions
+                                            val title = if (selectedInFiltered.isNotEmpty()) {
+                                                "已选搜索结果快速分析 (${targetList.size} 笔)"
+                                            } else {
+                                                "当前筛选结果快速分析 (${targetList.size} 笔)"
+                                            }
+                                            val report = viewModel.buildQuickSelectionReport(targetList, title)
+                                            quickAnalysisDialogContent = "快速分析" to report
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.testTag("search_quick_analyze_button")
+                                    ) {
+                                        Text("快速分析")
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            val selectedInFiltered = filteredTransactions.filter { it.id in selectedIds }
+                                            val targetList = if (selectedInFiltered.isNotEmpty()) selectedInFiltered else filteredTransactions
+                                            val title = if (selectedInFiltered.isNotEmpty()) {
+                                                "已选筛选账单 (${targetList.size} 笔)"
+                                            } else {
+                                                "当前筛选账单 (${targetList.size} 笔)"
+                                            }
+                                            exportDialogPayload = title to targetList
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.testTag("search_export_button")
+                                    ) {
+                                        Text("导出")
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            selectedIds = (selectedIds - visibleFilteredIds) + (visibleFilteredIds - selectedIds)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.testTag("search_invert_select_button")
+                                    ) {
+                                        Text("反选")
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            selectedIds = if (allVisibleSelected) {
+                                                selectedIds - visibleFilteredIds
+                                            } else {
+                                                selectedIds + visibleFilteredIds
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.testTag("search_batch_select_button")
+                                    ) {
+                                        Text(if (allVisibleSelected) "取消全选" else "全选")
+                                    }
                                 }
                             }
+                        }
+
+                        if (isSearchPinned) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
                         }
                     }
                 }
@@ -873,6 +919,59 @@ fun LedgerHomeScreen(
                                     shadowElevation = 3.dp
                                 ) {
                                     Text(
+                                        text = "导出账单",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                            SmallFloatingActionButton(
+                                onClick = {
+                                    fabExpanded = false
+                                    val target = if (hasAnyListFilter) filteredTransactions else confirmedTransactions
+                                    val scopeTitle = if (hasAnyListFilter) {
+                                        "筛选账单 (${target.size} 笔)"
+                                    } else {
+                                        "全部账单 (${target.size} 笔)"
+                                    }
+                                    exportDialogPayload = scopeTitle to target
+                                },
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("fab_action_export_bills")
+                            ) {
+                                Icon(AppIcons.Download, contentDescription = "导出账单")
+                            }
+                            if (appearance.fabPlacement == FabPlacement.BOTTOM_START) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shadowElevation = 3.dp
+                                ) {
+                                    Text(
+                                        text = "导出账单",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (appearance.fabPlacement != FabPlacement.BOTTOM_START) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shadowElevation = 3.dp
+                                ) {
+                                    Text(
                                         text = "识别规则",
                                         style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.SemiBold,
@@ -1034,6 +1133,7 @@ fun LedgerHomeScreen(
             expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
             incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
             transferCategories = CategoryCatalog.activeTransferCategories(settings),
+            channelOptions = com.example.model.ChannelCatalog.activeChannels(settings),
             onDismiss = { showCreateDialog = false },
             onSaveExtended = { tt, pn, ts, tno, mno ->
                 extTradeType = tt
@@ -1077,6 +1177,7 @@ fun LedgerHomeScreen(
             expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
             incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
             transferCategories = CategoryCatalog.activeTransferCategories(settings),
+            channelOptions = com.example.model.ChannelCatalog.activeChannels(settings),
             allTransactions = confirmedTransactions,
             onBatchApplySimilar = { matchedIds, type, category, channel, merchant, currencyCode, note ->
                 viewModel.batchUpdateTransactions(
@@ -1155,6 +1256,17 @@ fun LedgerHomeScreen(
                 )
                 resolvingInquiry = null
             }
+        )
+    }
+
+    exportDialogPayload?.let { (scopeTitle, targetList) ->
+        com.example.ui.components.LedgerExportDialog(
+            scopeTitle = scopeTitle,
+            transactions = targetList,
+            baseCurrencyCode = baseCurrency,
+            ratesToCny = exchangeRates.ratesToCny,
+            onDismiss = { exportDialogPayload = null },
+            onExportFeedback = { msg -> viewModel.postActionMessage(msg) }
         )
     }
 
@@ -2458,7 +2570,7 @@ internal fun matchesTimeOfDayRange(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun HomeRangeFilterPanel(
+internal fun HomeRangeFilterPanel(
     baseCurrencyCode: String,
     listTimeDimension: HomeStatsDimension,
     customStartDateText: String,

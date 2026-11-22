@@ -81,22 +81,32 @@ fun PermissionsKeepAliveScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item(key = "permissions_card") {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SettingsSearchArrivalBanner(
+                        route = ROUTE_SETTINGS_PERMISSIONS,
+                        onDismiss = { viewModel.clearSettingsHighlight() }
+                    )
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .settingsHighlightSection(ROUTE_SETTINGS_PERMISSIONS, "permissions_card")
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Icon(AppIcons.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text("权限管理", style = MaterialTheme.typography.titleMedium)
-                        }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(AppIcons.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(
+                                    text = settingsHighlightedText("权限管理", ROUTE_SETTINGS_PERMISSIONS),
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                            }
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -306,6 +316,7 @@ fun PermissionsKeepAliveScreen(
                                 }
                             }
                         }
+                    }
                     }
                 }
             }

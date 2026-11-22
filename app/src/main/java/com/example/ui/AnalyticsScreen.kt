@@ -1326,6 +1326,7 @@ fun AnalyticsScreen(
                 onTransactionClick = { inspectingTransaction = it },
                 isFullScreen = true,
                 onRequestExitFullScreen = { onCalendarFullScreenChange(false) },
+                scopeTitle = activeBook?.name?.let { "账本「$it」" } ?: "全部账单",
                 modifier = Modifier.fillMaxSize()
             )
         }

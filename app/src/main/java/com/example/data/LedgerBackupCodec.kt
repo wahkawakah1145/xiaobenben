@@ -2,6 +2,7 @@ package com.example.data
 
 import com.example.model.BudgetSettings
 import com.example.model.CategoryCatalog
+import com.example.model.ChannelCatalog
 import com.example.model.CustomParsingRule
 import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
@@ -65,6 +66,9 @@ object LedgerBackupCodec {
                         }
                     })
                 }
+                put("customChannels", JSONArray().apply {
+                    ChannelCatalog.activeChannels(settings).forEach { put(it) }
+                })
                 if (settings.dedupExcludedTransactionIds.isNotEmpty()) {
                     put("dedupExcludedTransactionIds", JSONArray().apply {
                         settings.dedupExcludedTransactionIds.distinct().forEach { put(it) }
@@ -330,6 +334,14 @@ object LedgerBackupCodec {
                     }
                     map
                 } ?: currentSettings.categoryIcons,
+                customChannels = s.optJSONArray("customChannels")?.let { arr ->
+                    ChannelCatalog.normalizeChannelList(
+                        buildList(arr.length()) {
+                            for (i in 0 until arr.length()) add(arr.optString(i))
+                        },
+                        currentSettings.customChannels
+                    )
+                } ?: currentSettings.customChannels,
                 dedupExcludedTransactionIds = s.optJSONArray("dedupExcludedTransactionIds")?.let { arr ->
                     buildList(arr.length()) {
                         for (i in 0 until arr.length()) {

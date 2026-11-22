@@ -796,6 +796,7 @@ fun TransactionEditorDialog(
     expenseCategories: List<String> = CategoryCatalog.expenseCategories,
     incomeCategories: List<String> = CategoryCatalog.incomeCategories,
     transferCategories: List<String> = CategoryCatalog.transferCategories,
+    channelOptions: List<String> = com.example.model.ChannelCatalog.defaultChannels,
     allTransactions: List<LedgerTransaction> = emptyList(),
     onBatchApplySimilar: ((
         matchedIds: List<String>,
@@ -927,7 +928,10 @@ fun TransactionEditorDialog(
     var syncCurrencyToSimilar by remember(initialTransaction?.id) { mutableStateOf(false) }
     var syncNoteToSimilar by remember(initialTransaction?.id) { mutableStateOf(false) }
 
-    val quickChannels = listOf("支付宝", "微信支付", "云闪付", "招商银行", "工商银行", "建设银行", "手动记账")
+    val quickChannels = remember(channelOptions, channel) {
+        val base = channelOptions.ifEmpty { com.example.model.ChannelCatalog.defaultChannels }
+        if (channel.isNotBlank() && channel !in base && !channel.contains('&')) base + channel else base
+    }
     val currencyInfo = CurrencyCatalog.resolve(selectedCurrency)
 
     val clipboardManager = LocalClipboardManager.current

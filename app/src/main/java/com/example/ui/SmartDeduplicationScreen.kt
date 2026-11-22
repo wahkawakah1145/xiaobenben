@@ -154,6 +154,7 @@ fun SmartDeduplicationScreen(
     }
 
     var selectedDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showConfirmTransferDialog by remember { mutableStateOf(false) }
     var initializedFilterKey by remember { mutableStateOf<String?>(null) }
     val filterKey = "$customWindowSeconds|${channelFilter.name}|$requireMerchantSimilarity"
 
@@ -204,12 +205,18 @@ fun SmartDeduplicationScreen(
                     Card(
                         shape = RoundedCornerShape(20.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .settingsHighlightSection(ROUTE_SETTINGS_DEDUP, "dedup_header")
                     ) {
                         Column(
                             modifier = Modifier.padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            SettingsSearchArrivalBanner(
+                                route = ROUTE_SETTINGS_DEDUP,
+                                onDismiss = { viewModel.clearSettingsHighlight() }
+                            )
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -219,10 +226,16 @@ fun SmartDeduplicationScreen(
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary
                                 )
-                                Text("短时智能去重筛选", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = settingsHighlightedText("短时智能去重筛选", ROUTE_SETTINGS_DEDUP),
+                                    style = MaterialTheme.typography.titleMedium
+                                )
                             }
                             Text(
-                                text = "默认仅判断「金额相同 + 时间相近」的条目，并优先勾选删除信息量较少的条目；可按需开启「交易对象相似」缩小范围（当前窗口：${SmartDeduplicator.formatWindowLabelSeconds(customWindowSeconds)}；点击勾选，长按条目弹窗查看详情）。",
+                                text = settingsHighlightedText(
+                                    "默认仅判断「金额相同 + 时间相近」的条目，并优先勾选删除信息量较少的条目；可按需开启「交易对象相似」缩小范围，支持删除或改为不计收支的转账（当前窗口：${SmartDeduplicator.formatWindowLabelSeconds(customWindowSeconds)}；点击勾选，长按条目弹窗查看详情）。",
+                                    ROUTE_SETTINGS_DEDUP
+                                ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -538,16 +551,19 @@ fun SmartDeduplicationScreen(
                     shadowElevation = 6.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
                             Text(
-                                text = "已选待删除 ${selectedDeleteIds.size} 笔",
+                                text = "已选重复项 ${selectedDeleteIds.size} 笔",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold
                             )
@@ -555,22 +571,39 @@ fun SmartDeduplicationScreen(
                                 text = if (isSearching && hiddenDeleteCount > 0) {
                                     "当前结果 $visibleDeleteCount 笔 + 其他 $hiddenDeleteCount 笔"
                                 } else {
-                                    "未勾选的记录将完整保留"
+                                    "未勾选记录完整保留"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Button(
-                            onClick = { showConfirmDeleteDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = ExpenseCoral),
-                            modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .testTag("dedup_delete_selected_button")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(AppIcons.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("一键清理重复")
+                            OutlinedButton(
+                                onClick = { showConfirmTransferDialog = true },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("dedup_convert_transfer_button")
+                            ) {
+                                Icon(AppIcons.CurrencyExchange, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("改为不计收支转账", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Button(
+                                onClick = { showConfirmDeleteDialog = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = ExpenseCoral),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("dedup_delete_selected_button")
+                            ) {
+                                Icon(AppIcons.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("删除所选重复", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
                 }
@@ -581,9 +614,9 @@ fun SmartDeduplicationScreen(
     if (showConfirmDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showConfirmDeleteDialog = false },
-            title = { Text("确认清理重复账单") },
+            title = { Text("确认删除重复账单") },
             text = {
-                Text("确定删除选中的 ${selectedDeleteIds.size} 笔重复账单吗？未勾选的保留记录不会受影响。")
+                Text("确定删除选中的 ${selectedDeleteIds.size} 笔重复账单吗？未勾选的保留记录不会受影响（删除后可在底栏撤销）。")
             },
             confirmButton = {
                 Button(
@@ -600,6 +633,33 @@ fun SmartDeduplicationScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showConfirmDeleteDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    if (showConfirmTransferDialog) {
+        AlertDialog(
+            onDismissRequest = { showConfirmTransferDialog = false },
+            title = { Text("改为不计收支的转账") },
+            text = {
+                Text("确定将选中的 ${selectedDeleteIds.size} 笔重复账单修改为「转账 · 不计收支」吗？记录会完整保留在列表中，但不再重复计入收支统计（修改后可在底栏撤销）。")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.convertTransactionsToNonCountingTransfer(selectedDeleteIds)
+                        selectedDeleteIds = emptySet()
+                        showConfirmTransferDialog = false
+                    },
+                    modifier = Modifier.testTag("dedup_confirm_transfer_button")
+                ) {
+                    Text("确认转换")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmTransferDialog = false }) {
                     Text("取消")
                 }
             }

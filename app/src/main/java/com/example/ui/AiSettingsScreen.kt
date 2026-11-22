@@ -147,8 +147,27 @@ fun AiSettingsScreen(
         selectedPromptRuleIds = selectedPromptRuleIds
     )
 
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val sectionKeysInOrder = remember(selectedMode) {
+        buildList {
+            add("ai_mode_card")
+            if (selectedMode == AiProviderMode.LOCAL_SMALL_MODEL) add("local_model_card")
+            if (selectedMode == AiProviderMode.ONLINE_API) add("online_api_card")
+            if (selectedMode != AiProviderMode.DISABLED) {
+                add("ai_prompt_card")
+                add("ai_test_card")
+            }
+        }
+    }
+    SettingsAutoScrollEffect(
+        listState = listState,
+        route = ROUTE_SETTINGS_AI,
+        sectionKeysInOrder = sectionKeysInOrder
+    )
+
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -157,27 +176,37 @@ fun AiSettingsScreen(
         ) {
             // 1. Mode Switcher Card
             item(key = "ai_mode_card") {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SettingsSearchArrivalBanner(
+                        route = ROUTE_SETTINGS_AI,
+                        onDismiss = { viewModel.clearSettingsHighlight() }
+                    )
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .settingsHighlightSection(ROUTE_SETTINGS_AI, "ai_mode_card")
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Icon(AppIcons.Psychology, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text("AI理解模式", style = MaterialTheme.typography.titleMedium)
-                        }
-                        Text(
-                            text = selectedMode.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(AppIcons.Psychology, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(
+                                    text = settingsHighlightedText("AI理解模式", ROUTE_SETTINGS_AI),
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                            }
+                            Text(
+                                text = settingsHighlightedText(selectedMode.description, ROUTE_SETTINGS_AI),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
 
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                             AiProviderMode.entries.forEachIndexed { index, mode ->
@@ -223,6 +252,7 @@ fun AiSettingsScreen(
                                 )
                             }
                         }
+                    }
                     }
                 }
             }
@@ -654,6 +684,7 @@ fun AiSettingsScreen(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .settingsHighlightSection(ROUTE_SETTINGS_AI, "ai_prompt_card")
                             .testTag("ai_prompt_settings_card")
                     ) {
                         Column(
@@ -666,7 +697,10 @@ fun AiSettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("提示词与规则参考", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        text = settingsHighlightedText("提示词与规则参考", ROUTE_SETTINGS_AI),
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
                                     Text(
                                         text = if (isUsingCustomPrompt) {
                                             "当前使用自定义提示词 · 已选 ${selectedRuleObjects.size} 条规则作为参考"

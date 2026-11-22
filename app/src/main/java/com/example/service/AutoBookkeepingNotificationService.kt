@@ -138,13 +138,15 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             return
         }
 
+        val activeChannels = com.example.model.ChannelCatalog.activeChannels(settings)
         val ruleParsed = ChinaNotificationParser.parse(
             packageName = packageName,
             title = title,
             content = content,
             customRules = customRules,
             enableLocalSemanticPass = false,
-            referenceTimeMillis = occurredAt
+            referenceTimeMillis = occurredAt,
+            customChannels = activeChannels
         )
         val aiConfig = repository.getAiConfigOnce()
         val hasExplicitUnitForAi = ChinaNotificationParser.hasExplicitAmountUnit("$title\n$content")
@@ -165,7 +167,8 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 content = content,
                 fallbackParsed = ruleParsed,
                 availableRules = customRules,
-                activeCategories = activeCategories
+                activeCategories = activeCategories,
+                activeChannels = activeChannels
             ).getOrNull()
             aiResult ?: ruleParsed
         } else {

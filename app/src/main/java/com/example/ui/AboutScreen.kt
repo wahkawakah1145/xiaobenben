@@ -97,8 +97,16 @@ fun AboutScreen(
     var updateStatusHasNew by remember { mutableStateOf(false) }
     var latestReleaseDialog by remember { mutableStateOf<ReleaseUpdateInfo?>(null) }
 
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = listState,
+        route = ROUTE_SETTINGS_ABOUT,
+        sectionKeysInOrder = listOf("about_hero", "about_update_card", "about_author_box", "about_license_footer")
+    )
+
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -175,7 +183,9 @@ fun AboutScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_ABOUT, "about_update_card")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
@@ -191,9 +201,15 @@ fun AboutScreen(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("版本更新", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    text = "监听 GitHub Release 最新版本 · 仅支持手动检查与手动更新",
+                                    text = settingsHighlightedText("版本更新", ROUTE_SETTINGS_ABOUT),
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = settingsHighlightedText(
+                                        "监听 GitHub Release 最新版本 · 仅支持手动检查与手动更新",
+                                        ROUTE_SETTINGS_ABOUT
+                                    ),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

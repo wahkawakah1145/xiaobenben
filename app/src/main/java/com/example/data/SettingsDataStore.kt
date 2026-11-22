@@ -13,6 +13,7 @@ import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CardDensity
 import com.example.model.CategoryCatalog
+import com.example.model.ChannelCatalog
 import com.example.model.CurrencyCatalog
 import com.example.model.CustomPaletteStyle
 import com.example.model.ExchangeRateState
@@ -108,6 +109,7 @@ class SettingsDataStore(private val context: Context) {
         val INCOME_CATEGORIES_JSON = stringPreferencesKey("custom_income_categories_json")
         val TRANSFER_CATEGORIES_JSON = stringPreferencesKey("custom_transfer_categories_json")
         val CATEGORY_ICONS_JSON = stringPreferencesKey("custom_category_icons_json")
+        val CUSTOM_CHANNELS_JSON = stringPreferencesKey("custom_channels_json")
         val DEDUP_EXCLUDED_TX_IDS_JSON = stringPreferencesKey("dedup_excluded_tx_ids_json")
 
         val AI_PROVIDER_MODE = stringPreferencesKey("ai_provider_mode")
@@ -160,6 +162,9 @@ class SettingsDataStore(private val context: Context) {
                 CategoryCatalog.normalizeCategoryList(decodeStringListJson(rawJson), CategoryCatalog.transferCategories)
             } ?: CategoryCatalog.transferCategories,
             categoryIcons = decodeStringMapJson(prefs[Keys.CATEGORY_ICONS_JSON]),
+            customChannels = prefs[Keys.CUSTOM_CHANNELS_JSON]?.let { rawJson ->
+                ChannelCatalog.normalizeChannelList(decodeStringListJson(rawJson), ChannelCatalog.defaultChannels)
+            } ?: ChannelCatalog.defaultChannels,
             dedupExcludedTransactionIds = decodeStringListJson(prefs[Keys.DEDUP_EXCLUDED_TX_IDS_JSON])
         )
     }
@@ -303,6 +308,10 @@ class SettingsDataStore(private val context: Context) {
                     val cv = v.trim().take(48)
                     if (ck.isNotEmpty() && cv.isNotEmpty()) put(ck, cv)
                 }
+            }.toString()
+            prefs[Keys.CUSTOM_CHANNELS_JSON] = JSONArray().apply {
+                ChannelCatalog.normalizeChannelList(settings.customChannels, ChannelCatalog.defaultChannels)
+                    .forEach { put(it) }
             }.toString()
             prefs[Keys.DEDUP_EXCLUDED_TX_IDS_JSON] = JSONArray().apply {
                 settings.dedupExcludedTransactionIds

@@ -424,7 +424,8 @@ class AiUnderstandingManager {
         content: String,
         fallbackParsed: ParsedNotificationResult?,
         availableRules: List<CustomParsingRule> = emptyList(),
-        activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories
+        activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
+        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
     ): Result<ParsedNotificationResult> {
         val selectedRules = resolveSelectedRules(config, availableRules)
         return when (config.providerMode) {
@@ -439,7 +440,8 @@ class AiUnderstandingManager {
                     title = title,
                     content = content,
                     selectedRules = selectedRules,
-                    activeCategories = activeCategories
+                    activeCategories = activeCategories,
+                    activeChannels = activeChannels
                 )
             }
             AiProviderMode.LOCAL_SMALL_MODEL -> {
@@ -450,7 +452,8 @@ class AiUnderstandingManager {
                     title = title,
                     content = content,
                     selectedRules = selectedRules,
-                    customPrompt = config.customSystemPrompt
+                    customPrompt = config.customSystemPrompt,
+                    activeChannels = activeChannels
                 )
             }
         }
@@ -463,7 +466,8 @@ class AiUnderstandingManager {
         title: String,
         content: String,
         selectedRules: List<CustomParsingRule> = emptyList(),
-        customPrompt: String = ""
+        customPrompt: String = "",
+        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.Default) {
         val combined = "$title\n$content".trim()
         if (combined.isBlank()) {
@@ -503,15 +507,17 @@ class AiUnderstandingManager {
             else -> inferTypeWithVocab(combined)
         }
         val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
-        val channel = matchedPromptRule?.channelName?.takeIf { it.isNotBlank() }
+        val rawChannel = matchedPromptRule?.channelName?.takeIf { it.isNotBlank() }
+            ?: ChinaNotificationParser.detectChannel(packageName, combined, activeChannels)
+                .takeIf { it != "未知渠道" }
             ?: ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
             ?: ChinaPaymentCatalog.channels.firstOrNull { ch ->
                 combined.contains(ch.name) || ch.smsCodes.any { combined.contains(it) }
             }?.name
-            ?: ChinaNotificationParser.parse(packageName, title, content, emptyList(), true)?.channel
             ?: "未知渠道"
+        val channel = com.example.model.ChannelCatalog.normalizeRecognizedChannel(rawChannel)
 
-        val baseParsed = ChinaNotificationParser.parse(packageName, title, content, emptyList(), true)
+        val baseParsed = ChinaNotificationParser.parse(packageName, title, content, emptyList(), true, customChannels = activeChannels)
         val merchant = matchedPromptRule?.merchantOverride?.takeIf { it.isNotBlank() }
             ?: baseParsed?.merchant
                 ?.takeIf { !it.endsWith("消费") && !it.endsWith("收款") && it != "未知渠道消费" }
@@ -564,7 +570,8 @@ class AiUnderstandingManager {
         title: String,
         content: String,
         selectedRules: List<CustomParsingRule> = emptyList(),
-        activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories
+        activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
+        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.IO) {
         val rawEndpoint = config.apiBaseUrl.trim()
         val apiKey = config.apiKey.trim()
@@ -580,7 +587,7 @@ class AiUnderstandingManager {
         }
 
         val chatUrl = normalizeChatCompletionsUrl(rawEndpoint)
-        val systemPrompt = buildEffectiveSystemPrompt(config, selectedRules, activeCategories)
+        val systemPrompt = buildEffectiveSystemPrompt(config, selectedRules, activeCategories, activeChannels)
 
         val userPrompt = buildString {
             appendLine("应用包名: ${packageName.ifBlank { "unknown" }}")
@@ -651,12 +658,15 @@ class AiUnderstandingManager {
                 .trim()
                 .ifBlank { ChinaNotificationParser.inferCategory("", "$title $content", txType) }
                 .take(40)
-            val channel = parsedJson.optString("channel")
+            val rawAiChannel = parsedJson.optString("channel")
                 .trim()
                 .takeIf { it.isNotBlank() && it != "null" }
                 ?.take(40)
+                ?: ChinaNotificationParser.detectChannel(packageName, "$title $content", activeChannels)
+                    .takeIf { it != "未知渠道" }
                 ?: ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
                 ?: "未知渠道"
+            val channel = com.example.model.ChannelCatalog.normalizeRecognizedChannel(rawAiChannel)
             val merchant = parsedJson.optString("merchant")
                 .trim()
                 .takeIf { it.isNotBlank() && it != "null" }
@@ -889,7 +899,8 @@ class AiUnderstandingManager {
 
     companion object {
         fun buildDefaultSystemPrompt(
-            categories: List<String> = com.example.model.CategoryCatalog.allCategories
+            categories: List<String> = com.example.model.CategoryCatalog.allCategories,
+            channels: List<String> = com.example.model.ChannelCatalog.defaultChannels
         ): String {
             val categoryUnion = categories
                 .map { it.trim() }
@@ -897,19 +908,29 @@ class AiUnderstandingManager {
                 .distinct()
                 .ifEmpty { com.example.model.CategoryCatalog.allCategories }
                 .joinToString("|")
+            val channelUnion = channels
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .ifEmpty { com.example.model.ChannelCatalog.defaultChannels }
+                .joinToString("|")
             return """
                 你是一个精准的中国大陆账单与支付通知结构化解析引擎。请判断通知或账单文本是否为真实动账记录，并仅输出一行严格合法的 JSON 对象（不要包含 Markdown 代码块或额外解释）：
-                {"isFinancial":boolean,"amount":number,"currency":"ISO4217三位币种代码(如CNY/USD/HKD/EUR/JPY/GBP/CHF/SGD/KRW/AUD/CAD/THB/MYR等)","type":"EXPENSE|INCOME|TRANSFER","category":"$categoryUnion","merchant":"交易对方或商户名","channel":"支付渠道或银行名称","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm:ss或MM-dd HH:mm:ss或HH:mm:ss或null","confidence":0.0到1.0之间数字}
+                {"isFinancial":boolean,"amount":number,"currency":"ISO4217三位币种代码(如CNY/USD/HKD/EUR/JPY/GBP/CHF/SGD/KRW/AUD/CAD/THB/MYR等)","type":"EXPENSE|INCOME|TRANSFER","category":"$categoryUnion","merchant":"交易对方或商户名","channel":"$channelUnion","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm:ss或MM-dd HH:mm:ss或HH:mm:ss或null","confidence":0.0到1.0之间数字}
                 严格遵守以下判定规则：
                 1. 验证码、快递物流、登录提醒、营销广告、免息分期邀约等非动账消息必须返回 isFinancial=false，不可编造未出现的金额。
                 2. 【严格金额单位校验】仅当通知中存在前后紧邻明确金额单位或货币符号的数字（如 ¥/￥/$/€/£/元/块/RMB/CNY/USD/HKD/JPY 等）时才视为有效金额；任何前后无金额单位的孤立数字（如 [3条]、中国移动10086、10010、955xx、订单号、流量GB、人数、验证码、时间等）一律返回 isFinancial=false。
                 3. 【不计收支规则】微信/支付宝零钱提现、余额提现、提现到银行卡、银行卡收到提现到账、零钱充值、转入/转出零钱通或余额宝、本人名下账户互转、本人转账/同名转账、信用卡还款均属于内部资金划转，不计入日常支出与收入，必须返回 "type":"TRANSFER"，且 category 设为 "不计收支" 或 "账户互转"。
-                4. 消费退款、退货返现、冲正退回的 type 应为 INCOME（category 设为 "退款返现"）；他人向我转账收款 type 为 INCOME，向他人消费付款或发红包 type 为 EXPENSE。
-                5. occurredTime 尽量保留到秒（yyyy-MM-dd HH:mm:ss）；未出现时间则返回 null。
+                4. 【渠道归属规则】识别到“花呗”“余额宝”时 channel 统一归属为“支付宝”；识别到“零钱”“零钱通”时 channel 统一归属为“微信支付”。
+                5. 消费退款、退货返现、冲正退回的 type 应为 INCOME（category 设为 "退款返现"）；他人向我转账收款 type 为 INCOME，向他人消费付款或发红包 type 为 EXPENSE。
+                6. occurredTime 尽量保留到秒（yyyy-MM-dd HH:mm:ss）；未出现时间则返回 null。
             """.trimIndent()
         }
 
-        val DEFAULT_SYSTEM_PROMPT: String = buildDefaultSystemPrompt(com.example.model.CategoryCatalog.allCategories)
+        val DEFAULT_SYSTEM_PROMPT: String = buildDefaultSystemPrompt(
+            com.example.model.CategoryCatalog.allCategories,
+            com.example.model.ChannelCatalog.defaultChannels
+        )
 
         private val LEGACY_DEFAULT_PROMPT_MARKERS = listOf(
             "CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD",
@@ -917,16 +938,19 @@ class AiUnderstandingManager {
         )
 
         private val CATEGORY_FIELD_REGEX = Regex("""("category"\s*:\s*")([^"]*)(")""")
+        private val CHANNEL_FIELD_REGEX = Regex("""("channel"\s*:\s*")([^"]*)(")""")
         private val CUSTOM_CATEGORIES_LINE_REGEX = Regex("""(?m)^【当前可用分类列表】.*$""")
+        private val CUSTOM_CHANNELS_LINE_REGEX = Regex("""(?m)^【当前可用渠道列表】.*$""")
 
         fun isLegacyOrDefaultPrompt(
             raw: String,
-            activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories
+            activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
+            activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
         ): Boolean {
             val trimmed = raw.trim()
             if (trimmed.isEmpty() ||
                 trimmed == DEFAULT_SYSTEM_PROMPT.trim() ||
-                trimmed == buildDefaultSystemPrompt(activeCategories).trim()
+                trimmed == buildDefaultSystemPrompt(activeCategories, activeChannels).trim()
             ) {
                 return true
             }
@@ -936,15 +960,20 @@ class AiUnderstandingManager {
                 trimmed.contains("你是一个精准的中国大陆账单与支付通知结构化解析引擎。") &&
                     trimmed.contains("【不计收支规则】") &&
                     !trimmed.contains("【严格金额单位校验】")
-            return isVeryOldDefault || isPreviousDefaultWithoutUnitRule
+            val isPreviousDefaultWithoutChannelRule =
+                trimmed.contains("你是一个精准的中国大陆账单与支付通知结构化解析引擎。") &&
+                    trimmed.contains("【严格金额单位校验】") &&
+                    !trimmed.contains("【渠道归属规则】")
+            return isVeryOldDefault || isPreviousDefaultWithoutUnitRule || isPreviousDefaultWithoutChannelRule
         }
 
         fun sanitizeStoredCustomPrompt(
             raw: String,
-            activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories
+            activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
+            activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
         ): String {
             val trimmed = raw.trim()
-            return if (isLegacyOrDefaultPrompt(trimmed, activeCategories)) "" else trimmed
+            return if (isLegacyOrDefaultPrompt(trimmed, activeCategories, activeChannels)) "" else trimmed
         }
 
         fun syncPromptForCategoryChange(
@@ -990,6 +1019,51 @@ class AiUnderstandingManager {
                 }
             }
             return sanitizeStoredCustomPrompt(updated, allActiveCategories).take(4000)
+        }
+
+        fun syncPromptForChannelChange(
+            currentCustomPrompt: String,
+            oldName: String?,
+            newName: String?,
+            allActiveChannels: List<String>,
+            allActiveCategories: List<String> = com.example.model.CategoryCatalog.allCategories
+        ): String {
+            val cleanedPrompt = sanitizeStoredCustomPrompt(currentCustomPrompt, allActiveCategories, allActiveChannels)
+            if (cleanedPrompt.isBlank()) return ""
+
+            var updated = cleanedPrompt
+            val cleanOld = oldName?.trim()?.takeIf { it.isNotEmpty() }
+            val cleanNew = newName?.trim()?.takeIf { it.isNotEmpty() }
+            val activeUnion = allActiveChannels
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .joinToString("|")
+
+            if (cleanOld != null && cleanNew != null && cleanOld != cleanNew) {
+                updated = updated.replace(cleanOld, cleanNew)
+            }
+
+            val channelMatch = CHANNEL_FIELD_REGEX.find(updated)
+            if (channelMatch != null) {
+                val replacement = "${channelMatch.groupValues[1]}$activeUnion${channelMatch.groupValues[3]}"
+                updated = updated.replaceRange(channelMatch.range, replacement)
+            } else {
+                if (cleanOld != null && cleanNew == null) {
+                    updated = updated
+                        .replace("|$cleanOld", "")
+                        .replace("$cleanOld|", "")
+                        .replace("、$cleanOld", "")
+                        .replace("$cleanOld、", "")
+                }
+                val summaryLine = "【当前可用渠道列表】$activeUnion"
+                updated = if (CUSTOM_CHANNELS_LINE_REGEX.containsMatchIn(updated)) {
+                    CUSTOM_CHANNELS_LINE_REGEX.replace(updated, summaryLine)
+                } else {
+                    "$updated\n$summaryLine"
+                }
+            }
+            return sanitizeStoredCustomPrompt(updated, allActiveCategories, allActiveChannels).take(4000)
         }
 
         private val sharedClient: OkHttpClient by lazy {
@@ -1049,10 +1123,11 @@ class AiUnderstandingManager {
         fun buildEffectiveSystemPrompt(
             config: AiConfig,
             selectedRules: List<CustomParsingRule> = emptyList(),
-            activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories
+            activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
+            activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
         ): String {
-            val defaultPrompt = buildDefaultSystemPrompt(activeCategories)
-            val basePrompt = sanitizeStoredCustomPrompt(config.customSystemPrompt, activeCategories)
+            val defaultPrompt = buildDefaultSystemPrompt(activeCategories, activeChannels)
+            val basePrompt = sanitizeStoredCustomPrompt(config.customSystemPrompt, activeCategories, activeChannels)
                 .ifBlank { defaultPrompt }
             val rulesBlock = formatRulesPromptBlock(selectedRules)
             return if (rulesBlock.isBlank()) {

@@ -563,7 +563,12 @@ object ManualImportManager {
                 null
             }
 
-            val channel = cleanOptionalCell(cols.getOrNull(mapping.channelCol)) ?: "手动导入"
+            val rawChannelCell = cleanOptionalCell(cols.getOrNull(mapping.channelCol))
+            val channel = if (rawChannelCell != null) {
+                com.example.model.ChannelCatalog.normalizeRecognizedChannel(rawChannelCell)
+            } else {
+                "手动导入"
+            }
             val amountRawForCurrency = cols.getOrNull(mapping.amountCol)
                 ?: cols.getOrNull(mapping.expenseAmountCol)
                 ?: cols.getOrNull(mapping.incomeAmountCol)
@@ -673,7 +678,9 @@ object ManualImportManager {
             else -> tx.type
         }
         val nextCategory = matched.defaultCategory.takeIf { it.isNotBlank() && it != "自动" } ?: tx.category
-        val nextChannel = matched.channelName.takeIf { it.isNotBlank() && it != "自动" } ?: tx.channel
+        val nextChannel = matched.channelName.takeIf { it.isNotBlank() && it != "自动" }
+            ?.let { com.example.model.ChannelCatalog.normalizeRecognizedChannel(it) }
+            ?: tx.channel
         val nextMerchant = matched.merchantOverride.takeIf { it.isNotBlank() } ?: tx.merchant
         return tx.copy(
             type = nextType,

@@ -2,16 +2,22 @@ package com.example.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,13 +48,18 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,8 +70,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,20 +83,34 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.CurrencyExchangeManager
 import com.example.model.BudgetSettings
 import com.example.model.CategoryCatalog
+import com.example.model.ChannelCatalog
 import com.example.model.ExchangeRateState
+import com.example.model.HomeStatsDimension
+import com.example.model.IconVisualStyle
 import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionBookLink
@@ -90,19 +119,25 @@ import com.example.parser.QuickAnalysisBreakdownItem
 import com.example.parser.QuickAnalysisReport
 import com.example.ui.components.CategoryIconAvatar
 import com.example.ui.components.ChannelBadge
+import com.example.ui.components.LedgerExportDialog
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatDateHeader
 import com.example.ui.components.formatItemTimeCompact
+import com.example.ui.components.parseDateTimeInputMillis
 import com.example.ui.components.transactionTypeColor
-import com.example.model.IconVisualStyle
 import com.example.ui.theme.AppIcons
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
 import com.example.ui.theme.LocalNumberFontFamily
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.roundToLong
 
 private val bookColorPresets = listOf(
     0xFF0F6B54L,
@@ -115,6 +150,11 @@ private val bookColorPresets = listOf(
     0xFF334155L
 )
 
+@OptIn(
+    ExperimentalSharedTransitionApi::class,
+    ExperimentalFoundationApi::class,
+    ExperimentalMaterial3Api::class
+)
 @Composable
 fun LedgerBooksScreen(
     books: List<LedgerBook>,
@@ -148,6 +188,7 @@ fun LedgerBooksScreen(
     var editingBook by remember { mutableStateOf<LedgerBook?>(null) }
     var deletingBook by remember { mutableStateOf<LedgerBook?>(null) }
     var quickSummaryBook by remember { mutableStateOf<Pair<String, QuickAnalysisReport>?>(null) }
+    var exportBookPayload by remember { mutableStateOf<Triple<String, List<LedgerTransaction>, String?>?>(null) }
     var inspectingTx by remember { mutableStateOf<LedgerTransaction?>(null) }
     var editingTx by remember { mutableStateOf<LedgerTransaction?>(null) }
     val activeOpenBook = remember(books, openBookId) {
@@ -165,318 +206,840 @@ fun LedgerBooksScreen(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
     ) {
-        AnimatedContent(
-            targetState = activeOpenBook?.id,
-            transitionSpec = {
-                if (targetState != null && initialState == null) {
-                    (slideInHorizontally(tween(220)) { it / 4 } + fadeIn(tween(180))) togetherWith
-                        (slideOutHorizontally(tween(180)) { -it / 6 } + fadeOut(tween(140)))
-                } else if (targetState == null && initialState != null) {
-                    (slideInHorizontally(tween(220)) { -it / 4 } + fadeIn(tween(180))) togetherWith
-                        (slideOutHorizontally(tween(180)) { it / 4 } + fadeOut(tween(140)))
-                } else {
-                    fadeIn(tween(160)) togetherWith fadeOut(tween(140))
-                }
-            },
-            label = "books_detail_switch",
-            modifier = Modifier.fillMaxSize()
-        ) { currentBookId ->
-            val openBook = currentBookId?.let { id -> books.firstOrNull { it.id == id } }
-            if (openBook != null) {
-                val bookTxList = remember(txIdsByBook, openBook.id, txById) {
-                    txIdsByBook[openBook.id].orEmpty()
-                        .mapNotNull { txById[it] }
-                        .sortedByDescending { it.occurredAtMillis }
-                }
-                val confirmedBookTxs = remember(bookTxList) { bookTxList.filter { it.confirmed } }
-                val expenseCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
-                    confirmedBookTxs.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBase(it) }
-                }
-                val incomeCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
-                    confirmedBookTxs.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
-                }
-                val netCents = incomeCents - expenseCents
-                val accent = Color(openBook.colorArgb.toInt())
+        SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
+            AnimatedContent(
+                targetState = activeOpenBook?.id,
+                transitionSpec = {
+                    fadeIn(tween(240)) togetherWith fadeOut(tween(180))
+                },
+                label = "books_detail_switch",
+                modifier = Modifier.fillMaxSize()
+            ) { currentBookId ->
+                val openBook = currentBookId?.let { id -> books.firstOrNull { it.id == id } }
+                if (openBook != null) {
+                    val density = LocalDensity.current
+                    val viewConfig = LocalViewConfiguration.current
+                    val touchSlop = viewConfig.touchSlop
+                    val swipeRightTriggerPx = with(density) { 76.dp.toPx() }
+                    val pullDownTriggerPx = with(density) { 84.dp.toPx() }
+                    val maxPullPx = with(density) { 148.dp.toPx() }
 
-                LazyColumn(
-                    state = detailListState,
-                    modifier = Modifier
-                        .widthIn(max = 720.dp)
-                        .fillMaxSize()
-                        .testTag("book_detail_list_${openBook.id}"),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    item(key = "book_detail_hero_${openBook.id}") {
-                        Card(
-                            shape = RoundedCornerShape(22.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                            border = BorderStroke(1.dp, accent.copy(alpha = 0.34f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(42.dp)
-                                            .clip(RoundedCornerShape(13.dp))
-                                            .background(accent.copy(alpha = 0.16f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = AppIcons.MenuBook,
-                                            contentDescription = null,
-                                            tint = accent,
-                                            modifier = Modifier.size(22.dp)
-                                        )
-                                    }
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = openBook.name,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = buildString {
-                                                append("共 ${bookTxList.size} 笔账单")
-                                                if (openBook.description.isNotBlank()) {
-                                                    append(" · ${openBook.description}")
+                    var swipeRightOffsetPx by remember(openBook.id) { mutableFloatStateOf(0f) }
+                    var pullDownOffsetPx by remember(openBook.id) { mutableFloatStateOf(0f) }
+                    val animatedSwipeX by animateFloatAsState(
+                        targetValue = swipeRightOffsetPx,
+                        animationSpec = tween(durationMillis = if (swipeRightOffsetPx == 0f) 180 else 16),
+                        label = "book_detail_swipe_x"
+                    )
+                    val animatedPullY by animateFloatAsState(
+                        targetValue = pullDownOffsetPx,
+                        animationSpec = tween(durationMillis = if (pullDownOffsetPx == 0f) 180 else 16),
+                        label = "book_detail_pull_y"
+                    )
+
+                    val pullDownConnection = remember(openBook.id, detailListState) {
+                        object : NestedScrollConnection {
+                            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                                if (source == NestedScrollSource.UserInput && pullDownOffsetPx > 0f && available.y < 0f) {
+                                    val next = (pullDownOffsetPx + available.y).coerceAtLeast(0f)
+                                    val consumedY = next - pullDownOffsetPx
+                                    pullDownOffsetPx = next
+                                    return Offset(0f, consumedY)
+                                }
+                                return Offset.Zero
+                            }
+
+                            override fun onPostScroll(
+                                consumed: Offset,
+                                available: Offset,
+                                source: NestedScrollSource
+                            ): Offset {
+                                val atTop = detailListState.firstVisibleItemIndex == 0 &&
+                                    detailListState.firstVisibleItemScrollOffset == 0
+                                if (source == NestedScrollSource.UserInput && atTop && available.y > 0f) {
+                                    pullDownOffsetPx = (pullDownOffsetPx + available.y * 0.55f).coerceIn(0f, maxPullPx)
+                                    return Offset(0f, available.y)
+                                }
+                                return Offset.Zero
+                            }
+
+                            override suspend fun onPreFling(available: Velocity): Velocity {
+                                if (pullDownOffsetPx >= pullDownTriggerPx) {
+                                    pullDownOffsetPx = 0f
+                                    onCloseBook()
+                                    return available
+                                }
+                                pullDownOffsetPx = 0f
+                                return Velocity.Zero
+                            }
+                        }
+                    }
+
+                    // Book-detail search & filter state (parity with LedgerHomeScreen)
+                    var detailSearchQuery by remember(openBook.id) { mutableStateOf("") }
+                    var detailSelectedFilter by remember(openBook.id) { mutableStateOf("全部") }
+                    var detailShowAdvancedFilters by remember(openBook.id) { mutableStateOf(false) }
+                    var detailTimeDimension by remember(openBook.id) { mutableStateOf(HomeStatsDimension.ALL_TIME) }
+                    var detailStartDateText by remember(openBook.id) { mutableStateOf("") }
+                    var detailEndDateText by remember(openBook.id) { mutableStateOf("") }
+                    var detailPickingDateTarget by remember(openBook.id) { mutableStateOf<String?>(null) }
+                    var detailTimeOfDaySlot by remember(openBook.id) { mutableStateOf(TimeOfDaySlot.ALL) }
+                    var detailStartTimeText by remember(openBook.id) { mutableStateOf("") }
+                    var detailEndTimeText by remember(openBook.id) { mutableStateOf("") }
+                    var detailMinAmountInput by remember(openBook.id) { mutableStateOf("") }
+                    var detailMaxAmountInput by remember(openBook.id) { mutableStateOf("") }
+
+                    val detailFilterOptions = remember {
+                        listOf("全部", "支出", "收入", "外币", "支付宝", "微信支付", "银行卡", "云闪付")
+                    }
+
+                    val bookTxList = remember(txIdsByBook, openBook.id, txById) {
+                        txIdsByBook[openBook.id].orEmpty()
+                            .mapNotNull { txById[it] }
+                            .sortedByDescending { it.occurredAtMillis }
+                    }
+                    val detailMinAmountCents = remember(detailMinAmountInput) {
+                        detailMinAmountInput.trim().toDoubleOrNull()?.takeIf { it >= 0.0 }?.let { (it * 100.0).roundToLong() }
+                    }
+                    val detailMaxAmountCents = remember(detailMaxAmountInput) {
+                        detailMaxAmountInput.trim().toDoubleOrNull()?.takeIf { it >= 0.0 }?.let { (it * 100.0).roundToLong() }
+                    }
+                    val detailStartMillis = remember(detailStartDateText) {
+                        if (detailStartDateText.isBlank()) null else parseDateTimeInputMillis(detailStartDateText, "00:00")
+                    }
+                    val detailEndMillis = remember(detailEndDateText) {
+                        if (detailEndDateText.isBlank()) null else parseDateTimeInputMillis(detailEndDateText, "23:59")?.plus(59_999L)
+                    }
+                    val detailStartMinOfDay = remember(detailTimeOfDaySlot, detailStartTimeText) {
+                        parseTimeOfDayMinutes(detailStartTimeText) ?: detailTimeOfDaySlot.startMinute
+                    }
+                    val detailEndMinOfDay = remember(detailTimeOfDaySlot, detailEndTimeText) {
+                        parseTimeOfDayMinutes(detailEndTimeText) ?: detailTimeOfDaySlot.endMinute
+                    }
+                    val detailActiveRangeFilterCount = remember(
+                        detailTimeDimension,
+                        detailStartDateText,
+                        detailEndDateText,
+                        detailTimeOfDaySlot,
+                        detailStartTimeText,
+                        detailEndTimeText,
+                        detailMinAmountInput,
+                        detailMaxAmountInput
+                    ) {
+                        var count = 0
+                        if (detailTimeDimension != HomeStatsDimension.ALL_TIME) count++
+                        if (detailStartDateText.isNotBlank() || detailEndDateText.isNotBlank()) count++
+                        if (detailTimeOfDaySlot != TimeOfDaySlot.ALL || detailStartTimeText.isNotBlank() || detailEndTimeText.isNotBlank()) count++
+                        if (detailMinAmountInput.isNotBlank() || detailMaxAmountInput.isNotBlank()) count++
+                        count
+                    }
+                    val hasAnyDetailFilter = detailSearchQuery.isNotBlank() ||
+                        detailSelectedFilter != "全部" ||
+                        detailActiveRangeFilterCount > 0
+
+                    val filteredBookTxs by remember(
+                        bookTxList,
+                        detailSearchQuery,
+                        detailSelectedFilter,
+                        detailTimeDimension,
+                        detailStartMillis,
+                        detailEndMillis,
+                        detailStartMinOfDay,
+                        detailEndMinOfDay,
+                        detailMinAmountCents,
+                        detailMaxAmountCents,
+                        exchangeRates.ratesToCny,
+                        baseCurrency
+                    ) {
+                        derivedStateOf {
+                            val timeScoped = LedgerViewModel.filterByHomeDimension(bookTxList, detailTimeDimension)
+                            timeScoped.filter { tx ->
+                                val matchesFilter = when (detailSelectedFilter) {
+                                    "全部" -> true
+                                    "支出" -> tx.txType == TransactionType.EXPENSE
+                                    "收入" -> tx.txType == TransactionType.INCOME
+                                    "外币" -> !tx.currencyCode.equals(baseCurrency, ignoreCase = true)
+                                    "支付宝" -> tx.channel.contains("支付宝")
+                                    "微信支付" -> tx.channel.contains("微信")
+                                    "云闪付" -> tx.channel.contains("云闪付") || tx.channel.contains("银联")
+                                    "银行卡" -> tx.channel.contains("银行")
+                                    else -> true
+                                }
+                                val matchesSearch = tx.matchesSearchQuery(detailSearchQuery.trim())
+                                val matchesStart = detailStartMillis == null || tx.occurredAtMillis >= detailStartMillis
+                                val matchesEnd = detailEndMillis == null || tx.occurredAtMillis <= detailEndMillis
+                                val matchesTimeSlot = matchesTimeOfDayRange(
+                                    occurredAtMillis = tx.occurredAtMillis,
+                                    startMinute = detailStartMinOfDay,
+                                    endMinute = detailEndMinOfDay
+                                )
+                                val matchesAmount = if (detailMinAmountCents != null || detailMaxAmountCents != null) {
+                                    val baseCents = toBase(tx)
+                                    (detailMinAmountCents == null || baseCents >= detailMinAmountCents) &&
+                                        (detailMaxAmountCents == null || baseCents <= detailMaxAmountCents)
+                                } else {
+                                    true
+                                }
+                                matchesFilter && matchesSearch && matchesStart && matchesEnd && matchesTimeSlot && matchesAmount
+                            }
+                        }
+                    }
+
+                    val confirmedBookTxs = remember(bookTxList) { bookTxList.filter { it.confirmed } }
+                    val expenseCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
+                        confirmedBookTxs.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBase(it) }
+                    }
+                    val incomeCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
+                        confirmedBookTxs.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
+                    }
+                    val netCents = incomeCents - expenseCents
+                    val accent = Color(openBook.colorArgb.toInt())
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .nestedScroll(pullDownConnection)
+                            .pointerInput(openBook.id) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(
+                                        requireUnconsumed = false,
+                                        pass = PointerEventPass.Initial
+                                    )
+                                    var totalDx = 0f
+                                    var totalDy = 0f
+                                    var lockedRightSwipe = false
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!change.pressed) {
+                                            if (lockedRightSwipe) {
+                                                val shouldReturn = swipeRightOffsetPx >= swipeRightTriggerPx
+                                                swipeRightOffsetPx = 0f
+                                                if (shouldReturn) {
+                                                    onCloseBook()
                                                 }
-                                            },
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis
+                                            }
+                                            break
+                                        }
+                                        val delta = change.positionChange()
+                                        totalDx += delta.x
+                                        totalDy += delta.y
+
+                                        if (!lockedRightSwipe) {
+                                            if (totalDx > touchSlop && totalDx > abs(totalDy) * 1.25f) {
+                                                // Right swipe inside book detail: intercept before HorizontalPager
+                                                // so user returns to Books Home first; swiping right again goes to Ledger.
+                                                lockedRightSwipe = true
+                                                change.consume()
+                                                swipeRightOffsetPx = totalDx.coerceAtLeast(0f)
+                                            } else if (totalDx < -touchSlop && abs(totalDx) > abs(totalDy) * 1.15f) {
+                                                // Left swipe: let HorizontalPager handle swiping to Analytics tab.
+                                                break
+                                            } else if (abs(totalDy) > touchSlop && abs(totalDy) > abs(totalDx)) {
+                                                // Vertical scroll / top pull-down handled by LazyColumn + NestedScroll.
+                                                break
+                                            }
+                                        } else {
+                                            change.consume()
+                                            swipeRightOffsetPx = (swipeRightOffsetPx + delta.x).coerceAtLeast(0f)
+                                        }
+                                    }
+                                    if (!lockedRightSwipe && swipeRightOffsetPx != 0f) {
+                                        swipeRightOffsetPx = 0f
+                                    }
+                                }
+                            },
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        LazyColumn(
+                            state = detailListState,
+                            modifier = Modifier
+                                .widthIn(max = 720.dp)
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    translationX = (animatedSwipeX * 0.55f).coerceAtLeast(0f)
+                                    translationY = (animatedPullY * 0.45f).coerceAtLeast(0f)
+                                    val dragRatio = maxOf(
+                                        (animatedSwipeX / (swipeRightTriggerPx * 2.5f)).coerceIn(0f, 0.25f),
+                                        (animatedPullY / (pullDownTriggerPx * 2.5f)).coerceIn(0f, 0.2f)
+                                    )
+                                    alpha = 1f - dragRatio
+                                }
+                                .testTag("book_detail_list_${openBook.id}"),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            item(key = "book_detail_hero_${openBook.id}") {
+                                Card(
+                                    shape = RoundedCornerShape(22.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                                    border = BorderStroke(1.dp, accent.copy(alpha = 0.34f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .sharedBounds(
+                                            sharedContentState = rememberSharedContentState(key = "book_card_${openBook.id}"),
+                                            animatedVisibilityScope = this@AnimatedContent,
+                                            resizeMode = SharedTransitionScope.ResizeMode.ScaleToBounds()
                                         )
-                                    }
-                                    IconButton(
-                                        onClick = { editingBook = openBook },
-                                        modifier = Modifier.testTag("detail_edit_book_${openBook.id}")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
-                                        Icon(Icons.Rounded.Edit, contentDescription = "编辑账本", modifier = Modifier.size(18.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(42.dp)
+                                                    .clip(RoundedCornerShape(13.dp))
+                                                    .background(accent.copy(alpha = 0.16f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = AppIcons.MenuBook,
+                                                    contentDescription = null,
+                                                    tint = accent,
+                                                    modifier = Modifier.size(22.dp)
+                                                )
+                                            }
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = openBook.name,
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    text = buildString {
+                                                        append("共 ${bookTxList.size} 笔账单")
+                                                        if (openBook.description.isNotBlank()) {
+                                                            append(" · ${openBook.description}")
+                                                        }
+                                                    },
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { editingBook = openBook },
+                                                modifier = Modifier.testTag("detail_edit_book_${openBook.id}")
+                                            ) {
+                                                Icon(Icons.Rounded.Edit, contentDescription = "编辑账本", modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.surface,
+                                                shape = RoundedCornerShape(12.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Column(modifier = Modifier.padding(10.dp)) {
+                                                    Text("支出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    Text(
+                                                        text = formatCurrency(expenseCents, baseCurrency),
+                                                        style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                        color = ExpenseCoral,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.surface,
+                                                shape = RoundedCornerShape(12.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Column(modifier = Modifier.padding(10.dp)) {
+                                                    Text("收入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    Text(
+                                                        text = formatCurrency(incomeCents, baseCurrency),
+                                                        style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                        color = IncomeJade,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.surface,
+                                                shape = RoundedCornerShape(12.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Column(modifier = Modifier.padding(10.dp)) {
+                                                    Text("结余", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    Text(
+                                                        text = (if (netCents < 0L) "-" else "") + formatCurrency(kotlin.math.abs(netCents), baseCurrency),
+                                                        style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                        color = if (netCents >= 0L) IncomeJade else ExpenseCoral,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            OutlinedButton(
+                                                enabled = bookTxList.isNotEmpty(),
+                                                onClick = {
+                                                    val target = if (hasAnyDetailFilter) filteredBookTxs else bookTxList
+                                                    val report = viewModel.buildQuickSelectionReport(
+                                                        transactions = target,
+                                                        scopeTitle = "账本「${openBook.name}」统计摘要"
+                                                    )
+                                                    quickSummaryBook = "账本「${openBook.name}」" to report
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("detail_quick_summary_book_${openBook.id}")
+                                            ) {
+                                                Text("文本统计", maxLines = 1)
+                                            }
+                                            OutlinedButton(
+                                                enabled = bookTxList.isNotEmpty(),
+                                                onClick = {
+                                                    val target = if (hasAnyDetailFilter) filteredBookTxs else bookTxList
+                                                    exportBookPayload = Triple(
+                                                        "账本「${openBook.name}」",
+                                                        target,
+                                                        openBook.name
+                                                    )
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                                                modifier = Modifier
+                                                    .weight(0.85f)
+                                                    .testTag("detail_export_book_${openBook.id}")
+                                            ) {
+                                                Icon(AppIcons.Download, contentDescription = null, modifier = Modifier.size(15.dp))
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                Text("导出", maxLines = 1)
+                                            }
+                                            FilledTonalButton(
+                                                onClick = { onAnalyzeBook(openBook.id) },
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                                modifier = Modifier
+                                                    .weight(1.1f)
+                                                    .testTag("detail_analyze_book_${openBook.id}")
+                                            ) {
+                                                Icon(AppIcons.Insights, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("收支分析", maxLines = 1)
+                                            }
+                                        }
                                     }
                                 }
+                            }
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            // Hint moved outside & below the hero card
+                            item(key = "book_detail_hint_below_card") {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = accent.copy(alpha = 0.08f),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("book_detail_gesture_hint")
                                 ) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.surface,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Column(modifier = Modifier.padding(10.dp)) {
-                                            Text("支出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            Text(
-                                                text = formatCurrency(expenseCents, baseCurrency),
-                                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
-                                                color = ExpenseCoral,
-                                                fontWeight = FontWeight.Bold,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.surface,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Column(modifier = Modifier.padding(10.dp)) {
-                                            Text("收入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            Text(
-                                                text = formatCurrency(incomeCents, baseCurrency),
-                                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
-                                                color = IncomeJade,
-                                                fontWeight = FontWeight.Bold,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.surface,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Column(modifier = Modifier.padding(10.dp)) {
-                                            Text("结余", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            Text(
-                                                text = (if (netCents < 0L) "-" else "") + formatCurrency(kotlin.math.abs(netCents), baseCurrency),
-                                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
-                                                color = if (netCents >= 0L) IncomeJade else ExpenseCoral,
-                                                fontWeight = FontWeight.Bold,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    OutlinedButton(
-                                        enabled = bookTxList.isNotEmpty(),
-                                        onClick = {
-                                            val report = viewModel.buildQuickSelectionReport(
-                                                transactions = bookTxList,
-                                                scopeTitle = "账本「${openBook.name}」统计摘要"
-                                            )
-                                            quickSummaryBook = "账本「${openBook.name}」" to report
+                                    Text(
+                                        text = if (canSwipeToAnalytics) {
+                                            "手势提示：右滑或在顶部下拉可返回账本主页（再右滑回到账单主页）；左滑可直接切换到本账本的「收支分析」"
+                                        } else {
+                                            "手势提示：右滑或在顶部下拉可返回账本主页；按返回键同样回到账本列表"
                                         },
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                    )
+                                }
+                            }
+
+                            if (bookTxList.isNotEmpty()) {
+                                stickyHeader(key = "book_detail_search_and_filters") {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.background,
                                         modifier = Modifier
-                                            .weight(1f)
-                                            .testTag("detail_quick_summary_book_${openBook.id}")
+                                            .fillMaxWidth()
+                                            .testTag("book_detail_sticky_search")
                                     ) {
-                                        Text("文本统计", maxLines = 1)
-                                    }
-                                    FilledTonalButton(
-                                        onClick = { onAnalyzeBook(openBook.id) },
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                        modifier = Modifier
-                                            .weight(1.15f)
-                                            .testTag("detail_analyze_book_${openBook.id}")
-                                    ) {
-                                        Icon(AppIcons.Insights, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("收支分析", maxLines = 1)
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 2.dp, bottom = 6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            OutlinedTextField(
+                                                value = detailSearchQuery,
+                                                onValueChange = { detailSearchQuery = it },
+                                                placeholder = { Text("在「${openBook.name}」中搜索（多关键词空格隔开）") },
+                                                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                                                trailingIcon = {
+                                                    if (detailSearchQuery.isNotEmpty()) {
+                                                        IconButton(
+                                                            onClick = { detailSearchQuery = "" },
+                                                            modifier = Modifier.testTag("book_detail_search_clear")
+                                                        ) {
+                                                            Icon(Icons.Rounded.Close, contentDescription = "清空搜索")
+                                                        }
+                                                    }
+                                                },
+                                                singleLine = true,
+                                                shape = RoundedCornerShape(16.dp),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .testTag("book_detail_search_input")
+                                            )
+
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .horizontalScroll(rememberScrollState()),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                FilterChip(
+                                                    selected = detailShowAdvancedFilters || detailActiveRangeFilterCount > 0,
+                                                    onClick = { detailShowAdvancedFilters = !detailShowAdvancedFilters },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            imageVector = AppIcons.Tune,
+                                                            contentDescription = "时间与金额范围筛选",
+                                                            modifier = Modifier.size(16.dp)
+                                                        )
+                                                    },
+                                                    label = {
+                                                        Text(
+                                                            if (detailActiveRangeFilterCount > 0) "范围($detailActiveRangeFilterCount)" else "日期/时段/金额"
+                                                        )
+                                                    },
+                                                    modifier = Modifier.testTag("book_detail_range_filter_toggle")
+                                                )
+                                                detailFilterOptions.forEach { option ->
+                                                    FilterChip(
+                                                        selected = detailSelectedFilter == option,
+                                                        onClick = { detailSelectedFilter = option },
+                                                        label = { Text(option) },
+                                                        modifier = Modifier.testTag("book_detail_filter_$option")
+                                                    )
+                                                }
+                                            }
+
+                                            AnimatedVisibility(visible = detailShowAdvancedFilters) {
+                                                HomeRangeFilterPanel(
+                                                    baseCurrencyCode = baseCurrency,
+                                                    listTimeDimension = detailTimeDimension,
+                                                    customStartDateText = detailStartDateText,
+                                                    customEndDateText = detailEndDateText,
+                                                    selectedTimeOfDaySlot = detailTimeOfDaySlot,
+                                                    customStartTimeText = detailStartTimeText,
+                                                    customEndTimeText = detailEndTimeText,
+                                                    minAmountInput = detailMinAmountInput,
+                                                    maxAmountInput = detailMaxAmountInput,
+                                                    onSelectTimeDimension = { dim ->
+                                                        detailTimeDimension = dim
+                                                        detailStartDateText = ""
+                                                        detailEndDateText = ""
+                                                    },
+                                                    onStartDateChange = {
+                                                        detailStartDateText = it
+                                                        if (it.isNotBlank()) detailTimeDimension = HomeStatsDimension.ALL_TIME
+                                                    },
+                                                    onEndDateChange = {
+                                                        detailEndDateText = it
+                                                        if (it.isNotBlank()) detailTimeDimension = HomeStatsDimension.ALL_TIME
+                                                    },
+                                                    onPickStartDate = { detailPickingDateTarget = "start" },
+                                                    onPickEndDate = { detailPickingDateTarget = "end" },
+                                                    onSelectTimeOfDaySlot = { slot ->
+                                                        detailTimeOfDaySlot = slot
+                                                        detailStartTimeText = ""
+                                                        detailEndTimeText = ""
+                                                    },
+                                                    onStartTimeChange = {
+                                                        detailStartTimeText = it
+                                                        if (it.isNotBlank()) detailTimeOfDaySlot = TimeOfDaySlot.ALL
+                                                    },
+                                                    onEndTimeChange = {
+                                                        detailEndTimeText = it
+                                                        if (it.isNotBlank()) detailTimeOfDaySlot = TimeOfDaySlot.ALL
+                                                    },
+                                                    onMinAmountChange = { detailMinAmountInput = it },
+                                                    onMaxAmountChange = { detailMaxAmountInput = it },
+                                                    onResetAll = {
+                                                        detailTimeDimension = HomeStatsDimension.ALL_TIME
+                                                        detailStartDateText = ""
+                                                        detailEndDateText = ""
+                                                        detailTimeOfDaySlot = TimeOfDaySlot.ALL
+                                                        detailStartTimeText = ""
+                                                        detailEndTimeText = ""
+                                                        detailMinAmountInput = ""
+                                                        detailMaxAmountInput = ""
+                                                    }
+                                                )
+                                            }
+
+                                            if (hasAnyDetailFilter) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = "命中 ${filteredBookTxs.size} / ${bookTxList.size} 笔",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                        if (filteredBookTxs.isNotEmpty()) {
+                                                            TextButton(
+                                                                onClick = {
+                                                                    val report = viewModel.buildQuickSelectionReport(
+                                                                        transactions = filteredBookTxs,
+                                                                        scopeTitle = "账本「${openBook.name}」筛选结果 (${filteredBookTxs.size} 笔)"
+                                                                    )
+                                                                    quickSummaryBook = "账本筛选分析" to report
+                                                                },
+                                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                                modifier = Modifier.testTag("book_detail_filtered_analyze")
+                                                            ) {
+                                                                Text("快速分析")
+                                                            }
+                                                            TextButton(
+                                                                onClick = {
+                                                                    exportBookPayload = Triple(
+                                                                        "账本「${openBook.name}」筛选结果",
+                                                                        filteredBookTxs,
+                                                                        openBook.name
+                                                                    )
+                                                                },
+                                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                                modifier = Modifier.testTag("book_detail_filtered_export")
+                                                            ) {
+                                                                Text("导出")
+                                                            }
+                                                        }
+                                                        TextButton(
+                                                            onClick = {
+                                                                detailSearchQuery = ""
+                                                                detailSelectedFilter = "全部"
+                                                                detailTimeDimension = HomeStatsDimension.ALL_TIME
+                                                                detailStartDateText = ""
+                                                                detailEndDateText = ""
+                                                                detailTimeOfDaySlot = TimeOfDaySlot.ALL
+                                                                detailStartTimeText = ""
+                                                                detailEndTimeText = ""
+                                                                detailMinAmountInput = ""
+                                                                detailMaxAmountInput = ""
+                                                            },
+                                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                                        ) {
+                                                            Text("重置")
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
+                            }
 
-                                if (canSwipeToAnalytics) {
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = accent.copy(alpha = 0.08f),
+                            if (bookTxList.isEmpty()) {
+                                item(key = "book_detail_empty") {
+                                    Card(
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text(
-                                            text = "提示：直接横滑可切换到本账本的「收支分析」，再横滑回来仍停留在当前明细页；按返回键回到账本主页",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (bookTxList.isEmpty()) {
-                        item(key = "book_detail_empty") {
-                            Card(
-                                shape = RoundedCornerShape(20.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(24.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = AppIcons.ReceiptLong,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                        modifier = Modifier.size(36.dp)
-                                    )
-                                    Text("该账本暂无明细", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                                    Text(
-                                        text = "可在主页长按选中账单点击「加入账本」，或点击任意账单详情中的「添加到账本」归入此账本。",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        items(bookTxList, key = { it.id }) { tx ->
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .clickable { inspectingTx = tx }
-                                    .testTag("book_detail_tx_${tx.id}")
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    CategoryIconAvatar(
-                                        category = tx.category,
-                                        tintColor = transactionTypeColor(tx.txType),
-                                        visualStyle = IconVisualStyle.FILLED,
-                                        size = 38.dp
-                                    )
-                                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                        Text(
-                                            text = tx.merchant,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(24.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            ChannelBadge(channel = tx.channel)
+                                            Icon(
+                                                imageVector = AppIcons.ReceiptLong,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                modifier = Modifier.size(36.dp)
+                                            )
+                                            Text("该账本暂无明细", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                             Text(
-                                                text = "${tx.category} · ${formatDateHeader(tx.occurredAtMillis)} ${formatItemTimeCompact(tx.occurredAtMillis)}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
+                                                text = "可在主页长按选中账单点击「加入账本」，或点击任意账单详情中的「添加到账本」归入此账本。",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                     }
-                                    Text(
-                                        text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
-                                        style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
-                                        color = transactionTypeColor(tx.txType),
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    IconButton(
-                                        onClick = { viewModel.removeTransactionsFromBook(listOf(tx.id), openBook.id) },
-                                        modifier = Modifier
-                                            .minimumInteractiveComponentSize()
-                                            .testTag("remove_tx_from_book_${tx.id}")
+                                }
+                            } else if (filteredBookTxs.isEmpty()) {
+                                item(key = "book_detail_filter_empty") {
+                                    Card(
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Close,
-                                            contentDescription = "从账本移出",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(16.dp)
-                                        )
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(20.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text("未匹配到符合条件的账单", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                            Text(
+                                                text = "请调整搜索关键词、日期时段或金额范围",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                items(filteredBookTxs, key = { it.id }) { tx ->
+                                    Surface(
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .clickable { inspectingTx = tx }
+                                            .testTag("book_detail_tx_${tx.id}")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            CategoryIconAvatar(
+                                                category = tx.category,
+                                                tintColor = transactionTypeColor(tx.txType),
+                                                visualStyle = IconVisualStyle.FILLED,
+                                                size = 38.dp
+                                            )
+                                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                Text(
+                                                    text = tx.merchant,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    ChannelBadge(channel = tx.channel)
+                                                    Text(
+                                                        text = "${tx.category} · ${formatDateHeader(tx.occurredAtMillis)} ${formatItemTimeCompact(tx.occurredAtMillis)}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                            Text(
+                                                text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
+                                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                color = transactionTypeColor(tx.txType),
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            IconButton(
+                                                onClick = { viewModel.removeTransactionsFromBook(listOf(tx.id), openBook.id) },
+                                                modifier = Modifier
+                                                    .minimumInteractiveComponentSize()
+                                                    .testTag("remove_tx_from_book_${tx.id}")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Close,
+                                                    contentDescription = "从账本移出",
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
+                            item(key = "book_detail_bottom_spacer") {
+                                Spacer(modifier = Modifier.height(64.dp))
+                            }
+                        }
+
+                        // Pull-down visual feedback pill when pulling at top
+                        AnimatedVisibility(
+                            visible = pullDownOffsetPx > 12f,
+                            enter = fadeIn(tween(120)),
+                            exit = fadeOut(tween(120)),
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 10.dp)
+                        ) {
+                            val ready = pullDownOffsetPx >= pullDownTriggerPx
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                shadowElevation = 4.dp
+                            ) {
+                                Text(
+                                    text = if (ready) "松手返回账本主页" else "继续下拉返回账本主页",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (ready) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+
+                        if (detailPickingDateTarget != null) {
+                            val datePickerState = rememberDatePickerState()
+                            DatePickerDialog(
+                                onDismissRequest = { detailPickingDateTarget = null },
+                                confirmButton = {
+                                    TextButton(
+                                        onClick = {
+                                            val picked = datePickerState.selectedDateMillis
+                                            if (picked != null) {
+                                                val formatted = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(picked))
+                                                if (detailPickingDateTarget == "start") {
+                                                    detailStartDateText = formatted
+                                                } else {
+                                                    detailEndDateText = formatted
+                                                }
+                                                detailTimeDimension = HomeStatsDimension.ALL_TIME
+                                            }
+                                            detailPickingDateTarget = null
+                                        }
+                                    ) {
+                                        Text("确定")
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { detailPickingDateTarget = null }) { Text("取消") }
+                                }
+                            ) {
+                                DatePicker(state = datePickerState)
+                            }
                         }
                     }
-                    item(key = "book_detail_bottom_spacer") {
-                        Spacer(modifier = Modifier.height(64.dp))
-                    }
-                }
-            } else {
+                } else {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
@@ -601,6 +1164,11 @@ fun LedgerBooksScreen(
                                 border = BorderStroke(1.dp, accent.copy(alpha = 0.28f)),
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .sharedBounds(
+                                        sharedContentState = rememberSharedContentState(key = "book_card_${book.id}"),
+                                        animatedVisibilityScope = this@AnimatedContent,
+                                        resizeMode = SharedTransitionScope.ResizeMode.ScaleToBounds()
+                                    )
                                     .testTag("book_card_${book.id}")
                             ) {
                                 Column(
@@ -743,11 +1311,29 @@ fun LedgerBooksScreen(
                                         ) {
                                             Text("文本统计", maxLines = 1)
                                         }
+                                        OutlinedButton(
+                                            enabled = bookTxList.isNotEmpty(),
+                                            onClick = {
+                                                exportBookPayload = Triple(
+                                                    "账本「${book.name}」",
+                                                    bookTxList,
+                                                    book.name
+                                                )
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                            modifier = Modifier
+                                                .weight(0.8f)
+                                                .testTag("export_book_${book.id}")
+                                        ) {
+                                            Icon(AppIcons.Download, contentDescription = null, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text("导出", maxLines = 1)
+                                        }
                                         FilledTonalButton(
                                             onClick = { onAnalyzeBook(book.id) },
                                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                                             modifier = Modifier
-                                                .weight(1.1f)
+                                                .weight(1.05f)
                                                 .testTag("analyze_book_${book.id}")
                                         ) {
                                             Icon(AppIcons.Insights, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -764,6 +1350,7 @@ fun LedgerBooksScreen(
                     }
                 }
             }
+        }
         }
     }
 
@@ -825,6 +1412,18 @@ fun LedgerBooksScreen(
         )
     }
 
+    exportBookPayload?.let { (scopeTitle, targetList, bookName) ->
+        LedgerExportDialog(
+            scopeTitle = scopeTitle,
+            transactions = targetList,
+            baseCurrencyCode = baseCurrency,
+            ratesToCny = exchangeRates.ratesToCny,
+            bookName = bookName,
+            onDismiss = { exportBookPayload = null },
+            onExportFeedback = { msg -> viewModel.postActionMessage(msg) }
+        )
+    }
+
     inspectingTx?.let { tx ->
         val (recordedBase, recordedRate, recordedCents) = viewModel.recordedSnapshotDisplay(tx)
         TransactionDetailSheet(
@@ -869,6 +1468,7 @@ fun LedgerBooksScreen(
             expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
             incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
             transferCategories = CategoryCatalog.activeTransferCategories(settings),
+            channelOptions = ChannelCatalog.activeChannels(settings),
             allTransactions = allTransactions,
             onDismiss = { editingTx = null },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->

@@ -1046,6 +1046,244 @@ class LedgerRepository(
         }
     }
 
+    data class ChannelSyncResult(
+        val updatedTransactions: Int = 0,
+        val updatedRules: Int = 0,
+        val aiPromptSynced: Boolean = false
+    )
+
+    suspend fun addCustomChannel(
+        rawName: String,
+        syncAiPrompt: Boolean = true
+    ): Result<ChannelSyncResult> {
+        return try {
+            val cleanName = rawName.trim().take(28)
+            require(cleanName.isNotEmpty()) { "渠道名称不能为空" }
+            require(cleanName != "自动" && cleanName != "未知渠道" && cleanName != "已忽略") { "该名称为系统保留词，请换一个" }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val cur = com.example.model.ChannelCatalog.activeChannels(settings)
+            require(cur.none { it.equals(cleanName, ignoreCase = true) }) { "该渠道已存在" }
+            val updatedSettings = settings.copy(customChannels = cur + cleanName)
+            settingsStore.saveBudgetSettings(updatedSettings)
+            var aiSynced = false
+            if (syncAiPrompt) {
+                val aiCfg = settingsStore.getAiConfigOnce()
+                val newPrompt = AiUnderstandingManager.syncPromptForChannelChange(
+                    currentCustomPrompt = aiCfg.customSystemPrompt,
+                    oldName = null,
+                    newName = cleanName,
+                    allActiveChannels = com.example.model.ChannelCatalog.activeChannels(updatedSettings),
+                    allActiveCategories = CategoryCatalog.allActiveCategories(updatedSettings)
+                )
+                if (newPrompt != aiCfg.customSystemPrompt) {
+                    settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
+                }
+                aiSynced = true
+            }
+            Result.success(ChannelSyncResult(aiPromptSynced = aiSynced))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun renameChannel(
+        oldName: String,
+        rawNewName: String,
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true,
+        syncAiPrompt: Boolean = true
+    ): Result<ChannelSyncResult> {
+        return try {
+            val cleanOld = oldName.trim()
+            val cleanNew = rawNewName.trim().take(28)
+            require(cleanOld.isNotEmpty() && cleanNew.isNotEmpty()) { "渠道名称不能为空" }
+            require(!cleanOld.equals(cleanNew, ignoreCase = true)) { "新渠道名称与原名称相同" }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val cur = com.example.model.ChannelCatalog.activeChannels(settings)
+            val replaced = if (cur.any { it.equals(cleanOld, ignoreCase = true) }) {
+                cur.map { if (it.equals(cleanOld, ignoreCase = true)) cleanNew else it }.distinct()
+            } else {
+                (cur + cleanNew).distinct()
+            }
+            val updatedSettings = settings.copy(customChannels = replaced)
+            settingsStore.saveBudgetSettings(updatedSettings)
+
+            val now = System.currentTimeMillis()
+            var updatedTxCount = 0
+            if (syncTransactions) {
+                val allTxs = getAllTransactionsOnce()
+                val changed = allTxs.mapNotNull { tx ->
+                    val nextChannel = com.example.model.ChannelCatalog.replaceChannelToken(tx.channel, cleanOld, cleanNew)
+                    if (nextChannel != tx.channel) {
+                        TransactionEntity.fromDomain(tx.copy(channel = nextChannel, updatedAtMillis = now))
+                    } else {
+                        null
+                    }
+                }
+                if (changed.isNotEmpty()) {
+                    changed.chunked(300).forEach { dao.upsertTransactions(it) }
+                    updatedTxCount = changed.size
+                }
+            }
+            var updatedRulesCount = 0
+            if (syncRules) {
+                val allRules = dao.getAllRulesOnce().map { it.toDomain() }
+                val changedRules = allRules.mapNotNull { rule ->
+                    if (rule.isIgnoreRule) return@mapNotNull null
+                    val nextChannel = com.example.model.ChannelCatalog.replaceChannelToken(rule.channelName, cleanOld, cleanNew)
+                    if (nextChannel != rule.channelName) {
+                        ParsingRuleEntity.fromDomain(rule.copy(channelName = nextChannel, updatedAtMillis = now))
+                    } else {
+                        null
+                    }
+                }
+                if (changedRules.isNotEmpty()) {
+                    dao.upsertRules(changedRules)
+                    updatedRulesCount = changedRules.size
+                }
+            }
+            var aiSynced = false
+            if (syncAiPrompt) {
+                val aiCfg = settingsStore.getAiConfigOnce()
+                val newPrompt = AiUnderstandingManager.syncPromptForChannelChange(
+                    currentCustomPrompt = aiCfg.customSystemPrompt,
+                    oldName = cleanOld,
+                    newName = cleanNew,
+                    allActiveChannels = com.example.model.ChannelCatalog.activeChannels(updatedSettings),
+                    allActiveCategories = CategoryCatalog.allActiveCategories(updatedSettings)
+                )
+                if (newPrompt != aiCfg.customSystemPrompt) {
+                    settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
+                }
+                aiSynced = true
+            }
+            Result.success(
+                ChannelSyncResult(
+                    updatedTransactions = updatedTxCount,
+                    updatedRules = updatedRulesCount,
+                    aiPromptSynced = aiSynced
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteChannel(
+        targetName: String,
+        fallbackChannel: String = "其他",
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true,
+        syncAiPrompt: Boolean = true
+    ): Result<ChannelSyncResult> {
+        return try {
+            val cleanTarget = targetName.trim()
+            val cleanFallback = fallbackChannel.trim().ifBlank { "其他" }.take(28)
+            require(cleanTarget.isNotEmpty()) { "渠道名称不能为空" }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val cur = com.example.model.ChannelCatalog.activeChannels(settings)
+            val updatedChannels = if (cur.any { it.equals(cleanTarget, ignoreCase = true) }) {
+                require(cur.size > 1) { "至少需保留 1 个渠道" }
+                cur.filterNot { it.equals(cleanTarget, ignoreCase = true) }
+            } else {
+                cur
+            }
+            val updatedSettings = settings.copy(customChannels = updatedChannels)
+            settingsStore.saveBudgetSettings(updatedSettings)
+
+            val now = System.currentTimeMillis()
+            var updatedTxCount = 0
+            if (syncTransactions && !cleanFallback.equals(cleanTarget, ignoreCase = true)) {
+                val allTxs = getAllTransactionsOnce()
+                val changed = allTxs.mapNotNull { tx ->
+                    val nextChannel = com.example.model.ChannelCatalog.replaceChannelToken(tx.channel, cleanTarget, cleanFallback)
+                    if (nextChannel != tx.channel) {
+                        TransactionEntity.fromDomain(tx.copy(channel = nextChannel, updatedAtMillis = now))
+                    } else {
+                        null
+                    }
+                }
+                if (changed.isNotEmpty()) {
+                    changed.chunked(300).forEach { dao.upsertTransactions(it) }
+                    updatedTxCount = changed.size
+                }
+            }
+            var updatedRulesCount = 0
+            if (syncRules && !cleanFallback.equals(cleanTarget, ignoreCase = true)) {
+                val allRules = dao.getAllRulesOnce().map { it.toDomain() }
+                val changedRules = allRules.mapNotNull { rule ->
+                    if (rule.isIgnoreRule) return@mapNotNull null
+                    val nextChannel = com.example.model.ChannelCatalog.replaceChannelToken(rule.channelName, cleanTarget, cleanFallback)
+                    if (nextChannel != rule.channelName) {
+                        ParsingRuleEntity.fromDomain(rule.copy(channelName = nextChannel, updatedAtMillis = now))
+                    } else {
+                        null
+                    }
+                }
+                if (changedRules.isNotEmpty()) {
+                    dao.upsertRules(changedRules)
+                    updatedRulesCount = changedRules.size
+                }
+            }
+            var aiSynced = false
+            if (syncAiPrompt) {
+                val aiCfg = settingsStore.getAiConfigOnce()
+                val newPrompt = AiUnderstandingManager.syncPromptForChannelChange(
+                    currentCustomPrompt = aiCfg.customSystemPrompt,
+                    oldName = cleanTarget,
+                    newName = null,
+                    allActiveChannels = com.example.model.ChannelCatalog.activeChannels(updatedSettings),
+                    allActiveCategories = CategoryCatalog.allActiveCategories(updatedSettings)
+                )
+                if (newPrompt != aiCfg.customSystemPrompt) {
+                    settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
+                }
+                aiSynced = true
+            }
+            Result.success(
+                ChannelSyncResult(
+                    updatedTransactions = updatedTxCount,
+                    updatedRules = updatedRulesCount,
+                    aiPromptSynced = aiSynced
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun resetChannelsToDefault(syncAiPrompt: Boolean = true): Result<Unit> {
+        return try {
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val reset = settings.copy(customChannels = com.example.model.ChannelCatalog.defaultChannels)
+            settingsStore.saveBudgetSettings(reset)
+            if (syncAiPrompt) {
+                val aiCfg = settingsStore.getAiConfigOnce()
+                val newPrompt = AiUnderstandingManager.syncPromptForChannelChange(
+                    currentCustomPrompt = aiCfg.customSystemPrompt,
+                    oldName = null,
+                    newName = null,
+                    allActiveChannels = com.example.model.ChannelCatalog.defaultChannels,
+                    allActiveCategories = CategoryCatalog.allActiveCategories(reset)
+                )
+                if (newPrompt != aiCfg.customSystemPrompt) {
+                    settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
+                }
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun setCategoryIcon(
         categoryName: String,
         iconKey: String?

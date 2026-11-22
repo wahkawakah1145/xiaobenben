@@ -41,6 +41,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -55,6 +56,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -104,9 +106,11 @@ fun AnalyticsCalendarSection(
     onTransactionClick: (LedgerTransaction) -> Unit,
     isFullScreen: Boolean = false,
     onRequestExitFullScreen: (() -> Unit)? = null,
+    scopeTitle: String = "全部账单",
     modifier: Modifier = Modifier
 ) {
     val confirmedTxs = remember(transactions) { transactions.filter { it.confirmed } }
+    var showTrendChartDialog by remember { mutableStateOf(false) }
     var pinchAccumulator by remember { mutableFloatStateOf(1f) }
     val livePinchVisualScale = remember { Animatable(1f) }
     val liveSwipeOffsetX = remember { Animatable(0f) }
@@ -310,10 +314,23 @@ fun AnalyticsCalendarSection(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FilledTonalButton(
+                        onClick = { showTrendChartDialog = true },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("calendar_trend_chart_button")
+                    ) {
+                        Icon(
+                            AppIcons.Insights,
+                            contentDescription = "趋势图",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("趋势图", style = MaterialTheme.typography.labelMedium)
+                    }
                     OutlinedButton(
                         onClick = { zoomOut() },
                         enabled = granularity != AnalyticsGranularity.YEAR,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.testTag("calendar_zoom_out_button")
                     ) {
                         Text("缩小", style = MaterialTheme.typography.labelMedium)
@@ -321,12 +338,24 @@ fun AnalyticsCalendarSection(
                     OutlinedButton(
                         onClick = { zoomIn() },
                         enabled = granularity != AnalyticsGranularity.DAY,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.testTag("calendar_zoom_in_button")
                     ) {
                         Text("放大", style = MaterialTheme.typography.labelMedium)
                     }
                 }
+            }
+
+            if (showTrendChartDialog) {
+                val anchorCal = remember(anchorMillis) { Calendar.getInstance().apply { timeInMillis = anchorMillis } }
+                SpendingTrendChartDialog(
+                    transactions = confirmedTxs,
+                    baseCurrencyCode = baseCurrencyCode,
+                    ratesToCny = ratesToCny,
+                    initialYearMonth = anchorCal.get(Calendar.YEAR) to (anchorCal.get(Calendar.MONTH) + 1),
+                    scopeTitle = scopeTitle,
+                    onDismiss = { showTrendChartDialog = false }
+                )
             }
 
             // Granularity Filter Tabs: 年 / 月 / 周 / 日

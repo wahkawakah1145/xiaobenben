@@ -127,15 +127,28 @@ fun CategoryManagementScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_CATEGORIES, "category_header_card")
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("分类与图标管理", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        SettingsSearchArrivalBanner(
+                            route = ROUTE_SETTINGS_CATEGORIES,
+                            onDismiss = { viewModel.clearSettingsHighlight() }
+                        )
                         Text(
-                            text = "自动汇总当前设置、历史账单与识别规则中的所有分类；轻点左侧图标可快捷更换分类图标，新增/修改/删除分类时动态同步对应规则与 AI 理解提示词。",
+                            text = settingsHighlightedText("分类与图标管理", ROUTE_SETTINGS_CATEGORIES),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = settingsHighlightedText(
+                                "自动汇总当前设置、历史账单与识别规则中的所有分类；轻点左侧图标可快捷更换分类图标，新增/修改/删除分类时动态同步对应规则与 AI 理解提示词。",
+                                ROUTE_SETTINGS_CATEGORIES
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

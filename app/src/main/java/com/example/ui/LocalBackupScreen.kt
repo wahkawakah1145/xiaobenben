@@ -73,10 +73,23 @@ fun LocalBackupScreen(
     val backupState by viewModel.localBackupActionState.collectAsStateWithLifecycle()
     val txState by viewModel.transactionsState.collectAsStateWithLifecycle()
     val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
+    val books by viewModel.booksState.collectAsStateWithLifecycle()
+    val bookLinks by viewModel.bookLinksState.collectAsStateWithLifecycle()
+    val exchangeRates by viewModel.exchangeRateState.collectAsStateWithLifecycle()
 
-    val txCount = (txState as? UiState.Success)?.data?.size ?: 0
+    val allTransactions = (txState as? UiState.Success)?.data ?: emptyList()
+    val txCount = allTransactions.size
     val ruleCount = (rulesState as? UiState.Success)?.data?.size ?: 0
     val isWorking = backupState is LocalBackupActionState.Working
+    var selectedExportBookId by remember { mutableStateOf<String?>(null) }
+    var showFileExportDialog by remember { mutableStateOf(false) }
+
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = listState,
+        route = ROUTE_SETTINGS_LOCAL_BACKUP,
+        sectionKeysInOrder = listOf("local_export_restore_card", "local_export_spreadsheet_card", "backup_reminder_card")
+    )
 
     var hasPostNotifPermission by remember {
         mutableStateOf(NotificationBridge.hasPostNotificationPermission(context))
@@ -129,6 +142,7 @@ fun LocalBackupScreen(
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -137,114 +151,188 @@ fun LocalBackupScreen(
         ) {
             // 1. Export & Restore Local Backup Card
             item(key = "local_export_restore_card") {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SettingsSearchArrivalBanner(
+                        route = ROUTE_SETTINGS_LOCAL_BACKUP,
+                        onDismiss = { viewModel.clearSettingsHighlight() }
+                    )
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .settingsHighlightSection(ROUTE_SETTINGS_LOCAL_BACKUP, "local_export_restore_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = settingsHighlightedText("本地数据导出与恢复", ROUTE_SETTINGS_LOCAL_BACKUP),
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = settingsHighlightedText(
+                                    "当前账本共有 $txCount 笔账单、$ruleCount 条识别规则。导出为完整 JSON 备份文件，恢复时将智能去重合并。",
+                                    ROUTE_SETTINGS_LOCAL_BACKUP
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            val lastBackupText = if (settings.lastLocalBackupMillis > 0L) {
+                                "上次本地备份：${formatDateTimeFull(settings.lastLocalBackupMillis)}"
+                            } else {
+                                "尚未执行过本地文件备份"
+                            }
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = lastBackupText,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    enabled = !isWorking,
+                                    onClick = {
+                                        exportLauncher.launch(LocalBackupManager.buildDefaultBackupFileName())
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("local_export_backup_button")
+                                ) {
+                                    Icon(AppIcons.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("导出本地备份")
+                                }
+
+                                OutlinedButton(
+                                    enabled = !isWorking,
+                                    onClick = {
+                                        restoreLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("local_restore_backup_button")
+                                ) {
+                                    Icon(AppIcons.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("从备份恢复")
+                                }
+                            }
+
+                            when (val state = backupState) {
+                                is LocalBackupActionState.Idle -> Unit
+                                is LocalBackupActionState.Working -> {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                        Text(state.label, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                                is LocalBackupActionState.Success -> {
+                                    Surface(
+                                        color = IncomeJade.copy(alpha = 0.12f),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = state.message,
+                                            color = IncomeJade,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.padding(10.dp)
+                                        )
+                                    }
+                                }
+                                is LocalBackupActionState.Error -> {
+                                    Surface(
+                                        color = ExpenseCoral.copy(alpha = 0.12f),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = state.message,
+                                            color = ExpenseCoral,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.padding(10.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 1.5 Export Bills / Books to CSV / XLSX / JSON with optional analysis text
+            item(key = "local_export_spreadsheet_card") {
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_LOCAL_BACKUP, "local_export_spreadsheet_card")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("本地数据导出与恢复", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "当前账本共有 $txCount 笔账单、$ruleCount 条识别规则。导出为完整 JSON 备份文件，恢复时将智能去重合并。",
+                            text = settingsHighlightedText("导出账单 / 账本文件 (CSV / XLSX / JSON)", ROUTE_SETTINGS_LOCAL_BACKUP),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = settingsHighlightedText(
+                                "支持导出全部账单或指定账本为 CSV、Excel XLSX 表格或 JSON 文件，可选附带完整收支分析文本。",
+                                ROUTE_SETTINGS_LOCAL_BACKUP
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-
-                        val lastBackupText = if (settings.lastLocalBackupMillis > 0L) {
-                            "上次本地备份：${formatDateTimeFull(settings.lastLocalBackupMillis)}"
-                        } else {
-                            "尚未执行过本地文件备份"
-                        }
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = lastBackupText,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Button(
-                                enabled = !isWorking,
-                                onClick = {
-                                    exportLauncher.launch(LocalBackupManager.buildDefaultBackupFileName())
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("local_export_backup_button")
+                        if (books.isNotEmpty()) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(AppIcons.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("导出本地备份")
-                            }
-
-                            OutlinedButton(
-                                enabled = !isWorking,
-                                onClick = {
-                                    restoreLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("local_restore_backup_button")
-                            ) {
-                                Icon(AppIcons.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("从备份恢复")
-                            }
-                        }
-
-                        when (val state = backupState) {
-                            is LocalBackupActionState.Idle -> Unit
-                            is LocalBackupActionState.Working -> {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                    Text(state.label, style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                            is LocalBackupActionState.Success -> {
-                                Surface(
-                                    color = IncomeJade.copy(alpha = 0.12f),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        text = state.message,
-                                        color = IncomeJade,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.padding(10.dp)
+                                FilterChip(
+                                    selected = selectedExportBookId == null,
+                                    onClick = { selectedExportBookId = null },
+                                    label = { Text("全部账单") }
+                                )
+                                books.forEach { book ->
+                                    FilterChip(
+                                        selected = selectedExportBookId == book.id,
+                                        onClick = { selectedExportBookId = book.id },
+                                        label = { Text(book.name) }
                                     )
                                 }
                             }
-                            is LocalBackupActionState.Error -> {
-                                Surface(
-                                    color = ExpenseCoral.copy(alpha = 0.12f),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        text = state.message,
-                                        color = ExpenseCoral,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.padding(10.dp)
-                                    )
-                                }
-                            }
+                        }
+                        Button(
+                            enabled = allTransactions.isNotEmpty(),
+                            onClick = { showFileExportDialog = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .minimumInteractiveComponentSize()
+                                .testTag("local_export_spreadsheet_button")
+                        ) {
+                            Icon(AppIcons.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("选择格式并导出（CSV / XLSX / JSON）")
                         }
                     }
                 }
@@ -409,5 +497,26 @@ fun LocalBackupScreen(
                 }
             }
         }
+    }
+
+    if (showFileExportDialog) {
+        val chosenBook = selectedExportBookId?.let { id -> books.firstOrNull { it.id == id } }
+        val exportTxs = remember(chosenBook, allTransactions, bookLinks) {
+            if (chosenBook == null) {
+                allTransactions
+            } else {
+                val ids = bookLinks.filter { it.bookId == chosenBook.id }.mapTo(HashSet()) { it.transactionId }
+                allTransactions.filter { it.id in ids }
+            }
+        }
+        com.example.ui.components.LedgerExportDialog(
+            scopeTitle = chosenBook?.let { "账本「${it.name}」" } ?: "全部账单",
+            transactions = exportTxs,
+            baseCurrencyCode = settings.baseCurrencyCode,
+            ratesToCny = exchangeRates.ratesToCny,
+            bookName = chosenBook?.name,
+            onDismiss = { showFileExportDialog = false },
+            onExportFeedback = { msg -> onShowMessage(msg) }
+        )
     }
 }

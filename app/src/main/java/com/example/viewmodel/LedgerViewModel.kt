@@ -119,7 +119,15 @@ data class DeleteUndoBanner(
     val dismissedInquiries: List<NotificationInquiry> = emptyList(),
     val createdNonBillRuleId: String? = null,
     val previousNonBillRuleSnapshot: CustomParsingRule? = null,
-    val isNonBillMark: Boolean = false
+    val isNonBillMark: Boolean = false,
+    val isBatchModify: Boolean = false
+)
+
+data class SettingsHighlightTarget(
+    val route: String,
+    val sectionKey: String,
+    val query: String,
+    val token: Long = System.nanoTime()
 )
 
 class LedgerViewModel(
@@ -191,6 +199,23 @@ class LedgerViewModel(
 
     fun closeBookDetail() {
         _openBookDetailId.value = null
+    }
+
+    private val _settingsHighlightTarget = MutableStateFlow<SettingsHighlightTarget?>(null)
+    val settingsHighlightTarget: StateFlow<SettingsHighlightTarget?> = _settingsHighlightTarget.asStateFlow()
+
+    fun requestSettingsHighlight(route: String, sectionKey: String, query: String) {
+        val cleanQuery = query.trim()
+        _settingsHighlightTarget.value = SettingsHighlightTarget(
+            route = route,
+            sectionKey = sectionKey,
+            query = cleanQuery,
+            token = System.nanoTime()
+        )
+    }
+
+    fun clearSettingsHighlight() {
+        _settingsHighlightTarget.value = null
     }
 
     val inquiriesState: StateFlow<List<NotificationInquiry>> =
@@ -317,6 +342,10 @@ class LedgerViewModel(
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
 
+    fun postActionMessage(message: String) {
+        _actionMessage.value = message
+    }
+
     fun clearActionMessage() {
         _actionMessage.value = null
     }
@@ -365,6 +394,9 @@ class LedgerViewModel(
                         } else {
                             "已撤销删除，恢复 ${banner.deletedRules.size} 条规则"
                         }
+                    }
+                    banner.isBatchModify && banner.deletedItems.isNotEmpty() -> {
+                        "已撤销修改，恢复 ${banner.deletedItems.size} 笔账单原状态"
                     }
                     banner.deletedItems.isNotEmpty() -> {
                         "已撤销删除，恢复 ${banner.deletedItems.size} 笔账单"
@@ -621,6 +653,35 @@ class LedgerViewModel(
         }
     }
 
+    fun convertTransactionsToNonCountingTransfer(txIds: Collection<String>) {
+        viewModelScope.launch {
+            val idSet = txIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            if (idSet.isEmpty()) return@launch
+            val previousSnapshot = repository.getTransactionsByIdsOnce(idSet)
+            repository.batchUpdateTransactions(
+                txIds = idSet,
+                type = TransactionType.TRANSFER,
+                category = "不计收支"
+            )
+                .onSuccess { count ->
+                    if (count > 0 && previousSnapshot.isNotEmpty()) {
+                        val label = if (count == 1) {
+                            "已将「${previousSnapshot.first().merchant}」改为不计收支的转账"
+                        } else {
+                            "已将 $count 笔重复账单改为不计收支的转账"
+                        }
+                        _deleteUndoBanner.value = DeleteUndoBanner(
+                            id = System.nanoTime(),
+                            message = label,
+                            deletedItems = previousSnapshot,
+                            isBatchModify = true
+                        )
+                    }
+                }
+                .onFailure { _actionMessage.value = "转换失败：${it.localizedMessage ?: "请重试"}" }
+        }
+    }
+
     fun resolveInquiry(
         inquiry: NotificationInquiry,
         amountCents: Long,
@@ -719,12 +780,14 @@ class LedgerViewModel(
             return
         }
         val rules = (rulesState.value as? UiState.Success)?.data ?: emptyList()
+        val activeChannels = com.example.model.ChannelCatalog.activeChannels(settingsState.value)
         val parsed = ChinaNotificationParser.parse(
             packageName = packageName,
             title = title,
             content = content,
             customRules = rules,
-            enableLocalSemanticPass = enableSemanticPass
+            enableLocalSemanticPass = enableSemanticPass,
+            customChannels = activeChannels
         )
         if (parsed != null && parsed.isFinancialTransaction) {
             _parseBenchState.value = ParseBenchState.Parsed(parsed, title, content)
@@ -751,6 +814,7 @@ class LedgerViewModel(
             }
             val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
             val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settingsState.value)
+            val activeChannels = com.example.model.ChannelCatalog.activeChannels(settingsState.value)
             val result = aiManager.enhanceOrParseNotification(
                 context = context,
                 config = config,
@@ -759,7 +823,8 @@ class LedgerViewModel(
                 content = content,
                 fallbackParsed = null,
                 availableRules = rules,
-                activeCategories = activeCategories
+                activeCategories = activeCategories,
+                activeChannels = activeChannels
             )
             result
                 .onSuccess { parsed ->
@@ -965,6 +1030,95 @@ class LedgerViewModel(
                 }
                 .onFailure { err ->
                     _actionMessage.value = err.message ?: "恢复默认分类失败"
+                }
+        }
+    }
+
+    fun addCustomChannel(name: String, syncAiPrompt: Boolean = true) {
+        viewModelScope.launch {
+            repository.addCustomChannel(rawName = name, syncAiPrompt = syncAiPrompt)
+                .onSuccess { res ->
+                    val aiSuffix = if (res.aiPromptSynced) "，已同步 AI 理解提示词" else ""
+                    _actionMessage.value = "已添加渠道「${name.trim()}」$aiSuffix"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = err.message ?: "添加渠道失败"
+                }
+        }
+    }
+
+    fun renameChannel(
+        oldName: String,
+        newName: String,
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true,
+        syncAiPrompt: Boolean = true
+    ) {
+        viewModelScope.launch {
+            repository.renameChannel(
+                oldName = oldName,
+                rawNewName = newName,
+                syncTransactions = syncTransactions,
+                syncRules = syncRules,
+                syncAiPrompt = syncAiPrompt
+            )
+                .onSuccess { res ->
+                    val details = buildList {
+                        if (syncTransactions) add("${res.updatedTransactions} 笔账单")
+                        if (syncRules) add("${res.updatedRules} 条规则")
+                        if (res.aiPromptSynced) add("AI 提示词")
+                    }.joinToString("、")
+                    val suffix = if (details.isNotEmpty()) "（已同步 $details）" else ""
+                    _actionMessage.value = "已将渠道「$oldName」改为「${newName.trim()}」$suffix"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = err.message ?: "修改渠道失败"
+                }
+        }
+    }
+
+    fun deleteChannel(
+        targetName: String,
+        fallbackChannel: String = "其他",
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true,
+        syncAiPrompt: Boolean = true
+    ) {
+        viewModelScope.launch {
+            repository.deleteChannel(
+                targetName = targetName,
+                fallbackChannel = fallbackChannel,
+                syncTransactions = syncTransactions,
+                syncRules = syncRules,
+                syncAiPrompt = syncAiPrompt
+            )
+                .onSuccess { res ->
+                    val details = buildList {
+                        if (syncTransactions && res.updatedTransactions > 0) add("${res.updatedTransactions} 笔账单归入「$fallbackChannel」")
+                        if (syncRules && res.updatedRules > 0) add("${res.updatedRules} 条规则归入「$fallbackChannel」")
+                        if (res.aiPromptSynced) add("已同步 AI 提示词")
+                    }.joinToString("，")
+                    val suffix = if (details.isNotEmpty()) "（$details）" else ""
+                    _actionMessage.value = "已删除渠道「$targetName」$suffix"
+                }
+                .onFailure { err ->
+                    _actionMessage.value = err.message ?: "删除渠道失败"
+                }
+        }
+    }
+
+    fun resetChannelsToDefault(syncAiPrompt: Boolean = true) {
+        viewModelScope.launch {
+            repository.resetChannelsToDefault(syncAiPrompt = syncAiPrompt)
+                .onSuccess {
+                    _actionMessage.value = if (syncAiPrompt) {
+                        "已恢复默认渠道列表并同步 AI 提示词"
+                    } else {
+                        "已恢复默认渠道列表"
+                    }
+                }
+                .onFailure { err ->
+                    _actionMessage.value = err.message ?: "恢复默认渠道失败"
                 }
         }
     }

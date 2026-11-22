@@ -811,6 +811,7 @@ data class BudgetSettings(
     val incomeCategories: List<String> = CategoryCatalog.incomeCategories,
     val transferCategories: List<String> = CategoryCatalog.transferCategories,
     val categoryIcons: Map<String, String> = emptyMap(),
+    val customChannels: List<String> = ChannelCatalog.defaultChannels,
     val dedupExcludedTransactionIds: List<String> = emptyList()
 )
 
@@ -969,3 +970,125 @@ object CategoryCatalog {
         return result.toList()
     }
 }
+
+object ChannelCatalog {
+    val defaultChannels: List<String> = listOf(
+        "支付宝",
+        "微信支付",
+        "云闪付",
+        "银行卡",
+        "招商银行",
+        "工商银行",
+        "建设银行",
+        "农业银行",
+        "中国银行",
+        "交通银行",
+        "邮储银行",
+        "平安银行",
+        "中信银行",
+        "浦发银行",
+        "兴业银行",
+        "民生银行",
+        "光大银行",
+        "广发银行",
+        "京东金融",
+        "现金",
+        "其他"
+    )
+
+    private val alipaySubChannels = setOf("花呗", "蚂蚁花呗", "花呗分期", "余额宝")
+    private val wechatSubChannels = setOf("零钱", "微信零钱", "零钱通")
+
+    fun attributeSingleChannelToken(rawToken: String): String {
+        val token = rawToken.trim()
+        if (token.isEmpty()) return token
+        if (token in alipaySubChannels ||
+            token.contains("花呗") ||
+            token.contains("余额宝")
+        ) {
+            return "支付宝"
+        }
+        if (token in wechatSubChannels ||
+            token.contains("零钱通") ||
+            token == "零钱" ||
+            token.contains("微信零钱")
+        ) {
+            return "微信支付"
+        }
+        return token
+    }
+
+    /**
+     * Normalizes recognized payment channels during notification/import/AI parsing:
+     * - "花呗" / "余额宝" -> "支付宝"
+     * - "零钱" / "零钱通" -> "微信支付"
+     * Preserves composite channels separated by '&' (deduplicating mapped tokens in order).
+     */
+    fun normalizeRecognizedChannel(rawChannel: String?): String {
+        val trimmed = rawChannel?.trim().orEmpty()
+        if (trimmed.isEmpty()) return "未知渠道"
+        val parts = ChannelSplitter.splitChannels(trimmed)
+        if (parts.size <= 1) {
+            return attributeSingleChannelToken(parts.firstOrNull() ?: trimmed).ifBlank { "未知渠道" }
+        }
+        val mapped = parts
+            .map { attributeSingleChannelToken(it) }
+            .filter { it.isNotBlank() }
+            .distinct()
+        return if (mapped.isEmpty()) "未知渠道" else mapped.joinToString("&").take(60)
+    }
+
+    fun normalizeChannelList(raw: List<String>, defaults: List<String> = defaultChannels): List<String> {
+        val cleaned = raw
+            .map { it.trim().take(28) }
+            .filter { it.isNotEmpty() && it != "自动" && it != "未知渠道" && it != "已忽略" }
+            .distinct()
+        return if (cleaned.isEmpty()) defaults else cleaned
+    }
+
+    fun activeChannels(settings: BudgetSettings?): List<String> =
+        normalizeChannelList(settings?.customChannels ?: defaultChannels, defaultChannels)
+
+    fun allExistingChannels(
+        settings: BudgetSettings?,
+        transactions: List<LedgerTransaction>,
+        rules: List<CustomParsingRule>
+    ): List<String> {
+        val result = LinkedHashSet<String>()
+        result.addAll(activeChannels(settings))
+        transactions.forEach { tx ->
+            ChannelSplitter.splitChannels(tx.channel).forEach { token ->
+                val clean = token.trim().take(28)
+                if (clean.isNotEmpty() && clean != "自动" && clean != "未知渠道" && clean != "已忽略") {
+                    result.add(clean)
+                }
+            }
+        }
+        rules.forEach { rule ->
+            if (!rule.isIgnoreRule) {
+                ChannelSplitter.splitChannels(rule.channelName).forEach { token ->
+                    val clean = token.trim().take(28)
+                    if (clean.isNotEmpty() && clean != "自动" && clean != "未知渠道" && clean != "已忽略") {
+                        result.add(clean)
+                    }
+                }
+            }
+        }
+        return result.toList()
+    }
+
+    fun replaceChannelToken(rawChannel: String, oldName: String, newName: String): String {
+        val cleanOld = oldName.trim()
+        val cleanNew = newName.trim().take(28)
+        if (cleanOld.isEmpty() || cleanNew.isEmpty()) return rawChannel
+        if (rawChannel.trim().equals(cleanOld, ignoreCase = true)) return cleanNew
+        val parts = ChannelSplitter.splitChannels(rawChannel)
+        if (parts.none { it.equals(cleanOld, ignoreCase = true) }) return rawChannel
+        val replaced = parts
+            .map { if (it.equals(cleanOld, ignoreCase = true)) cleanNew else it }
+            .filter { it.isNotBlank() }
+            .distinct()
+        return if (replaced.isEmpty()) cleanNew else replaced.joinToString("&").take(60)
+    }
+}
+

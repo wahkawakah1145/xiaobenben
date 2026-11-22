@@ -269,9 +269,11 @@ fun AppNavigation(
             val storageFootprint by viewModel.storageFootprintState.collectAsStateWithLifecycle()
             val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
             val deleteUndoBanner by viewModel.deleteUndoBanner.collectAsStateWithLifecycle()
+            val settingsHighlight by viewModel.settingsHighlightTarget.collectAsStateWithLifecycle()
 
             CompositionLocalProvider(
-                com.example.ui.components.LocalCategoryIcons provides settings.categoryIcons
+                com.example.ui.components.LocalCategoryIcons provides settings.categoryIcons,
+                LocalSettingsHighlight provides settingsHighlight
             ) {
 
             LaunchedEffect(settings.exchangeRateUpdateFrequency) {
@@ -484,6 +486,7 @@ fun AppNavigation(
                 }
                 ROUTE_SETTINGS_MANUAL_IMPORT -> "从文档或文本导入"
                 ROUTE_SETTINGS_CATEGORIES -> "分类管理"
+                ROUTE_SETTINGS_CHANNELS -> "渠道管理"
                 ROUTE_SETTINGS_BILL_BEHAVIOR -> "记账与预算"
                 ROUTE_SETTINGS_CURRENCY -> "币种与汇率"
                 ROUTE_SETTINGS_DEDUP -> "智能去重"
@@ -514,6 +517,9 @@ fun AppNavigation(
             var suppressNextPopTransition by remember { mutableStateOf(false) }
 
             LaunchedEffect(currentRoute) {
+                if (currentRoute == ROUTE_MAIN_TABS && settingsHighlight != null) {
+                    viewModel.clearSettingsHighlight()
+                }
                 if (suppressNextPopTransition) {
                     delay(80)
                     suppressNextPopTransition = false
@@ -597,6 +603,10 @@ fun AppNavigation(
                             onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) },
                             onOpenPermissions = { navController.navigate(ROUTE_SETTINGS_PERMISSIONS) },
                             onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) },
+                            onOpenSearchResult = { item, query ->
+                                viewModel.requestSettingsHighlight(item.route, item.sectionKey, query)
+                                navController.navigate(item.route) { launchSingleTop = true }
+                            },
                             listState = settingsListState
                         )
                     }
@@ -607,6 +617,7 @@ fun AppNavigation(
                         booksCount = books.size,
                         onOpenBooks = { navController.navigate(ROUTE_SETTINGS_BOOKS) },
                         onOpenCategories = { navController.navigate(ROUTE_SETTINGS_CATEGORIES) },
+                        onOpenChannels = { navController.navigate(ROUTE_SETTINGS_CHANNELS) },
                         onOpenManualImport = { navController.navigate(ROUTE_SETTINGS_MANUAL_IMPORT) },
                         onOpenBehaviorBudget = { navController.navigate(ROUTE_SETTINGS_BILL_BEHAVIOR) },
                         onOpenCurrencyRates = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
@@ -656,6 +667,9 @@ fun AppNavigation(
                         rulesState = rulesState,
                         viewModel = viewModel
                     )
+                    ROUTE_SETTINGS_CHANNELS -> ChannelManagementScreen(
+                        viewModel = viewModel
+                    )
                     ROUTE_SETTINGS_BILL_BEHAVIOR -> BookkeepingBehaviorScreen(
                         settings = settings,
                         viewModel = viewModel,
@@ -686,7 +700,11 @@ fun AppNavigation(
                     ROUTE_SETTINGS_DATA_HUB -> DataHubScreen(
                         settings = settings,
                         viewModel = viewModel,
-                        initialTab = DataHubTab.LOCAL_BACKUP,
+                        initialTab = if (settingsHighlight?.route == ROUTE_SETTINGS_DATA_HUB && settingsHighlight?.sectionKey == "webdav_form") {
+                            DataHubTab.WEBDAV
+                        } else {
+                            DataHubTab.LOCAL_BACKUP
+                        },
                         onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_LOCAL_BACKUP -> DataHubScreen(
@@ -1056,6 +1074,10 @@ fun AppNavigation(
                                                     onOpenAppearance = { navController.navigate(ROUTE_SETTINGS_APPEARANCE) },
                                                     onOpenPermissions = { navController.navigate(ROUTE_SETTINGS_PERMISSIONS) },
                                                     onOpenAbout = { navController.navigate(ROUTE_SETTINGS_ABOUT) },
+                                                    onOpenSearchResult = { item, query ->
+                                                        viewModel.requestSettingsHighlight(item.route, item.sectionKey, query)
+                                                        navController.navigate(item.route) { launchSingleTop = true }
+                                                    },
                                                     listState = settingsListState
                                                 )
                                                 null -> Unit
@@ -1073,6 +1095,7 @@ fun AppNavigation(
                                 ROUTE_SETTINGS_LEDGER_MGMT,
                                 ROUTE_SETTINGS_BOOKS,
                                 ROUTE_SETTINGS_CATEGORIES,
+                                ROUTE_SETTINGS_CHANNELS,
                                 ROUTE_SETTINGS_MANUAL_IMPORT,
                                 ROUTE_BOOK_ANALYTICS,
                                 ROUTE_SETTINGS_BILL_BEHAVIOR,

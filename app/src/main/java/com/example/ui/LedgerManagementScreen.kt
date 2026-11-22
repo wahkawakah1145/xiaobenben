@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -69,6 +70,7 @@ fun BillToolsMenuScreen(
     booksCount: Int = 0,
     onOpenBooks: () -> Unit = {},
     onOpenCategories: () -> Unit = {},
+    onOpenChannels: () -> Unit = {},
     onOpenManualImport: () -> Unit = {},
     onOpenBehaviorBudget: () -> Unit,
     onOpenCurrencyRates: () -> Unit,
@@ -85,6 +87,7 @@ fun BillToolsMenuScreen(
     val rateFreq = ExchangeRateAutoUpdateFrequency.fromRaw(settings.exchangeRateUpdateFrequency)
     val txCount = (transactionsState as? UiState.Success)?.data?.size ?: storageFootprint.transactionCount
     val totalCategoryCount = com.example.model.CategoryCatalog.allActiveCategories(settings).size
+    val totalChannelCount = com.example.model.ChannelCatalog.activeChannels(settings).size
 
     val behaviorSummary = buildString {
         append(if (settings.autoRecordEnabled) "自动捕捉已开启" else "仅手动记账")
@@ -186,9 +189,17 @@ fun BillToolsMenuScreen(
                         BillToolMenuRow(
                             icon = AppIcons.ViewQuilt,
                             title = "分类管理（同步规则与 AI）",
-                            subtitle = "当前共 $totalCategoryCount 个分类 · 支持新增/改名并同步账单、规则与 AI 提示词",
+                            subtitle = "当前共 $totalCategoryCount 个分类 · 支持新增/改名/图标并同步账单、规则与 AI 提示词",
                             testTag = "bill_tool_categories",
                             onClick = onOpenCategories
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        BillToolMenuRow(
+                            icon = AppIcons.Payments,
+                            title = "渠道管理（同步规则与 AI）",
+                            subtitle = "当前共 $totalChannelCount 个渠道 · 花呗/余额宝归属支付宝，零钱/零钱通归属微信支付",
+                            testTag = "bill_tool_channels",
+                            onClick = onOpenChannels
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         BillToolMenuRow(
@@ -280,8 +291,16 @@ fun BookkeepingBehaviorScreen(
     }
     val baseCurrencyInfo = CurrencyCatalog.resolve(settings.baseCurrencyCode)
 
+    val listState = rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = listState,
+        route = ROUTE_SETTINGS_BILL_BEHAVIOR,
+        sectionKeysInOrder = listOf("behavior_preferences_card")
+    )
+
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -289,46 +308,59 @@ fun BookkeepingBehaviorScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item(key = "behavior_preferences_card") {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SettingsSearchArrivalBanner(
+                        route = ROUTE_SETTINGS_BILL_BEHAVIOR,
+                        onDismiss = { viewModel.clearSettingsHighlight() }
+                    )
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .settingsHighlightSection(ROUTE_SETTINGS_BILL_BEHAVIOR, "behavior_preferences_card")
                     ) {
-                        Text("记账行为与预算", style = MaterialTheme.typography.titleMedium)
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            Text(
+                                text = settingsHighlightedText("记账行为与预算", ROUTE_SETTINGS_BILL_BEHAVIOR),
+                                style = MaterialTheme.typography.titleMedium
+                            )
 
-                        BehaviorToggleRow(
-                            title = "自动记录通知",
-                            subtitle = "收到支付或银行通知时自动解析账单（复杂通知可配合「AI理解」识别）",
-                            checked = settings.autoRecordEnabled,
-                            testTag = "toggle_auto_record",
-                            onCheckedChange = { checked ->
-                                viewModel.saveSettings(settings.copy(autoRecordEnabled = checked))
-                            }
-                        )
+                            BehaviorToggleRow(
+                                title = "自动记录通知",
+                                subtitle = "收到支付或银行通知时自动解析账单（复杂通知可配合「AI理解」识别）",
+                                checked = settings.autoRecordEnabled,
+                                testTag = "toggle_auto_record",
+                                route = ROUTE_SETTINGS_BILL_BEHAVIOR,
+                                onCheckedChange = { checked ->
+                                    viewModel.saveSettings(settings.copy(autoRecordEnabled = checked))
+                                }
+                            )
 
-                        BehaviorToggleRow(
-                            title = "自动记录，进本软件后手动确认",
-                            subtitle = "开启后，自动捕捉的账单先进入「待确认」列表，确认后才计入统计",
-                            checked = settings.requireManualConfirm,
-                            testTag = "toggle_manual_confirm",
-                            onCheckedChange = { checked ->
-                                viewModel.saveSettings(settings.copy(requireManualConfirm = checked))
-                            }
-                        )
+                            BehaviorToggleRow(
+                                title = "自动记录，进本软件后手动确认",
+                                subtitle = "开启后，自动捕捉的账单先进入「待确认」列表，确认后才计入统计",
+                                checked = settings.requireManualConfirm,
+                                testTag = "toggle_manual_confirm",
+                                route = ROUTE_SETTINGS_BILL_BEHAVIOR,
+                                onCheckedChange = { checked ->
+                                    viewModel.saveSettings(settings.copy(requireManualConfirm = checked))
+                                }
+                            )
 
-                        BehaviorToggleRow(
-                            title = "入账后发送通知提醒",
-                            subtitle = "在状态栏提示已识别金额与分类",
-                            checked = settings.notifyOnRecorded,
-                            testTag = "toggle_notify_recorded",
-                            onCheckedChange = { checked ->
-                                viewModel.saveSettings(settings.copy(notifyOnRecorded = checked))
-                            }
-                        )
+                            BehaviorToggleRow(
+                                title = "入账后发送通知提醒",
+                                subtitle = "在状态栏提示已识别金额与分类",
+                                checked = settings.notifyOnRecorded,
+                                testTag = "toggle_notify_recorded",
+                                route = ROUTE_SETTINGS_BILL_BEHAVIOR,
+                                onCheckedChange = { checked ->
+                                    viewModel.saveSettings(settings.copy(notifyOnRecorded = checked))
+                                }
+                            )
 
                         HorizontalDivider()
 
@@ -368,6 +400,7 @@ fun BookkeepingBehaviorScreen(
                             }
                         }
                     }
+                    }
                 }
             }
         }
@@ -388,8 +421,16 @@ fun StorageOptimizationScreen(
         viewModel.refreshStorageFootprint(context)
     }
 
+    val listState = rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = listState,
+        route = ROUTE_SETTINGS_STORAGE_OPT,
+        sectionKeysInOrder = listOf("storage_overview", "storage_actions")
+    )
+
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -397,31 +438,41 @@ fun StorageOptimizationScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item(key = "storage_overview") {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SettingsSearchArrivalBanner(
+                        route = ROUTE_SETTINGS_STORAGE_OPT,
+                        onDismiss = { viewModel.clearSettingsHighlight() }
+                    )
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .settingsHighlightSection(ROUTE_SETTINGS_STORAGE_OPT, "storage_overview")
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = AppIcons.Storage,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                                Text("用户数据空间统计", style = MaterialTheme.typography.titleMedium)
-                            }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.Storage,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = settingsHighlightedText("用户数据空间统计", ROUTE_SETTINGS_STORAGE_OPT),
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                }
                             OutlinedButton(
                                 enabled = !optimizing,
                                 onClick = { viewModel.refreshStorageFootprint(context) },
@@ -467,6 +518,7 @@ fun StorageOptimizationScreen(
                         StorageBreakdownRow("偏好与规则设置 (DataStore)", formatStorageBytes(footprint.preferencesBytes))
                         StorageBreakdownRow("本地 AI 模型目录", formatStorageBytes(footprint.aiModelBytes))
                         StorageBreakdownRow("临时缓存目录", formatStorageBytes(footprint.cacheBytes))
+                    }
                     }
                 }
             }
@@ -576,6 +628,7 @@ private fun BehaviorToggleRow(
     subtitle: String,
     checked: Boolean,
     testTag: String,
+    route: String? = null,
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
@@ -584,8 +637,16 @@ private fun BehaviorToggleRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = settingsHighlightedText(title, route),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = settingsHighlightedText(subtitle, route),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         Switch(
             checked = checked,

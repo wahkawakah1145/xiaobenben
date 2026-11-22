@@ -12,20 +12,31 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Search
 import com.example.ui.theme.AppIcons
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -55,10 +66,16 @@ fun SettingsScreen(
     onOpenAppearance: () -> Unit,
     onOpenPermissions: () -> Unit,
     onOpenAbout: () -> Unit,
+    onOpenSearchResult: (SettingsSearchItem, String) -> Unit = { _, _ -> },
     listState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val searchResults = remember(searchQuery) {
+        SettingsSearchCatalog.search(searchQuery)
+    }
+
     val baseCurrencyInfo = CurrencyCatalog.resolve(settings.baseCurrencyCode)
     val rateFreq = ExchangeRateAutoUpdateFrequency.fromRaw(settings.exchangeRateUpdateFrequency)
     val aiStatusSummary = when (aiConfig.providerMode) {
@@ -89,80 +106,201 @@ fun SettingsScreen(
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            item(key = "core_ledger_menus") {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                        SettingsNavRow(
-                            icon = AppIcons.AccountBalanceWallet,
-                            title = "账单工具",
-                            subtitle = "账本 · 文档/剪贴板导入 · 预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 秒级去重 · 存储优化",
-                            testTag = "menu_ledger_management",
-                            onClick = onOpenLedgerManagement
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        SettingsNavRow(
-                            icon = AppIcons.Rule,
-                            title = "通知识别与规则",
-                            subtitle = "通知解析测试、自定义关键词与银行规则",
-                            testTag = "menu_parser_rules",
-                            onClick = onOpenParser
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        SettingsNavRow(
-                            icon = AppIcons.Psychology,
-                            title = "AI理解",
-                            subtitle = aiStatusSummary,
-                            testTag = "menu_ai_settings",
-                            onClick = onOpenAiSettings
-                        )
-                    }
-                }
+            item(key = "settings_search_bar") {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("搜索设置项（如：渠道、去重、DPI、OLED、趋势、导出）") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(
+                                onClick = { searchQuery = "" },
+                                modifier = Modifier.testTag("settings_search_clear")
+                            ) {
+                                Icon(Icons.Rounded.Close, contentDescription = "清空设置搜索")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_search_input")
+                )
             }
 
-            item(key = "system_and_about_menus") {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                        SettingsNavRow(
-                            icon = AppIcons.FolderCopy,
-                            title = "备份与恢复",
-                            subtitle = "本地备份导出与恢复 · 定时备份提醒 · WebDAV 云端同步",
-                            testTag = "menu_data_hub",
-                            onClick = onOpenDataHub
+            if (searchQuery.isNotBlank()) {
+                if (searchResults.isEmpty()) {
+                    item(key = "settings_search_empty") {
+                        Card(
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(20.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text("未找到匹配的设置项", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    text = "可尝试搜索：预算、分类、渠道、去重、汇率、AI、提示词、备份、导出、主题、OLED、DPI、底栏、图标、权限",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    item(key = "settings_search_count") {
+                        Text(
+                            text = "找到 ${searchResults.size} 个匹配设置项，点击直达并高亮定位",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        SettingsNavRow(
-                            icon = AppIcons.Palette,
-                            title = "外观与布局",
-                            subtitle = "主题配色、DPI 密度、主页与导航、提示横栏时长、图标与快捷方式",
-                            testTag = "menu_appearance",
-                            onClick = onOpenAppearance
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        SettingsNavRow(
-                            icon = AppIcons.Security,
-                            title = "权限管理",
-                            subtitle = permissionSummary,
-                            testTag = "menu_permissions",
-                            onClick = onOpenPermissions
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        SettingsNavRow(
-                            icon = Icons.Rounded.Info,
-                            title = "关于",
-                            subtitle = "版本 v${BuildConfig.VERSION_NAME} · 手动检查更新 · GitHub 仓库与协议",
-                            testTag = "menu_about",
-                            onClick = onOpenAbout
-                        )
+                    }
+                    items(searchResults, key = { "search_${it.id}" }) { item ->
+                        val primaryColor = MaterialTheme.colorScheme.primary
+                        Card(
+                            onClick = { onOpenSearchResult(item, searchQuery.trim()) },
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_search_result_${item.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                    ) {
+                                        Text(
+                                            text = buildHighlightedSettingsAnnotatedString(
+                                                text = item.categoryLabel,
+                                                rawQuery = searchQuery,
+                                                highlightColor = primaryColor
+                                            ),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = buildHighlightedSettingsAnnotatedString(
+                                            text = item.title,
+                                            rawQuery = searchQuery,
+                                            highlightColor = primaryColor
+                                        ),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = buildHighlightedSettingsAnnotatedString(
+                                            text = item.subtitle,
+                                            rawQuery = searchQuery,
+                                            highlightColor = primaryColor
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                item(key = "core_ledger_menus") {
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                            SettingsNavRow(
+                                icon = AppIcons.AccountBalanceWallet,
+                                title = "账单工具",
+                                subtitle = "账本 · 分类与渠道 · 文档/文本导入 · 预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 去重 · 存储",
+                                testTag = "menu_ledger_management",
+                                onClick = onOpenLedgerManagement
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                            SettingsNavRow(
+                                icon = AppIcons.Rule,
+                                title = "通知识别与规则",
+                                subtitle = "通知解析测试、自定义关键词与银行规则",
+                                testTag = "menu_parser_rules",
+                                onClick = onOpenParser
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                            SettingsNavRow(
+                                icon = AppIcons.Psychology,
+                                title = "AI理解",
+                                subtitle = aiStatusSummary,
+                                testTag = "menu_ai_settings",
+                                onClick = onOpenAiSettings
+                            )
+                        }
+                    }
+                }
+
+                item(key = "system_and_about_menus") {
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                            SettingsNavRow(
+                                icon = AppIcons.FolderCopy,
+                                title = "备份与恢复",
+                                subtitle = "本地备份与 CSV/XLSX/JSON 导出 · 定时备份提醒 · WebDAV 云同步",
+                                testTag = "menu_data_hub",
+                                onClick = onOpenDataHub
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                            SettingsNavRow(
+                                icon = AppIcons.Palette,
+                                title = "外观与布局",
+                                subtitle = "主题配色、DPI 密度、主页与导航、提示横栏时长、图标与快捷方式",
+                                testTag = "menu_appearance",
+                                onClick = onOpenAppearance
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                            SettingsNavRow(
+                                icon = AppIcons.Security,
+                                title = "权限管理",
+                                subtitle = permissionSummary,
+                                testTag = "menu_permissions",
+                                onClick = onOpenPermissions
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                            SettingsNavRow(
+                                icon = Icons.Rounded.Info,
+                                title = "关于",
+                                subtitle = "版本 v${BuildConfig.VERSION_NAME} · 手动检查更新 · GitHub 仓库与协议",
+                                testTag = "menu_about",
+                                onClick = onOpenAbout
+                            )
+                        }
                     }
                 }
             }

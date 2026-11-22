@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -167,13 +168,22 @@ fun WebDavSettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_DATA_HUB, "webdav_form")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("WebDAV 服务器配置", style = MaterialTheme.typography.titleMedium)
+                        SettingsSearchArrivalBanner(
+                            route = ROUTE_SETTINGS_DATA_HUB,
+                            onDismiss = { viewModel.clearSettingsHighlight() }
+                        )
+                        Text(
+                            text = settingsHighlightedText("WebDAV 服务器配置", ROUTE_SETTINGS_DATA_HUB),
+                            style = MaterialTheme.typography.titleMedium
+                        )
 
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             AssistChip(
@@ -405,15 +415,27 @@ fun CurrencySettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_CURRENCY, "base_currency")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("统计主币种", style = MaterialTheme.typography.titleMedium)
+                        SettingsSearchArrivalBanner(
+                            route = ROUTE_SETTINGS_CURRENCY,
+                            onDismiss = { viewModel.clearSettingsHighlight() }
+                        )
                         Text(
-                            text = "不同币种的账单将按汇率数据库折算为主币种计入统计（默认展示人民币及已启用的 ${enabledForeignCurrencies.size} 种常用外币）。",
+                            text = settingsHighlightedText("统计主币种", ROUTE_SETTINGS_CURRENCY),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = settingsHighlightedText(
+                                "不同币种的账单将按汇率数据库折算为主币种计入统计（默认展示人民币及已启用的 ${enabledForeignCurrencies.size} 种常用外币）。",
+                                ROUTE_SETTINGS_CURRENCY
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -829,14 +851,28 @@ fun ManualImportScreen(
         }
     }
 
+    val listState = rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = listState,
+        route = ROUTE_SETTINGS_MANUAL_IMPORT,
+        sectionKeysInOrder = listOf("import_arrival_banner", "import_options_card", "import_file_card")
+    )
+
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            item(key = "import_arrival_banner") {
+                SettingsSearchArrivalBanner(
+                    route = ROUTE_SETTINGS_MANUAL_IMPORT,
+                    onDismiss = { viewModel.clearSettingsHighlight() }
+                )
+            }
             item(key = "import_options_card") {
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -847,7 +883,10 @@ fun ManualImportScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("导入解析增强选项", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = settingsHighlightedText("导入解析增强选项", ROUTE_SETTINGS_MANUAL_IMPORT),
+                            style = MaterialTheme.typography.titleMedium
+                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -905,15 +944,23 @@ fun ManualImportScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_MANUAL_IMPORT, "import_file_card")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("从文档导入", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "支持微信/支付宝标准 11 列表头及农业银行等银行流水表头（交易日期、交易时间、交易摘要、交易金额、本次余额、对手信息、日志号、交易渠道、交易附言）的 XLSX / CSV / JSON 文件；数字日期时间自动智能转为时间戳，并自动识别重复条目默认仅导入新增记录。",
+                            text = settingsHighlightedText("从文档导入", ROUTE_SETTINGS_MANUAL_IMPORT),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = settingsHighlightedText(
+                                "支持微信/支付宝标准 11 列表头及农业银行等银行流水表头（交易日期、交易时间、交易摘要、交易金额、本次余额、对手信息、日志号、交易渠道、交易附言）的 XLSX / CSV / JSON 文件；数字日期时间自动智能转为时间戳，并自动识别重复条目默认仅导入新增记录。",
+                                ROUTE_SETTINGS_MANUAL_IMPORT
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1616,8 +1663,16 @@ fun AppearanceThemeSettingsScreen(
     val supportsMonet = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     var showColorPickerDialog by remember { mutableStateOf(false) }
 
+    val themeListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = themeListState,
+        route = ROUTE_SETTINGS_APPEARANCE_THEME,
+        sectionKeysInOrder = listOf("color_and_palette", "theme_mode_and_oled")
+    )
+
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = themeListState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -1628,13 +1683,22 @@ fun AppearanceThemeSettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_THEME, "color_and_palette")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("色彩与调色板", style = MaterialTheme.typography.titleMedium)
+                        SettingsSearchArrivalBanner(
+                            route = ROUTE_SETTINGS_APPEARANCE_THEME,
+                            onDismiss = { viewModel.clearSettingsHighlight() }
+                        )
+                        Text(
+                            text = settingsHighlightedText("色彩与调色板", ROUTE_SETTINGS_APPEARANCE_THEME),
+                            style = MaterialTheme.typography.titleMedium
+                        )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1642,9 +1706,16 @@ fun AppearanceThemeSettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("莫奈动态取色 (Material You)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 Text(
-                                    text = if (supportsMonet) "跟随系统壁纸自动取色；开启后同样支持下方选择调色板衍生风格" else "当前系统低于 Android 12，自动使用自定义调色板",
+                                    text = settingsHighlightedText("莫奈动态取色 (Material You)", ROUTE_SETTINGS_APPEARANCE_THEME),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = settingsHighlightedText(
+                                        if (supportsMonet) "跟随系统壁纸自动取色；开启后同样支持下方选择调色板衍生风格" else "当前系统低于 Android 12，自动使用自定义调色板",
+                                        ROUTE_SETTINGS_APPEARANCE_THEME
+                                    ),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1734,13 +1805,18 @@ fun AppearanceThemeSettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_THEME, "theme_mode_and_oled")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("深浅色模式与屏幕优化", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = settingsHighlightedText("深浅色模式与屏幕优化", ROUTE_SETTINGS_APPEARANCE_THEME),
+                            style = MaterialTheme.typography.titleMedium
+                        )
 
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             ThemeMode.entries.forEach { mode ->
@@ -1760,7 +1836,11 @@ fun AppearanceThemeSettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("OLED 纯黑背景", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = settingsHighlightedText("OLED 纯黑背景", ROUTE_SETTINGS_APPEARANCE_THEME),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
                                 Text(
                                     text = if (oledAvailable) {
                                         "深色模式生效时使用 #000000 纯黑背景与低亮度表面层级"
@@ -1810,8 +1890,16 @@ fun AppearanceDisplaySettingsScreen(
     viewModel: LedgerViewModel,
     modifier: Modifier = Modifier
 ) {
+    val displayListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = displayListState,
+        route = ROUTE_SETTINGS_APPEARANCE_DISPLAY,
+        sectionKeysInOrder = listOf("font_selection", "page_dpi_scaling", "card_and_badge_styles")
+    )
+
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = displayListState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -1822,13 +1910,22 @@ fun AppearanceDisplaySettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_DISPLAY, "font_selection")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("英文与数字字体", style = MaterialTheme.typography.titleMedium)
+                        SettingsSearchArrivalBanner(
+                            route = ROUTE_SETTINGS_APPEARANCE_DISPLAY,
+                            onDismiss = { viewModel.clearSettingsHighlight() }
+                        )
+                        Text(
+                            text = settingsHighlightedText("英文与数字字体", ROUTE_SETTINGS_APPEARANCE_DISPLAY),
+                            style = MaterialTheme.typography.titleMedium
+                        )
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             LatinNumberFont.entries.forEach { font ->
                                 FilterChip(
@@ -1861,7 +1958,9 @@ fun AppearanceDisplaySettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_DISPLAY, "page_dpi_scaling")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
@@ -1873,7 +1972,10 @@ fun AppearanceDisplaySettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("页面缩放与显示密度 (DPI)", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = settingsHighlightedText("页面缩放与显示密度 (DPI)", ROUTE_SETTINGS_APPEARANCE_DISPLAY),
+                                    style = MaterialTheme.typography.titleMedium
+                                )
                                 Text(
                                     text = if (hasPendingDpiChange) {
                                         "已应用 ${(appearance.uiDensityScale * 100).roundToInt()}% · 待确认 ${(draftDpiScale * 100).roundToInt()}%，点击「应用」生效"
@@ -2085,8 +2187,21 @@ fun AppearanceHomeNavSettingsScreen(
     viewModel: LedgerViewModel,
     modifier: Modifier = Modifier
 ) {
+    val homeNavListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = homeNavListState,
+        route = ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
+        sectionKeysInOrder = listOf(
+            "bottom_tab_bar_customization",
+            "home_element_positions",
+            "home_brand_header_customization",
+            "home_tips_customization"
+        )
+    )
+
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = homeNavListState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -2101,18 +2216,27 @@ fun AppearanceHomeNavSettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_HOME_NAV, "bottom_tab_bar_customization")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
+                        SettingsSearchArrivalBanner(
+                            route = ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
+                            onDismiss = { viewModel.clearSettingsHighlight() }
+                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("底部导航栏自定义", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = settingsHighlightedText("底部导航栏自定义", ROUTE_SETTINGS_APPEARANCE_HOME_NAV),
+                                style = MaterialTheme.typography.titleMedium
+                            )
                             TextButton(
                                 onClick = {
                                     viewModel.saveAppearanceSettings(
@@ -2275,13 +2399,18 @@ fun AppearanceHomeNavSettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_HOME_NAV, "home_brand_header_customization")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("主页顶部品牌栏自定义", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = settingsHighlightedText("主页顶部品牌栏自定义", ROUTE_SETTINGS_APPEARANCE_HOME_NAV),
+                            style = MaterialTheme.typography.titleMedium
+                        )
 
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -2598,8 +2727,16 @@ fun AppearanceInteractionSettingsScreen(
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val interactionListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    SettingsAutoScrollEffect(
+        listState = interactionListState,
+        route = ROUTE_SETTINGS_APPEARANCE_INTERACTION,
+        sectionKeysInOrder = listOf("bottom_banner_durations", "navigation_and_gestures")
+    )
+
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
+            state = interactionListState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -2610,13 +2747,22 @@ fun AppearanceInteractionSettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_INTERACTION, "bottom_banner_durations")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("底部提示横栏停留时间", style = MaterialTheme.typography.titleMedium)
+                        SettingsSearchArrivalBanner(
+                            route = ROUTE_SETTINGS_APPEARANCE_INTERACTION,
+                            onDismiss = { viewModel.clearSettingsHighlight() }
+                        )
+                        Text(
+                            text = settingsHighlightedText("底部提示横栏停留时间", ROUTE_SETTINGS_APPEARANCE_INTERACTION),
+                            style = MaterialTheme.typography.titleMedium
+                        )
 
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text("全局提示型底部横栏停留时间", style = MaterialTheme.typography.labelLarge)
@@ -2686,13 +2832,18 @@ fun AppearanceInteractionSettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_INTERACTION, "navigation_and_gestures")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("导航动画与返回手势", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = settingsHighlightedText("导航动画与返回手势", ROUTE_SETTINGS_APPEARANCE_INTERACTION),
+                            style = MaterialTheme.typography.titleMedium
+                        )
 
                         Text("主页点击 Tab 切换动画（支持左右横滑切换页面）", style = MaterialTheme.typography.labelLarge)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2869,13 +3020,22 @@ fun AppearanceIconShortcutSettingsScreen(
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_ICON, "icon_style_settings")
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("图标风格", style = MaterialTheme.typography.titleMedium)
+                        SettingsSearchArrivalBanner(
+                            route = ROUTE_SETTINGS_APPEARANCE_ICON,
+                            onDismiss = { viewModel.clearSettingsHighlight() }
+                        )
+                        Text(
+                            text = settingsHighlightedText("图标风格", ROUTE_SETTINGS_APPEARANCE_ICON),
+                            style = MaterialTheme.typography.titleMedium
+                        )
                         Text(
                             text = if (hasPendingIconChange) {
                                 "已预选「${pendingStyle.label}」，点选不会立即切换；点击下方「应用并重启」确认后再切换桌面入口图标"

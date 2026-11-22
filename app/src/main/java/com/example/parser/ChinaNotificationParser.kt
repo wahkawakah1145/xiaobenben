@@ -1,5 +1,6 @@
 package com.example.parser
 
+import com.example.model.ChannelCatalog
 import com.example.model.CustomParsingRule
 import com.example.model.NumberFormatStyle
 import com.example.model.ParseMethod
@@ -246,7 +247,8 @@ object ChinaNotificationParser {
         content: String,
         customRules: List<CustomParsingRule> = emptyList(),
         enableLocalSemanticPass: Boolean = false,
-        referenceTimeMillis: Long = System.currentTimeMillis()
+        referenceTimeMillis: Long = System.currentTimeMillis(),
+        customChannels: List<String> = emptyList()
     ): ParsedNotificationResult? {
         val combined = "$title\n$content".trim()
         if (combined.isBlank()) return null
@@ -288,8 +290,9 @@ object ChinaNotificationParser {
         val currencyCode = detectCurrencyCode(combined)
 
         val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
-        val channel = matchedCustomRule?.channelName?.takeIf { it.isNotBlank() && it != "自动" }
-            ?: detectChannel(packageName, combined)
+        val rawChannel = matchedCustomRule?.channelName?.takeIf { it.isNotBlank() && it != "自动" }
+            ?: detectChannel(packageName, combined, customChannels)
+        val channel = ChannelCatalog.normalizeRecognizedChannel(rawChannel)
         val type = if (matchedCustomRule != null &&
             !matchedCustomRule.defaultType.equals("AUTO", ignoreCase = true) &&
             !matchedCustomRule.isIgnoreRule
@@ -767,7 +770,32 @@ object ChinaNotificationParser {
             .replace(Regex("""\d{1,2}:\d{2}(?::\d{2})?"""), " ")
     }
 
-    private fun detectChannel(packageName: String, text: String): String {
+    fun detectChannel(
+        packageName: String,
+        text: String,
+        customChannels: List<String> = emptyList()
+    ): String {
+        // Explicit sub-channel attribution first ("花呗"/"余额宝" -> "支付宝", "零钱"/"零钱通" -> "微信支付")
+        if (text.contains("花呗") || text.contains("余额宝")) return "支付宝"
+        if (text.contains("零钱通") || text.contains("微信零钱") ||
+            (text.contains("零钱") && !text.contains("支付宝"))
+        ) {
+            return "微信支付"
+        }
+
+        // User-defined / custom channels (longest match first, skipping generic labels)
+        if (customChannels.isNotEmpty()) {
+            val matchedCustom = customChannels
+                .asSequence()
+                .map { it.trim() }
+                .filter { it.length >= 2 && it != "其他" && it != "银行卡" && it != "未知渠道" }
+                .sortedByDescending { it.length }
+                .firstOrNull { text.contains(it, ignoreCase = true) }
+            if (matchedCustom != null) {
+                return ChannelCatalog.normalizeRecognizedChannel(matchedCustom)
+            }
+        }
+
         ChinaPaymentCatalog.watchedPackageMap[packageName]?.let { return it.name }
 
         for (item in ChinaPaymentCatalog.channels) {
@@ -778,7 +806,7 @@ object ChinaNotificationParser {
 
         return when {
             text.contains("花呗") || text.contains("余额宝") || text.contains("支付宝") -> "支付宝"
-            text.contains("零钱通") || text.contains("微信") -> "微信支付"
+            text.contains("零钱通") || text.contains("零钱") || text.contains("微信") -> "微信支付"
             text.contains("银联") || text.contains("云闪付") -> "云闪付"
             text.contains("网商银行") -> "网商银行"
             text.contains("微众银行") -> "微众银行"
