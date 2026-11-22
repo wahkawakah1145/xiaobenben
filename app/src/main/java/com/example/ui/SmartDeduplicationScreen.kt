@@ -63,8 +63,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.IconButton
+import com.example.model.BudgetSettings
 import com.example.model.CategoryCatalog
+import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
+import com.example.model.TransactionBookLink
 import com.example.parser.DeduplicationChannelFilter
 import com.example.parser.DeduplicationTimeWindow
 import com.example.parser.DuplicateGroup
@@ -86,11 +92,22 @@ import com.example.viewmodel.UiState
 fun SmartDeduplicationScreen(
     transactionsState: UiState<List<LedgerTransaction>>,
     viewModel: LedgerViewModel,
+    settings: BudgetSettings? = null,
+    books: List<LedgerBook> = emptyList(),
+    bookLinks: List<TransactionBookLink> = emptyList(),
     modifier: Modifier = Modifier
 ) {
-    val settings by viewModel.settingsState.collectAsStateWithLifecycle()
+    val observedSettings by viewModel.settingsState.collectAsStateWithLifecycle()
+    val effectiveSettings = settings ?: observedSettings
     val haptic = LocalHapticFeedback.current
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
+    val txById = remember(allTransactions) { allTransactions.associateBy { it.id } }
+    val excludedIdSet = remember(effectiveSettings.dedupExcludedTransactionIds) {
+        effectiveSettings.dedupExcludedTransactionIds.toSet()
+    }
+    val excludedTransactions = remember(excludedIdSet, txById) {
+        excludedIdSet.mapNotNull { txById[it] }.sortedByDescending { it.occurredAtMillis }
+    }
     var customWindowSeconds by rememberSaveable { mutableIntStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_SECONDS) }
     var customValueInput by rememberSaveable { mutableStateOf(SmartDeduplicator.DEFAULT_SHORT_WINDOW_SECONDS.toString()) }
     var customUnitMode by rememberSaveable { mutableIntStateOf(0) }
@@ -99,20 +116,29 @@ fun SmartDeduplicationScreen(
     var requireMerchantSimilarity by rememberSaveable { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
+    var showExcludedManagerDialog by remember { mutableStateOf(false) }
     var inspectingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
     var editingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
 
-    val candidateGroups by remember(allTransactions, customWindowSeconds, channelFilter, requireMerchantSimilarity) {
+    val candidateGroups by remember(
+        allTransactions,
+        customWindowSeconds,
+        channelFilter,
+        requireMerchantSimilarity,
+        excludedIdSet
+    ) {
         derivedStateOf {
             SmartDeduplicator.findDuplicateGroups(
                 transactions = allTransactions,
                 maxWindowMillis = customWindowSeconds * 1_000L,
                 channelFilter = channelFilter,
-                requireMerchantSimilarity = requireMerchantSimilarity
+                requireMerchantSimilarity = requireMerchantSimilarity,
+                excludedTransactionIds = excludedIdSet
             )
         }
     }
 
+    val isSearching = searchQuery.trim().isNotEmpty()
     val visibleGroups by remember(candidateGroups, searchQuery) {
         derivedStateOf {
             val q = searchQuery.trim()
@@ -128,24 +154,33 @@ fun SmartDeduplicationScreen(
     }
 
     var selectedDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var initializedFilterKey by remember { mutableStateOf<String?>(null) }
+    val filterKey = "$customWindowSeconds|${channelFilter.name}|$requireMerchantSimilarity"
 
-    LaunchedEffect(candidateGroups) {
+    LaunchedEffect(candidateGroups, filterKey) {
         val validIds = candidateGroups.flatMap { it.items }.map { it.id }.toSet()
         val defaultSuggested = candidateGroups.flatMap { group ->
             group.items.filter { it.id != group.suggestedKeepId }.map { it.id }
         }.toSet()
-        selectedDeleteIds = if (selectedDeleteIds.isEmpty()) {
-            defaultSuggested
+        if (initializedFilterKey != filterKey) {
+            initializedFilterKey = filterKey
+            selectedDeleteIds = defaultSuggested
         } else {
-            selectedDeleteIds.intersect(validIds)
+            selectedDeleteIds = selectedDeleteIds.intersect(validIds)
         }
     }
 
-    val visibleDeleteCount by remember(visibleGroups, selectedDeleteIds) {
+    val visibleItemIds by remember(visibleGroups) {
         derivedStateOf {
-            visibleGroups.sumOf { g -> g.items.count { it.id in selectedDeleteIds } }
+            visibleGroups.flatMap { it.items }.mapTo(LinkedHashSet()) { it.id }
         }
     }
+    val visibleDeleteCount by remember(visibleItemIds, selectedDeleteIds) {
+        derivedStateOf {
+            visibleItemIds.count { it in selectedDeleteIds }
+        }
+    }
+    val hiddenDeleteCount = (selectedDeleteIds.size - visibleDeleteCount).coerceAtLeast(0)
 
     val numberFont = LocalNumberFontFamily.current
 
@@ -195,8 +230,15 @@ fun SmartDeduplicationScreen(
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
-                                placeholder = { Text("筛选交易对象、渠道或金额") },
+                                placeholder = { Text("筛选交易对象、渠道或金额（批量操作仅影响当前搜索结果）") },
                                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                                trailingIcon = if (searchQuery.isNotEmpty()) {
+                                    {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(Icons.Rounded.Close, contentDescription = "清空搜索")
+                                        }
+                                    }
+                                } else null,
                                 singleLine = true,
                                 shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier
@@ -333,40 +375,69 @@ fun SmartDeduplicationScreen(
                                 }
                             }
 
-                            if (visibleGroups.isNotEmpty()) {
-                                FlowRow(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (visibleGroups.isNotEmpty()) {
                                     OutlinedButton(
                                         onClick = {
-                                            selectedDeleteIds = visibleGroups.flatMap { group ->
+                                            val visibleSuggested = visibleGroups.flatMap { group ->
                                                 group.items.filter { it.id != group.suggestedKeepId }.map { it.id }
                                             }.toSet()
+                                            selectedDeleteIds = (selectedDeleteIds - visibleItemIds) + visibleSuggested
                                         },
                                         modifier = Modifier.testTag("dedup_smart_select_button")
                                     ) {
                                         Icon(AppIcons.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("智能勾选重复项")
+                                        Text(if (isSearching) "智能勾选当前" else "智能勾选重复项")
                                     }
                                     OutlinedButton(
                                         onClick = {
-                                            val allVisible = visibleGroups
-                                                .flatMap { it.items }
-                                                .mapTo(LinkedHashSet()) { it.id }
-                                            selectedDeleteIds = (selectedDeleteIds - allVisible) + (allVisible - selectedDeleteIds)
+                                            selectedDeleteIds = (selectedDeleteIds - visibleItemIds) + (visibleItemIds - selectedDeleteIds)
                                         },
                                         modifier = Modifier.testTag("dedup_invert_selection_button")
                                     ) {
-                                        Text("反选")
+                                        Text(if (isSearching) "反选当前" else "反选")
                                     }
                                     OutlinedButton(
-                                        onClick = { selectedDeleteIds = emptySet() },
+                                        onClick = {
+                                            selectedDeleteIds = selectedDeleteIds - visibleItemIds
+                                        },
                                         modifier = Modifier.testTag("dedup_clear_selection_button")
                                     ) {
-                                        Text("全部保留")
+                                        Text(if (isSearching) "取消勾选当前" else "全部取消勾选")
+                                    }
+                                    val visibleSelectedIds = selectedDeleteIds.intersect(visibleItemIds)
+                                    OutlinedButton(
+                                        onClick = {
+                                            val targets = if (visibleSelectedIds.isNotEmpty()) visibleSelectedIds else visibleItemIds
+                                            selectedDeleteIds = selectedDeleteIds - targets
+                                            viewModel.excludeTransactionsFromDedup(targets)
+                                        },
+                                        modifier = Modifier.testTag("dedup_exclude_visible_button")
+                                    ) {
+                                        Icon(AppIcons.VisibilityOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            if (visibleSelectedIds.isNotEmpty()) {
+                                                "排除已选 (${visibleSelectedIds.size})"
+                                            } else {
+                                                if (isSearching) "排除当前结果" else "排除去重"
+                                            }
+                                        )
+                                    }
+                                }
+                                if (excludedTransactions.isNotEmpty()) {
+                                    OutlinedButton(
+                                        onClick = { showExcludedManagerDialog = true },
+                                        modifier = Modifier.testTag("dedup_manage_excluded_button")
+                                    ) {
+                                        Icon(AppIcons.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("已排除去重 (${excludedTransactions.size})")
                                     }
                                 }
                             }
@@ -411,8 +482,13 @@ fun SmartDeduplicationScreen(
                     }
                 } else {
                     item(key = "dedup_stats_bar") {
+                        val statsText = if (isSearching && hiddenDeleteCount > 0) {
+                            "当前搜索命中 ${visibleGroups.size} 组 · 当前已勾选 $visibleDeleteCount 笔（另有 $hiddenDeleteCount 笔非搜索项保持勾选）"
+                        } else {
+                            "共发现 ${visibleGroups.size} 组疑似重复 · 已勾选待清理 $visibleDeleteCount 笔"
+                        }
                         Text(
-                            text = "共发现 ${visibleGroups.size} 组疑似重复 · 已勾选待清理 $visibleDeleteCount 笔",
+                            text = statsText,
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -441,6 +517,15 @@ fun SmartDeduplicationScreen(
                             onIgnoreGroup = {
                                 val groupIds = group.items.map { it.id }.toSet()
                                 selectedDeleteIds = selectedDeleteIds - groupIds
+                            },
+                            onExcludeGroup = {
+                                val groupIds = group.items.map { it.id }.toSet()
+                                selectedDeleteIds = selectedDeleteIds - groupIds
+                                viewModel.excludeTransactionsFromDedup(groupIds)
+                            },
+                            onExcludeItem = { txId ->
+                                selectedDeleteIds = selectedDeleteIds - txId
+                                viewModel.excludeTransactionsFromDedup(listOf(txId))
                             }
                         )
                     }
@@ -460,14 +545,18 @@ fun SmartDeduplicationScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "已选待删除 ${selectedDeleteIds.size} 笔",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "未勾选的记录将完整保留",
+                                text = if (isSearching && hiddenDeleteCount > 0) {
+                                    "当前结果 $visibleDeleteCount 笔 + 其他 $hiddenDeleteCount 笔"
+                                } else {
+                                    "未勾选的记录将完整保留"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -517,17 +606,125 @@ fun SmartDeduplicationScreen(
         )
     }
 
+    if (showExcludedManagerDialog) {
+        AlertDialog(
+            onDismissRequest = { showExcludedManagerDialog = false },
+            title = { Text("已排除智能去重 (${excludedTransactions.size})") },
+            text = {
+                if (excludedTransactions.isEmpty()) {
+                    Text(
+                        text = "暂无被排除智能去重的账单。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "以下账单不会再出现在智能去重候选组中，点击右侧可随时恢复参与去重：",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        excludedTransactions.forEach { tx ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = tx.merchant,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType)} · ${formatDateTimeFull(tx.occurredAtMillis)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.restoreExcludedDedupTransactions(listOf(tx.id))
+                                        },
+                                        modifier = Modifier.testTag("dedup_restore_excluded_${tx.id}")
+                                    ) {
+                                        Text("恢复")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            dismissButton = {
+                if (excludedTransactions.isNotEmpty()) {
+                    TextButton(
+                        onClick = {
+                            viewModel.restoreExcludedDedupTransactions(excludedTransactions.map { it.id })
+                            showExcludedManagerDialog = false
+                        },
+                        modifier = Modifier.testTag("dedup_restore_all_excluded_button")
+                    ) {
+                        Text("全部恢复")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showExcludedManagerDialog = false }) {
+                    Text("关闭")
+                }
+            }
+        )
+    }
+
     inspectingTransaction?.let { tx ->
         val (recordedBase, recordedRate, recordedCents) = viewModel.recordedSnapshotDisplay(tx)
+        val txAssignedBookIds = remember(bookLinks, tx.id) {
+            bookLinks.asSequence()
+                .filter { it.transactionId == tx.id }
+                .map { it.bookId }
+                .toSet()
+        }
         TransactionDetailSheet(
             transaction = tx,
-            baseCurrencyCode = settings.baseCurrencyCode,
+            baseCurrencyCode = effectiveSettings.baseCurrencyCode,
             liveRateToBase = viewModel.liveRateToBase(tx),
             liveConvertedBaseCents = viewModel.convertToBaseCents(tx),
             recordedBaseCurrencyCode = recordedBase,
             recordedRateToBase = recordedRate,
             recordedConvertedBaseCents = recordedCents,
             onDismiss = { inspectingTransaction = null },
+            onMarkNonBill = if (!tx.confirmed || !tx.rawNotification.isNullOrBlank()) {
+                {
+                    viewModel.markTransactionAsNonBill(tx)
+                    selectedDeleteIds = selectedDeleteIds - tx.id
+                    inspectingTransaction = null
+                }
+            } else null,
+            books = books,
+            assignedBookIds = txAssignedBookIds,
+            onUpdateTransactionBooks = { chosen ->
+                viewModel.setBooksForTransaction(tx.id, chosen)
+            },
+            onCreateBookQuick = { name, onCreated ->
+                viewModel.saveBook(name = name, onSaved = onCreated)
+            },
             onEdit = {
                 editingTransaction = tx
                 inspectingTransaction = null
@@ -543,11 +740,11 @@ fun SmartDeduplicationScreen(
     editingTransaction?.let { tx ->
         TransactionEditorDialog(
             initialTransaction = tx,
-            defaultCurrencyCode = settings.baseCurrencyCode,
-            enabledCurrencyCodes = settings.enabledCurrencyCodes,
-            expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
-            incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
-            transferCategories = CategoryCatalog.activeTransferCategories(settings),
+            defaultCurrencyCode = effectiveSettings.baseCurrencyCode,
+            enabledCurrencyCodes = effectiveSettings.enabledCurrencyCodes,
+            expenseCategories = CategoryCatalog.activeExpenseCategories(effectiveSettings),
+            incomeCategories = CategoryCatalog.activeIncomeCategories(effectiveSettings),
+            transferCategories = CategoryCatalog.activeTransferCategories(effectiveSettings),
             allTransactions = allTransactions,
             onDismiss = { editingTransaction = null },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
@@ -590,7 +787,9 @@ private fun DuplicateGroupCard(
     onToggleItem: (String) -> Unit,
     onInspectItem: (LedgerTransaction) -> Unit,
     onKeepOnlyThis: (String) -> Unit,
-    onIgnoreGroup: () -> Unit
+    onIgnoreGroup: () -> Unit,
+    onExcludeGroup: () -> Unit,
+    onExcludeItem: (String) -> Unit
 ) {
     val typeColor = transactionTypeColor(group.txType)
     Card(
@@ -665,7 +864,7 @@ private fun DuplicateGroupCard(
                             .fillMaxWidth()
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Checkbox(
                             checked = markedForDelete,
@@ -729,11 +928,24 @@ private fun DuplicateGroupCard(
                                 )
                             }
                         }
-                        TextButton(
-                            onClick = { onKeepOnlyThis(tx.id) },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("仅留此条", style = MaterialTheme.typography.labelSmall)
+                        Column(horizontalAlignment = Alignment.End) {
+                            TextButton(
+                                onClick = { onKeepOnlyThis(tx.id) },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("仅留此条", style = MaterialTheme.typography.labelSmall)
+                            }
+                            TextButton(
+                                onClick = { onExcludeItem(tx.id) },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("dedup_exclude_item_${tx.id}")
+                            ) {
+                                Text(
+                                    text = "排除去重",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -741,10 +953,19 @@ private fun DuplicateGroupCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                TextButton(
+                    onClick = onExcludeGroup,
+                    modifier = Modifier.testTag("dedup_exclude_group_${group.groupId}")
+                ) {
+                    Icon(AppIcons.VisibilityOff, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("标记本组排除去重", style = MaterialTheme.typography.labelMedium)
+                }
                 TextButton(onClick = onIgnoreGroup) {
-                    Text("全部保留（非重复）", style = MaterialTheme.typography.labelMedium)
+                    Text("取消本组勾选", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }

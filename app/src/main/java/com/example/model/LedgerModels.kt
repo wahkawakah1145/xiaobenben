@@ -809,7 +809,9 @@ data class BudgetSettings(
     val enabledCurrencyCodes: List<String> = CurrencyCatalog.defaultEnabledForeignCodes,
     val expenseCategories: List<String> = CategoryCatalog.expenseCategories,
     val incomeCategories: List<String> = CategoryCatalog.incomeCategories,
-    val transferCategories: List<String> = CategoryCatalog.transferCategories
+    val transferCategories: List<String> = CategoryCatalog.transferCategories,
+    val categoryIcons: Map<String, String> = emptyMap(),
+    val dedupExcludedTransactionIds: List<String> = emptyList()
 )
 
 data class WebDavConfig(
@@ -910,4 +912,60 @@ object CategoryCatalog {
 
     fun allActiveCategories(settings: BudgetSettings? = null): List<String> =
         (activeExpenseCategories(settings) + activeIncomeCategories(settings) + activeTransferCategories(settings)).distinct()
+
+    /**
+     * Reads all existing categories for [type]: configured categories in [settings],
+     * plus any categories present in historical [transactions] or [rules] for that type.
+     */
+    fun allExistingCategoriesForType(
+        type: TransactionType,
+        settings: BudgetSettings?,
+        transactions: List<LedgerTransaction>,
+        rules: List<CustomParsingRule>
+    ): List<String> {
+        val result = LinkedHashSet<String>()
+        result.addAll(categoriesForType(type, settings))
+        transactions.forEach { tx ->
+            if (tx.txType == type) {
+                val cat = tx.category.trim().take(24)
+                if (cat.isNotEmpty() && cat != "自动" && cat != "非账单") {
+                    result.add(cat)
+                }
+            }
+        }
+        val configuredAll = allActiveCategories(settings).toHashSet()
+        rules.forEach { rule ->
+            if (rule.isIgnoreRule) return@forEach
+            val cat = rule.defaultCategory.trim().take(24)
+            if (cat.isEmpty() || cat == "自动" || cat == "非账单") return@forEach
+            val matchesType = rule.defaultType.equals(type.name, ignoreCase = true) ||
+                (rule.defaultType.equals("AUTO", ignoreCase = true) && type == TransactionType.EXPENSE && cat !in configuredAll)
+            if (matchesType) {
+                result.add(cat)
+            }
+        }
+        return result.toList()
+    }
+
+    fun allExistingCategories(
+        settings: BudgetSettings?,
+        transactions: List<LedgerTransaction>,
+        rules: List<CustomParsingRule>
+    ): List<String> {
+        val result = LinkedHashSet<String>()
+        result.addAll(allExistingCategoriesForType(TransactionType.EXPENSE, settings, transactions, rules))
+        result.addAll(allExistingCategoriesForType(TransactionType.INCOME, settings, transactions, rules))
+        result.addAll(allExistingCategoriesForType(TransactionType.TRANSFER, settings, transactions, rules))
+        transactions.forEach { tx ->
+            val cat = tx.category.trim().take(24)
+            if (cat.isNotEmpty() && cat != "自动" && cat != "非账单") result.add(cat)
+        }
+        rules.forEach { rule ->
+            if (!rule.isIgnoreRule) {
+                val cat = rule.defaultCategory.trim().take(24)
+                if (cat.isNotEmpty() && cat != "自动" && cat != "非账单") result.add(cat)
+            }
+        }
+        return result.toList()
+    }
 }

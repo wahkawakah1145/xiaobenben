@@ -114,7 +114,12 @@ data class DeleteUndoBanner(
     val id: Long = System.nanoTime(),
     val message: String,
     val deletedItems: List<LedgerTransaction> = emptyList(),
-    val deletedRules: List<CustomParsingRule> = emptyList()
+    val deletedRules: List<CustomParsingRule> = emptyList(),
+    val deletedBookLinks: List<TransactionBookLink> = emptyList(),
+    val dismissedInquiries: List<NotificationInquiry> = emptyList(),
+    val createdNonBillRuleId: String? = null,
+    val previousNonBillRuleSnapshot: CustomParsingRule? = null,
+    val isNonBillMark: Boolean = false
 )
 
 class LedgerViewModel(
@@ -172,6 +177,20 @@ class LedgerViewModel(
 
     fun selectAnalyticsBook(bookId: String?) {
         _selectedAnalyticsBookId.value = bookId?.takeIf { it.isNotBlank() }
+    }
+
+    private val _openBookDetailId = MutableStateFlow<String?>(null)
+    val openBookDetailId: StateFlow<String?> = _openBookDetailId.asStateFlow()
+
+    fun openBookDetail(bookId: String) {
+        val clean = bookId.trim()
+        if (clean.isEmpty()) return
+        _openBookDetailId.value = clean
+        _selectedAnalyticsBookId.value = clean
+    }
+
+    fun closeBookDetail() {
+        _openBookDetailId.value = null
     }
 
     val inquiriesState: StateFlow<List<NotificationInquiry>> =
@@ -317,8 +336,29 @@ class LedgerViewModel(
                 if (banner.deletedItems.isNotEmpty()) {
                     repository.mergeTransactionsFromBackup(banner.deletedItems)
                 }
+                if (banner.deletedBookLinks.isNotEmpty()) {
+                    repository.restoreBookLinks(banner.deletedBookLinks)
+                }
+                if (banner.dismissedInquiries.isNotEmpty()) {
+                    banner.dismissedInquiries.forEach { repository.restoreInquiry(it) }
+                }
+                val createdRuleId = banner.createdNonBillRuleId
+                if (!createdRuleId.isNullOrBlank()) {
+                    val prevRule = banner.previousNonBillRuleSnapshot
+                    if (prevRule != null) {
+                        repository.saveParsingRule(prevRule)
+                    } else {
+                        repository.deleteParsingRule(createdRuleId)
+                    }
+                }
             }.onSuccess {
                 _actionMessage.value = when {
+                    banner.isNonBillMark && banner.deletedItems.isNotEmpty() -> {
+                        "已撤销非账单标记，恢复「${banner.deletedItems.first().merchant}」并取消忽略规则"
+                    }
+                    banner.isNonBillMark && banner.dismissedInquiries.isNotEmpty() -> {
+                        "已撤销非账单标记，恢复待确认提醒并取消忽略规则"
+                    }
                     banner.deletedRules.isNotEmpty() && banner.deletedItems.isEmpty() -> {
                         if (banner.deletedRules.size == 1) {
                             "已撤销删除，恢复规则「${banner.deletedRules.first().name}」"
@@ -329,7 +369,7 @@ class LedgerViewModel(
                     banner.deletedItems.isNotEmpty() -> {
                         "已撤销删除，恢复 ${banner.deletedItems.size} 笔账单"
                     }
-                    else -> "已撤销删除"
+                    else -> "已撤销操作"
                 }
             }.onFailure { err ->
                 _actionMessage.value = "撤销失败：${err.localizedMessage ?: "请重试"}"
@@ -489,13 +529,22 @@ class LedgerViewModel(
 
     fun markTransactionAsNonBill(tx: LedgerTransaction) {
         viewModelScope.launch {
-            repository.markTransactionAsNonBill(tx)
-                .onSuccess { rule ->
-                    _actionMessage.value = if (rule != null) {
-                        "已将「${tx.merchant}」标记为非账单并记住忽略规则"
+            repository.markTransactionAsNonBillWithUndoSnapshot(tx)
+                .onSuccess { snapshot ->
+                    val label = if (snapshot.createdOrUpdatedRule != null) {
+                        "已标记「${tx.merchant}」为非账单并记住忽略规则"
                     } else {
-                        "已将「${tx.merchant}」标记为非账单并移除"
+                        "已标记「${tx.merchant}」为非账单并移除"
                     }
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        id = System.nanoTime(),
+                        message = label,
+                        deletedItems = listOf(snapshot.transaction),
+                        deletedBookLinks = snapshot.bookLinks,
+                        createdNonBillRuleId = snapshot.createdOrUpdatedRule?.id,
+                        previousNonBillRuleSnapshot = snapshot.previousRuleBeforeOverwrite,
+                        isNonBillMark = true
+                    )
                 }
                 .onFailure { _actionMessage.value = "标记失败：${it.localizedMessage ?: "请重试"}" }
         }
@@ -504,13 +553,15 @@ class LedgerViewModel(
     fun deleteTransaction(txId: String) {
         viewModelScope.launch {
             val snapshot = repository.getTransactionsByIdsOnce(listOf(txId))
+            val bookLinks = repository.getBookLinksForTransactionsOnce(listOf(txId))
             repository.deleteTransaction(txId)
                 .onSuccess {
                     if (snapshot.isNotEmpty()) {
                         _deleteUndoBanner.value = DeleteUndoBanner(
                             id = System.nanoTime(),
                             message = "已删除「${snapshot.first().merchant}」",
-                            deletedItems = snapshot
+                            deletedItems = snapshot,
+                            deletedBookLinks = bookLinks
                         )
                     }
                 }
@@ -523,6 +574,7 @@ class LedgerViewModel(
             val idSet = txIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             if (idSet.isEmpty()) return@launch
             val snapshot = repository.getTransactionsByIdsOnce(idSet)
+            val bookLinks = repository.getBookLinksForTransactionsOnce(idSet)
             repository.deleteTransactions(idSet)
                 .onSuccess { count ->
                     if (count > 0 && snapshot.isNotEmpty()) {
@@ -534,7 +586,8 @@ class LedgerViewModel(
                         _deleteUndoBanner.value = DeleteUndoBanner(
                             id = System.nanoTime(),
                             message = label,
-                            deletedItems = snapshot
+                            deletedItems = snapshot,
+                            deletedBookLinks = bookLinks
                         )
                     }
                 }
@@ -611,13 +664,20 @@ class LedgerViewModel(
 
     fun dismissInquiryAsNonBill(inquiry: NotificationInquiry) {
         viewModelScope.launch {
-            repository.recordIgnoredNotificationRule(
+            val rulePair = repository.recordIgnoredNotificationRuleWithPrevious(
                 packageName = inquiry.packageName,
                 title = inquiry.title,
                 content = inquiry.content
-            )
+            ).getOrNull()
             repository.dismissInquiry(inquiry.id)
-            _actionMessage.value = "已标记为非账单并记住忽略规则"
+            _deleteUndoBanner.value = DeleteUndoBanner(
+                id = System.nanoTime(),
+                message = "已标记「${inquiry.title.ifBlank { inquiry.suggestedMerchant }}」为非账单并记住忽略规则",
+                dismissedInquiries = listOf(inquiry),
+                createdNonBillRuleId = rulePair?.first?.id,
+                previousNonBillRuleSnapshot = rulePair?.second,
+                isNonBillMark = true
+            )
         }
     }
 
@@ -793,10 +853,16 @@ class LedgerViewModel(
     fun addCustomCategory(
         type: TransactionType,
         name: String,
-        syncAiPrompt: Boolean = true
+        syncAiPrompt: Boolean = true,
+        iconKey: String? = null
     ) {
         viewModelScope.launch {
-            repository.addCustomCategory(type = type, rawName = name, syncAiPrompt = syncAiPrompt)
+            repository.addCustomCategory(
+                type = type,
+                rawName = name,
+                syncAiPrompt = syncAiPrompt,
+                iconKey = iconKey
+            )
                 .onSuccess { res ->
                     val aiSuffix = if (res.aiPromptSynced) "，已同步 AI 理解提示词" else ""
                     _actionMessage.value = "已添加${type.label}分类「${name.trim()}」$aiSuffix"
@@ -871,9 +937,25 @@ class LedgerViewModel(
         }
     }
 
-    fun resetCategoriesToDefault(syncAiPrompt: Boolean = true) {
+    fun setCategoryIcon(categoryName: String, iconKey: String?) {
         viewModelScope.launch {
-            repository.resetCategoriesToDefault(syncAiPrompt = syncAiPrompt)
+            repository.setCategoryIcon(categoryName, iconKey)
+                .onSuccess {
+                    _actionMessage.value = if (iconKey.isNullOrBlank()) {
+                        "已恢复「$categoryName」默认图标"
+                    } else {
+                        "已更新「$categoryName」图标"
+                    }
+                }
+                .onFailure { err ->
+                    _actionMessage.value = err.message ?: "更新图标失败"
+                }
+        }
+    }
+
+    fun resetCategoriesToDefault(syncAiPrompt: Boolean = true, resetIcons: Boolean = false) {
+        viewModelScope.launch {
+            repository.resetCategoriesToDefault(syncAiPrompt = syncAiPrompt, resetIcons = resetIcons)
                 .onSuccess {
                     _actionMessage.value = if (syncAiPrompt) {
                         "已恢复默认分类列表并同步 AI 提示词"
@@ -924,6 +1006,9 @@ class LedgerViewModel(
                     if (_selectedAnalyticsBookId.value == bookId) {
                         _selectedAnalyticsBookId.value = null
                     }
+                    if (_openBookDetailId.value == bookId) {
+                        _openBookDetailId.value = null
+                    }
                     _actionMessage.value = targetName?.let { "已删除账本「$it」（账单本身已保留）" } ?: "已删除账本"
                 }
                 .onFailure { err ->
@@ -944,6 +1029,23 @@ class LedgerViewModel(
         }
     }
 
+    fun setBooksForTransaction(txId: String, bookIds: Collection<String>) {
+        viewModelScope.launch {
+            val distinctCount = bookIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct().size
+            repository.setBooksForTransaction(txId, bookIds)
+                .onSuccess {
+                    _actionMessage.value = if (distinctCount > 0) {
+                        "已更新该账单所属账本（共 $distinctCount 个）"
+                    } else {
+                        "已将该账单从所有账本移出"
+                    }
+                }
+                .onFailure { err ->
+                    _actionMessage.value = "更新所属账本失败：${err.localizedMessage ?: "请重试"}"
+                }
+        }
+    }
+
     fun removeTransactionsFromBook(txIds: Collection<String>, bookId: String) {
         viewModelScope.launch {
             repository.removeTransactionsFromBook(txIds, bookId)
@@ -952,6 +1054,40 @@ class LedgerViewModel(
                 }
                 .onFailure { err ->
                     _actionMessage.value = "移出失败：${err.localizedMessage ?: "请重试"}"
+                }
+        }
+    }
+
+    fun excludeTransactionsFromDedup(txIds: Collection<String>) {
+        viewModelScope.launch {
+            val clean = txIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (clean.isEmpty()) return@launch
+            repository.excludeTransactionsFromDedup(clean)
+                .onSuccess { added ->
+                    _actionMessage.value = if (added > 0) {
+                        "已将 $added 笔账单标记为排除智能去重"
+                    } else {
+                        "所选账单已在排除智能去重列表中"
+                    }
+                }
+                .onFailure { err ->
+                    _actionMessage.value = "标记排除失败：${err.localizedMessage ?: "请重试"}"
+                }
+        }
+    }
+
+    fun restoreExcludedDedupTransactions(txIds: Collection<String>) {
+        viewModelScope.launch {
+            val clean = txIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (clean.isEmpty()) return@launch
+            repository.restoreExcludedDedupTransactions(clean)
+                .onSuccess { restored ->
+                    if (restored > 0) {
+                        _actionMessage.value = "已恢复 $restored 笔账单参与智能去重"
+                    }
+                }
+                .onFailure { err ->
+                    _actionMessage.value = "恢复失败：${err.localizedMessage ?: "请重试"}"
                 }
         }
     }

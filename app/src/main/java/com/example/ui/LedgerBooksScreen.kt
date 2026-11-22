@@ -1,6 +1,13 @@
 package com.example.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -81,6 +88,7 @@ import com.example.model.TransactionBookLink
 import com.example.model.TransactionType
 import com.example.parser.QuickAnalysisBreakdownItem
 import com.example.parser.QuickAnalysisReport
+import com.example.ui.components.CategoryIconAvatar
 import com.example.ui.components.ChannelBadge
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
@@ -88,6 +96,7 @@ import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatDateHeader
 import com.example.ui.components.formatItemTimeCompact
 import com.example.ui.components.transactionTypeColor
+import com.example.model.IconVisualStyle
 import com.example.ui.theme.AppIcons
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
@@ -115,7 +124,12 @@ fun LedgerBooksScreen(
     exchangeRates: ExchangeRateState,
     viewModel: LedgerViewModel,
     onAnalyzeBook: (String) -> Unit,
+    openBookId: String? = null,
+    onOpenBook: (String) -> Unit = {},
+    onCloseBook: () -> Unit = {},
+    canSwipeToAnalytics: Boolean = false,
     listState: LazyListState = rememberLazyListState(),
+    detailListState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier
 ) {
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
@@ -126,14 +140,19 @@ fun LedgerBooksScreen(
     val txIdsByBook = remember(bookLinks) {
         bookLinks.groupBy({ it.bookId }, { it.transactionId }).mapValues { it.value.toSet() }
     }
+    val bookIdsByTx = remember(bookLinks) {
+        bookLinks.groupBy({ it.transactionId }, { it.bookId }).mapValues { it.value.toSet() }
+    }
 
     var showCreateBookDialog by remember { mutableStateOf(false) }
     var editingBook by remember { mutableStateOf<LedgerBook?>(null) }
     var deletingBook by remember { mutableStateOf<LedgerBook?>(null) }
-    var expandedBookId by remember { mutableStateOf<String?>(null) }
     var quickSummaryBook by remember { mutableStateOf<Pair<String, QuickAnalysisReport>?>(null) }
     var inspectingTx by remember { mutableStateOf<LedgerTransaction?>(null) }
     var editingTx by remember { mutableStateOf<LedgerTransaction?>(null) }
+    val activeOpenBook = remember(books, openBookId) {
+        openBookId?.let { id -> books.firstOrNull { it.id == id } }
+    }
 
     fun toBase(tx: LedgerTransaction): Long = CurrencyExchangeManager.convertCents(
         tx.amountCents,
@@ -146,368 +165,602 @@ fun LedgerBooksScreen(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
     ) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .widthIn(max = 720.dp)
-                .fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            item(key = "books_overview_header") {
-                Card(
-                    shape = RoundedCornerShape(22.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+        AnimatedContent(
+            targetState = activeOpenBook?.id,
+            transitionSpec = {
+                if (targetState != null && initialState == null) {
+                    (slideInHorizontally(tween(220)) { it / 4 } + fadeIn(tween(180))) togetherWith
+                        (slideOutHorizontally(tween(180)) { -it / 6 } + fadeOut(tween(140)))
+                } else if (targetState == null && initialState != null) {
+                    (slideInHorizontally(tween(220)) { -it / 4 } + fadeIn(tween(180))) togetherWith
+                        (slideOutHorizontally(tween(180)) { it / 4 } + fadeOut(tween(140)))
+                } else {
+                    fadeIn(tween(160)) togetherWith fadeOut(tween(140))
+                }
+            },
+            label = "books_detail_switch",
+            modifier = Modifier.fillMaxSize()
+        ) { currentBookId ->
+            val openBook = currentBookId?.let { id -> books.firstOrNull { it.id == id } }
+            if (openBook != null) {
+                val bookTxList = remember(txIdsByBook, openBook.id, txById) {
+                    txIdsByBook[openBook.id].orEmpty()
+                        .mapNotNull { txById[it] }
+                        .sortedByDescending { it.occurredAtMillis }
+                }
+                val confirmedBookTxs = remember(bookTxList) { bookTxList.filter { it.confirmed } }
+                val expenseCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
+                    confirmedBookTxs.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBase(it) }
+                }
+                val incomeCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
+                    confirmedBookTxs.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
+                }
+                val netCents = incomeCents - expenseCents
+                val accent = Color(openBook.colorArgb.toInt())
+
+                LazyColumn(
+                    state = detailListState,
+                    modifier = Modifier
+                        .widthIn(max = 720.dp)
+                        .fillMaxSize()
+                        .testTag("book_detail_list_${openBook.id}"),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(18.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                    item(key = "book_detail_hero_${openBook.id}") {
+                        Card(
+                            shape = RoundedCornerShape(22.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                            border = BorderStroke(1.dp, accent.copy(alpha = 0.34f)),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Icon(
-                                    imageVector = AppIcons.MenuBook,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = "我的账本 (${books.size})",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(42.dp)
+                                            .clip(RoundedCornerShape(13.dp))
+                                            .background(accent.copy(alpha = 0.16f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = AppIcons.MenuBook,
+                                            contentDescription = null,
+                                            tint = accent,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = openBook.name,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = buildString {
+                                                append("共 ${bookTxList.size} 笔账单")
+                                                if (openBook.description.isNotBlank()) {
+                                                    append(" · ${openBook.description}")
+                                                }
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { editingBook = openBook },
+                                        modifier = Modifier.testTag("detail_edit_book_${openBook.id}")
+                                    ) {
+                                        Icon(Icons.Rounded.Edit, contentDescription = "编辑账本", modifier = Modifier.size(18.dp))
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surface,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(10.dp)) {
+                                            Text("支出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(
+                                                text = formatCurrency(expenseCents, baseCurrency),
+                                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                color = ExpenseCoral,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surface,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(10.dp)) {
+                                            Text("收入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(
+                                                text = formatCurrency(incomeCents, baseCurrency),
+                                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                color = IncomeJade,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surface,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(10.dp)) {
+                                            Text("结余", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(
+                                                text = (if (netCents < 0L) "-" else "") + formatCurrency(kotlin.math.abs(netCents), baseCurrency),
+                                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                color = if (netCents >= 0L) IncomeJade else ExpenseCoral,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        enabled = bookTxList.isNotEmpty(),
+                                        onClick = {
+                                            val report = viewModel.buildQuickSelectionReport(
+                                                transactions = bookTxList,
+                                                scopeTitle = "账本「${openBook.name}」统计摘要"
+                                            )
+                                            quickSummaryBook = "账本「${openBook.name}」" to report
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("detail_quick_summary_book_${openBook.id}")
+                                    ) {
+                                        Text("文本统计", maxLines = 1)
+                                    }
+                                    FilledTonalButton(
+                                        onClick = { onAnalyzeBook(openBook.id) },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                        modifier = Modifier
+                                            .weight(1.15f)
+                                            .testTag("detail_analyze_book_${openBook.id}")
+                                    ) {
+                                        Icon(AppIcons.Insights, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("收支分析", maxLines = 1)
+                                    }
+                                }
+
+                                if (canSwipeToAnalytics) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = accent.copy(alpha = 0.08f),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = "提示：直接横滑可切换到本账本的「收支分析」，再横滑回来仍停留在当前明细页；按返回键回到账本主页",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
                             }
-                            Text(
-                                text = "按项目、旅行、家庭或报销拆分账单；同一笔账单可归属多个账本并单独分析",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = { showCreateBookDialog = true },
-                            modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .testTag("create_book_button")
-                        ) {
-                            Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("新建账本")
                         }
                     }
-                }
-            }
 
-            if (books.isEmpty()) {
-                item(key = "books_empty_state") {
-                    Card(
-                        shape = RoundedCornerShape(22.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("books_empty_card")
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(28.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = AppIcons.MenuBook,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
-                                modifier = Modifier.size(44.dp)
-                            )
-                            Text("还没有创建账本", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                text = "新建账本后，可在主页长按选中账单点击底部「加入账本」（支持多选），再对各账本进行收支图表与文本分析。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            OutlinedButton(
-                                onClick = { showCreateBookDialog = true },
-                                modifier = Modifier.testTag("books_empty_create_button")
+                    if (bookTxList.isEmpty()) {
+                        item(key = "book_detail_empty") {
+                            Card(
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("创建第一个账本")
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.ReceiptLong,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(36.dp)
+                                    )
+                                    Text("该账本暂无明细", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        text = "可在主页长按选中账单点击「加入账本」，或点击任意账单详情中的「添加到账本」归入此账本。",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
+                    } else {
+                        items(bookTxList, key = { it.id }) { tx ->
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable { inspectingTx = tx }
+                                    .testTag("book_detail_tx_${tx.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    CategoryIconAvatar(
+                                        category = tx.category,
+                                        tintColor = transactionTypeColor(tx.txType),
+                                        visualStyle = IconVisualStyle.FILLED,
+                                        size = 38.dp
+                                    )
+                                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Text(
+                                            text = tx.merchant,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            ChannelBadge(channel = tx.channel)
+                                            Text(
+                                                text = "${tx.category} · ${formatDateHeader(tx.occurredAtMillis)} ${formatItemTimeCompact(tx.occurredAtMillis)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
+                                        style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                        color = transactionTypeColor(tx.txType),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    IconButton(
+                                        onClick = { viewModel.removeTransactionsFromBook(listOf(tx.id), openBook.id) },
+                                        modifier = Modifier
+                                            .minimumInteractiveComponentSize()
+                                            .testTag("remove_tx_from_book_${tx.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Close,
+                                            contentDescription = "从账本移出",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    item(key = "book_detail_bottom_spacer") {
+                        Spacer(modifier = Modifier.height(64.dp))
                     }
                 }
             } else {
-                items(books, key = { it.id }) { book ->
-                    val bookTxList = remember(txIdsByBook, book.id, txById) {
-                        txIdsByBook[book.id].orEmpty()
-                            .mapNotNull { txById[it] }
-                            .sortedByDescending { it.occurredAtMillis }
-                    }
-                    val confirmedBookTxs = remember(bookTxList) { bookTxList.filter { it.confirmed } }
-                    val expenseCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
-                        confirmedBookTxs.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBase(it) }
-                    }
-                    val incomeCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
-                        confirmedBookTxs.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
-                    }
-                    val netCents = incomeCents - expenseCents
-                    val accent = Color(book.colorArgb.toInt())
-                    val isExpanded = expandedBookId == book.id
-
-                    Card(
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                        border = BorderStroke(1.dp, accent.copy(alpha = 0.28f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("book_card_${book.id}")
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .widthIn(max = 720.dp)
+                        .fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    item(key = "books_overview_header") {
+                        Card(
+                            shape = RoundedCornerShape(22.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(18.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = AppIcons.MenuBook,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = "我的账本 (${books.size})",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Text(
+                                        text = "点击任意账本进入明细列表；在明细页可直接横滑进入该账本的收支分析",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Button(
+                                    onClick = { showCreateBookDialog = true },
                                     modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(accent.copy(alpha = 0.16f)),
-                                    contentAlignment = Alignment.Center
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("create_book_button")
+                                ) {
+                                    Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("新建账本")
+                                }
+                            }
+                        }
+                    }
+
+                    if (books.isEmpty()) {
+                        item(key = "books_empty_state") {
+                            Card(
+                                shape = RoundedCornerShape(22.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("books_empty_card")
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(28.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     Icon(
                                         imageVector = AppIcons.MenuBook,
                                         contentDescription = null,
-                                        tint = accent,
-                                        modifier = Modifier.size(20.dp)
+                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
+                                        modifier = Modifier.size(44.dp)
                                     )
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("还没有创建账本", style = MaterialTheme.typography.titleMedium)
                                     Text(
-                                        text = book.name,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = buildString {
-                                            append("${bookTxList.size} 笔账单")
-                                            if (book.description.isNotBlank()) {
-                                                append(" · ${book.description}")
-                                            }
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { editingBook = book },
-                                    modifier = Modifier.testTag("edit_book_${book.id}")
-                                ) {
-                                    Icon(Icons.Rounded.Edit, contentDescription = "编辑账本", modifier = Modifier.size(18.dp))
-                                }
-                                IconButton(
-                                    onClick = { deletingBook = book },
-                                    modifier = Modifier.testTag("delete_book_${book.id}")
-                                ) {
-                                    Icon(
-                                        AppIcons.DeleteOutline,
-                                        contentDescription = "删除账本",
-                                        tint = ExpenseCoral,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surface,
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Column(modifier = Modifier.padding(10.dp)) {
-                                        Text("支出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        Text(
-                                            text = formatCurrency(expenseCents, baseCurrency),
-                                            style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
-                                            color = ExpenseCoral,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surface,
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Column(modifier = Modifier.padding(10.dp)) {
-                                        Text("收入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        Text(
-                                            text = formatCurrency(incomeCents, baseCurrency),
-                                            style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
-                                            color = IncomeJade,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surface,
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Column(modifier = Modifier.padding(10.dp)) {
-                                        Text("结余", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        Text(
-                                            text = (if (netCents < 0L) "-" else "") + formatCurrency(kotlin.math.abs(netCents), baseCurrency),
-                                            style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
-                                            color = if (netCents >= 0L) IncomeJade else ExpenseCoral,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedButton(
-                                    onClick = {
-                                        expandedBookId = if (isExpanded) null else book.id
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("toggle_book_items_${book.id}")
-                                ) {
-                                    Text(if (isExpanded) "收起明细" else "查看明细", maxLines = 1)
-                                }
-                                OutlinedButton(
-                                    enabled = bookTxList.isNotEmpty(),
-                                    onClick = {
-                                        val report = viewModel.buildQuickSelectionReport(
-                                            transactions = bookTxList,
-                                            scopeTitle = "账本「${book.name}」统计摘要"
-                                        )
-                                        quickSummaryBook = "账本「${book.name}」" to report
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("quick_summary_book_${book.id}")
-                                ) {
-                                    Text("文本统计", maxLines = 1)
-                                }
-                                FilledTonalButton(
-                                    onClick = { onAnalyzeBook(book.id) },
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                                    modifier = Modifier
-                                        .weight(1.1f)
-                                        .testTag("analyze_book_${book.id}")
-                                ) {
-                                    Icon(AppIcons.Insights, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("图表分析", maxLines = 1)
-                                }
-                            }
-
-                            if (isExpanded) {
-                                HorizontalDivider()
-                                if (bookTxList.isEmpty()) {
-                                    Text(
-                                        text = "该账本暂无关联账单。前往主页长按选中账单后，点击底部「加入账本」即可归入。",
+                                        text = "新建账本后，可在主页长按选中账单点击底部「加入账本」，或在账单详情页直接添加到账本。",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                } else {
-                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        bookTxList.forEach { tx ->
-                                            Surface(
-                                                shape = RoundedCornerShape(12.dp),
-                                                color = MaterialTheme.colorScheme.surface,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clip(RoundedCornerShape(12.dp))
-                                                    .clickable { inspectingTx = tx }
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                ) {
-                                                    Column(modifier = Modifier.weight(1f)) {
-                                                        Text(
-                                                            text = tx.merchant,
-                                                            style = MaterialTheme.typography.bodyMedium,
-                                                            fontWeight = FontWeight.Medium,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis
-                                                        )
-                                                        Row(
-                                                            verticalAlignment = Alignment.CenterVertically,
-                                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                                        ) {
-                                                            ChannelBadge(channel = tx.channel)
-                                                            Text(
-                                                                text = "${tx.category} · ${formatDateHeader(tx.occurredAtMillis)} ${formatItemTimeCompact(tx.occurredAtMillis)}",
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                                maxLines = 1,
-                                                                overflow = TextOverflow.Ellipsis
-                                                            )
-                                                        }
+                                    OutlinedButton(
+                                        onClick = { showCreateBookDialog = true },
+                                        modifier = Modifier.testTag("books_empty_create_button")
+                                    ) {
+                                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("创建第一个账本")
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        items(books, key = { it.id }) { book ->
+                            val bookTxList = remember(txIdsByBook, book.id, txById) {
+                                txIdsByBook[book.id].orEmpty()
+                                    .mapNotNull { txById[it] }
+                                    .sortedByDescending { it.occurredAtMillis }
+                            }
+                            val confirmedBookTxs = remember(bookTxList) { bookTxList.filter { it.confirmed } }
+                            val expenseCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
+                                confirmedBookTxs.filter { it.txType == TransactionType.EXPENSE }.sumOf { toBase(it) }
+                            }
+                            val incomeCents = remember(confirmedBookTxs, baseCurrency, exchangeRates.ratesToCny) {
+                                confirmedBookTxs.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
+                            }
+                            val netCents = incomeCents - expenseCents
+                            val accent = Color(book.colorArgb.toInt())
+
+                            Card(
+                                onClick = { onOpenBook(book.id) },
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                                border = BorderStroke(1.dp, accent.copy(alpha = 0.28f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("book_card_${book.id}")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(accent.copy(alpha = 0.16f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = AppIcons.MenuBook,
+                                                contentDescription = null,
+                                                tint = accent,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = book.name,
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = buildString {
+                                                    append("${bookTxList.size} 笔账单")
+                                                    if (book.description.isNotBlank()) {
+                                                        append(" · ${book.description}")
                                                     }
-                                                    Text(
-                                                        text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
-                                                        style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
-                                                        color = transactionTypeColor(tx.txType),
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                    IconButton(
-                                                        onClick = { viewModel.removeTransactionsFromBook(listOf(tx.id), book.id) },
-                                                        modifier = Modifier.size(32.dp)
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Rounded.Close,
-                                                            contentDescription = "从账本移出",
-                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                            modifier = Modifier.size(16.dp)
-                                                        )
-                                                    }
-                                                }
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { editingBook = book },
+                                            modifier = Modifier.testTag("edit_book_${book.id}")
+                                        ) {
+                                            Icon(Icons.Rounded.Edit, contentDescription = "编辑账本", modifier = Modifier.size(18.dp))
+                                        }
+                                        IconButton(
+                                            onClick = { deletingBook = book },
+                                            modifier = Modifier.testTag("delete_book_${book.id}")
+                                        ) {
+                                            Icon(
+                                                AppIcons.DeleteOutline,
+                                                contentDescription = "删除账本",
+                                                tint = ExpenseCoral,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surface,
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Column(modifier = Modifier.padding(10.dp)) {
+                                                Text("支出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Text(
+                                                    text = formatCurrency(expenseCents, baseCurrency),
+                                                    style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                    color = ExpenseCoral,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
                                             }
+                                        }
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surface,
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Column(modifier = Modifier.padding(10.dp)) {
+                                                Text("收入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Text(
+                                                    text = formatCurrency(incomeCents, baseCurrency),
+                                                    style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                    color = IncomeJade,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surface,
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Column(modifier = Modifier.padding(10.dp)) {
+                                                Text("结余", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Text(
+                                                    text = (if (netCents < 0L) "-" else "") + formatCurrency(kotlin.math.abs(netCents), baseCurrency),
+                                                    style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                                    color = if (netCents >= 0L) IncomeJade else ExpenseCoral,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            enabled = bookTxList.isNotEmpty(),
+                                            onClick = {
+                                                val report = viewModel.buildQuickSelectionReport(
+                                                    transactions = bookTxList,
+                                                    scopeTitle = "账本「${book.name}」统计摘要"
+                                                )
+                                                quickSummaryBook = "账本「${book.name}」" to report
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("quick_summary_book_${book.id}")
+                                        ) {
+                                            Text("文本统计", maxLines = 1)
+                                        }
+                                        FilledTonalButton(
+                                            onClick = { onAnalyzeBook(book.id) },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier
+                                                .weight(1.1f)
+                                                .testTag("analyze_book_${book.id}")
+                                        ) {
+                                            Icon(AppIcons.Insights, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("图表分析", maxLines = 1)
                                         }
                                     }
                                 }
                             }
                         }
+                    }
+                    item(key = "books_list_bottom_spacer") {
+                        Spacer(modifier = Modifier.height(64.dp))
                     }
                 }
             }
@@ -583,6 +836,20 @@ fun LedgerBooksScreen(
             recordedRateToBase = recordedRate,
             recordedConvertedBaseCents = recordedCents,
             onDismiss = { inspectingTx = null },
+            onMarkNonBill = if (!tx.confirmed || !tx.rawNotification.isNullOrBlank()) {
+                {
+                    viewModel.markTransactionAsNonBill(tx)
+                    inspectingTx = null
+                }
+            } else null,
+            books = books,
+            assignedBookIds = bookIdsByTx[tx.id].orEmpty(),
+            onUpdateTransactionBooks = { chosen ->
+                viewModel.setBooksForTransaction(tx.id, chosen)
+            },
+            onCreateBookQuick = { name, onCreated ->
+                viewModel.saveBook(name = name, onSaved = onCreated)
+            },
             onEdit = {
                 editingTx = tx
                 inspectingTx = null
@@ -724,7 +991,10 @@ fun AddToBooksMultiSelectDialog(
     preselectedBookIds: Set<String>,
     onCreateBookQuick: (name: String, onCreated: (LedgerBook) -> Unit) -> Unit,
     onDismiss: () -> Unit,
-    onConfirm: (selectedBookIds: Set<String>) -> Unit
+    onConfirm: (selectedBookIds: Set<String>) -> Unit,
+    allowEmptySelection: Boolean = false,
+    titleText: String? = null,
+    confirmButtonLabel: ((Int) -> String)? = null
 ) {
     var checkedBookIds by remember(preselectedBookIds) { mutableStateOf(preselectedBookIds) }
     var showQuickCreate by remember { mutableStateOf(false) }
@@ -734,7 +1004,7 @@ fun AddToBooksMultiSelectDialog(
         onDismissRequest = onDismiss,
         title = {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("加入账本（已选 $selectedTxCount 笔）")
+                Text(titleText ?: "加入账本（已选 $selectedTxCount 笔）")
                 Text(
                     text = "可多选目标账本，支持单笔账单归属多个账本",
                     style = MaterialTheme.typography.bodySmall,
@@ -884,11 +1154,11 @@ fun AddToBooksMultiSelectDialog(
         },
         confirmButton = {
             Button(
-                enabled = checkedBookIds.isNotEmpty(),
+                enabled = allowEmptySelection || checkedBookIds.isNotEmpty(),
                 onClick = { onConfirm(checkedBookIds) },
                 modifier = Modifier.testTag("add_to_book_confirm_button")
             ) {
-                Text("加入 (${checkedBookIds.size})")
+                Text(confirmButtonLabel?.invoke(checkedBookIds.size) ?: "加入 (${checkedBookIds.size})")
             }
         }
     )

@@ -27,10 +27,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -55,8 +58,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import com.example.R
+import com.example.model.LedgerBook
 import com.example.ui.theme.AppIcons
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -182,20 +187,78 @@ fun channelBrandColor(channel: String): Color {
     }
 }
 
-fun categoryIcon(category: String): ImageVector {
-    return when (category) {
-        "餐饮美食" -> AppIcons.Restaurant
-        "交通出行" -> AppIcons.DirectionsCar
-        "购物消费" -> AppIcons.ShoppingBag
-        "居家生活" -> Icons.Rounded.Home
-        "休闲娱乐" -> AppIcons.Movie
-        "医疗健康" -> AppIcons.LocalHospital
-        "工资奖金" -> AppIcons.Payments
-        "理财收益" -> AppIcons.Savings
-        "退款返现" -> AppIcons.ReceiptLong
-        "转账红包", "转账收款" -> AppIcons.CardGiftcard
+data class CategoryIconOption(
+    val key: String,
+    val label: String,
+    val icon: ImageVector
+)
+
+object CategoryIconCatalog {
+    val options: List<CategoryIconOption> by lazy {
+        listOf(
+            CategoryIconOption("restaurant", "餐饮", AppIcons.Restaurant),
+            CategoryIconOption("car", "交通", AppIcons.DirectionsCar),
+            CategoryIconOption("shopping", "购物", AppIcons.ShoppingBag),
+            CategoryIconOption("home", "居家", Icons.Rounded.Home),
+            CategoryIconOption("movie", "娱乐", AppIcons.Movie),
+            CategoryIconOption("hospital", "医疗", AppIcons.LocalHospital),
+            CategoryIconOption("payments", "工资", AppIcons.Payments),
+            CategoryIconOption("savings", "理财", AppIcons.Savings),
+            CategoryIconOption("receipt", "账单", AppIcons.ReceiptLong),
+            CategoryIconOption("gift", "红包", AppIcons.CardGiftcard),
+            CategoryIconOption("bank", "金融", AppIcons.AccountBalance),
+            CategoryIconOption("wallet", "钱包", AppIcons.AccountBalanceWallet),
+            CategoryIconOption("exchange", "转账", AppIcons.CurrencyExchange),
+            CategoryIconOption("book", "学习", AppIcons.MenuBook),
+            CategoryIconOption("cleaning", "日用", AppIcons.CleaningServices),
+            CategoryIconOption("bolt", "水电", AppIcons.Bolt),
+            CategoryIconOption("insights", "投资", AppIcons.Insights),
+            CategoryIconOption("palette", "兴趣", AppIcons.Palette),
+            CategoryIconOption("sparkles", "精选", AppIcons.AutoAwesome),
+            CategoryIconOption("description", "办公", AppIcons.Description),
+            CategoryIconOption("star", "重要", Icons.Rounded.Star),
+            CategoryIconOption("favorite", "人情", Icons.Rounded.Favorite)
+        )
+    }
+
+    fun iconByKey(key: String?): ImageVector? {
+        if (key.isNullOrBlank()) return null
+        return options.firstOrNull { it.key.equals(key.trim(), ignoreCase = true) }?.icon
+    }
+
+    fun optionByKey(key: String?): CategoryIconOption? {
+        if (key.isNullOrBlank()) return null
+        return options.firstOrNull { it.key.equals(key.trim(), ignoreCase = true) }
+    }
+}
+
+val LocalCategoryIcons = compositionLocalOf<Map<String, String>> { emptyMap() }
+
+fun defaultCategoryIcon(category: String): ImageVector {
+    return when {
+        category == "餐饮美食" || category.contains("餐") || category.contains("食") || category.contains("奶茶") || category.contains("咖啡") -> AppIcons.Restaurant
+        category == "交通出行" || category.contains("交通") || category.contains("出行") || category.contains("打车") || category.contains("车") -> AppIcons.DirectionsCar
+        category == "购物消费" || category.contains("购物") || category.contains("服饰") || category.contains("数码") -> AppIcons.ShoppingBag
+        category == "居家生活" || category.contains("居家") || category.contains("房") || category.contains("水电") -> Icons.Rounded.Home
+        category == "休闲娱乐" || category.contains("娱乐") || category.contains("游戏") || category.contains("电影") || category.contains("旅游") -> AppIcons.Movie
+        category == "医疗健康" || category.contains("医疗") || category.contains("健康") || category.contains("运动") -> AppIcons.LocalHospital
+        category == "工资奖金" || category.contains("工资") || category.contains("薪") || category.contains("奖金") -> AppIcons.Payments
+        category == "理财收益" || category.contains("理财") || category.contains("收益") || category.contains("投资") -> AppIcons.Savings
+        category == "退款返现" || category.contains("退款") || category.contains("返现") || category.contains("报销") -> AppIcons.ReceiptLong
+        category == "转账红包" || category == "转账收款" || category.contains("红包") || category.contains("礼") -> AppIcons.CardGiftcard
+        category == "账户互转" || category == "不计收支" || category.contains("互转") || category.contains("转账") -> AppIcons.CurrencyExchange
+        category.contains("学习") || category.contains("教育") || category.contains("书") -> AppIcons.MenuBook
+        category.contains("宠物") || category.contains("爱") || category.contains("人情") -> Icons.Rounded.Favorite
         else -> AppIcons.AccountBalance
     }
+}
+
+fun categoryIcon(
+    category: String,
+    customIcons: Map<String, String> = emptyMap()
+): ImageVector {
+    val customKey = customIcons[category] ?: customIcons[category.trim()]
+    return CategoryIconCatalog.iconByKey(customKey) ?: defaultCategoryIcon(category)
 }
 
 fun transactionTypeColor(type: TransactionType): Color {
@@ -259,7 +322,7 @@ fun ParseMethodBadge(method: ParseMethod, modifier: Modifier = Modifier) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TransactionDetailSheet(
     transaction: LedgerTransaction,
@@ -272,13 +335,22 @@ fun TransactionDetailSheet(
     onDismiss: () -> Unit,
     onConfirmPending: (() -> Unit)? = null,
     onMarkNonBill: (() -> Unit)? = null,
+    books: List<LedgerBook> = emptyList(),
+    assignedBookIds: Set<String> = emptySet(),
+    onUpdateTransactionBooks: ((Set<String>) -> Unit)? = null,
+    onCreateBookQuick: ((String, (LedgerBook) -> Unit) -> Unit)? = null,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val numberFont = LocalNumberFontFamily.current
+    val customIcons = LocalCategoryIcons.current
     val isForeignFromCurrentBase = !transaction.currencyCode.equals(baseCurrencyCode, ignoreCase = true)
     val isForeignFromRecordedBase = !transaction.currencyCode.equals(recordedBaseCurrencyCode, ignoreCase = true)
+    var showBookPickerDialog by remember(transaction.id) { mutableStateOf(false) }
+    val assignedBooks = remember(books, assignedBookIds) {
+        books.filter { it.id in assignedBookIds }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -287,6 +359,7 @@ fun TransactionDetailSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -303,7 +376,7 @@ fun TransactionDetailSheet(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = categoryIcon(transaction.category),
+                        imageVector = categoryIcon(transaction.category, customIcons),
                         contentDescription = transaction.category,
                         tint = transactionTypeColor(transaction.txType)
                     )
@@ -372,6 +445,104 @@ fun TransactionDetailSheet(
                     }
                 }
                 ParseMethodBadge(method = transaction.txParseMethod)
+            }
+
+            if (assignedBooks.isNotEmpty() || onUpdateTransactionBooks != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("detail_books_membership_section")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = AppIcons.MenuBook,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = if (assignedBooks.isNotEmpty()) {
+                                        "所属账本 (${assignedBooks.size})"
+                                    } else {
+                                        "所属账本"
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (onUpdateTransactionBooks != null) {
+                                TextButton(
+                                    onClick = { showBookPickerDialog = true },
+                                    modifier = Modifier.testTag("detail_manage_books_button")
+                                ) {
+                                    Icon(
+                                        imageVector = if (assignedBooks.isEmpty()) Icons.Rounded.Add else AppIcons.LibraryAdd,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(if (assignedBooks.isEmpty()) "添加到账本" else "管理账本")
+                                }
+                            }
+                        }
+                        if (assignedBooks.isEmpty()) {
+                            Text(
+                                text = "暂未加入任何账本，点击右侧可快速归类至一个或多个账本",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                assignedBooks.forEach { book ->
+                                    val accent = Color(book.colorArgb.toInt())
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = accent.copy(alpha = 0.14f),
+                                        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+                                        modifier = Modifier.testTag("detail_book_badge_${book.id}")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(accent)
+                                            )
+                                            Text(
+                                                text = book.name,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if (isForeignFromCurrentBase || isForeignFromRecordedBase) {
@@ -594,6 +765,25 @@ fun TransactionDetailSheet(
                 }
             }
         }
+    }
+
+    if (showBookPickerDialog && onUpdateTransactionBooks != null) {
+        com.example.ui.AddToBooksMultiSelectDialog(
+            selectedTxCount = 1,
+            books = books,
+            preselectedBookIds = assignedBookIds,
+            allowEmptySelection = true,
+            titleText = if (assignedBookIds.isEmpty()) "添加到账本" else "管理所属账本",
+            confirmButtonLabel = { count -> if (count == 0) "移出全部" else "保存 ($count)" },
+            onCreateBookQuick = { name, onCreated ->
+                onCreateBookQuick?.invoke(name, onCreated)
+            },
+            onDismiss = { showBookPickerDialog = false },
+            onConfirm = { chosenBookIds ->
+                onUpdateTransactionBooks(chosenBookIds)
+                showBookPickerDialog = false
+            }
+        )
     }
 }
 
@@ -1644,7 +1834,8 @@ fun CategoryIconAvatar(
     size: Dp = 42.dp,
     modifier: Modifier = Modifier
 ) {
-    val iconVec = categoryIcon(category)
+    val customIcons = LocalCategoryIcons.current
+    val iconVec = categoryIcon(category, customIcons)
     val iconSize = size * 0.5f
     when (visualStyle) {
         IconVisualStyle.FILLED -> {

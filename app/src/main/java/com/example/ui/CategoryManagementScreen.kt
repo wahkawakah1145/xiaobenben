@@ -1,6 +1,8 @@
 package com.example.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +19,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Edit
@@ -48,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -57,6 +63,9 @@ import com.example.model.CategoryCatalog
 import com.example.model.CustomParsingRule
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionType
+import com.example.ui.components.CategoryIconCatalog
+import com.example.ui.components.categoryIcon
+import com.example.ui.components.transactionTypeColor
 import com.example.ui.theme.AppIcons
 import com.example.ui.theme.ExpenseCoral
 import com.example.viewmodel.LedgerViewModel
@@ -68,28 +77,40 @@ fun CategoryManagementScreen(
     settings: BudgetSettings,
     transactionsState: UiState<List<LedgerTransaction>>,
     viewModel: LedgerViewModel,
+    rulesState: UiState<List<CustomParsingRule>>? = null,
     modifier: Modifier = Modifier
 ) {
-    val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
+    val observedRulesState by viewModel.rulesState.collectAsStateWithLifecycle()
+    val effectiveRulesState = rulesState ?: observedRulesState
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
-    val allRules = (rulesState as? UiState.Success)?.data ?: emptyList()
+    val allRules = (effectiveRulesState as? UiState.Success)?.data ?: emptyList()
 
     var selectedType by remember { mutableStateOf(TransactionType.EXPENSE) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var editingIconCategory by remember { mutableStateOf<String?>(null) }
     var renamingCategory by remember { mutableStateOf<String?>(null) }
     var deletingCategory by remember { mutableStateOf<String?>(null) }
     var showResetConfirm by remember { mutableStateOf(false) }
 
-    val activeCategories = remember(settings, selectedType) {
-        CategoryCatalog.categoriesForType(selectedType, settings)
+    val configuredForType = remember(settings, selectedType) {
+        CategoryCatalog.categoriesForType(selectedType, settings).toSet()
+    }
+    val allDisplayedCategories = remember(settings, selectedType, allTransactions, allRules) {
+        CategoryCatalog.allExistingCategoriesForType(
+            type = selectedType,
+            settings = settings,
+            transactions = allTransactions,
+            rules = allRules
+        )
     }
 
     val txCountByCategory = remember(allTransactions) {
         allTransactions.groupingBy { it.category }.eachCount()
     }
     val ruleCountByCategory = remember(allRules) {
-        allRules.groupingBy { it.defaultCategory }.eachCount()
+        allRules.filterNot { it.isIgnoreRule }.groupingBy { it.defaultCategory }.eachCount()
     }
+    val accentColor = transactionTypeColor(selectedType)
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -112,15 +133,23 @@ fun CategoryManagementScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("自定义分类管理", style = MaterialTheme.typography.titleMedium)
+                        Text("分类与图标管理", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text(
-                            text = "可自由新增、重命名或移除支出/收入/转账分类；修改分类名时默认同步更新对应历史账单、通知识别规则与 AI 理解系统提示词。",
+                            text = "自动汇总当前设置、历史账单与识别规则中的所有分类；轻点左侧图标可快捷更换分类图标，新增/修改/删除分类时动态同步对应规则与 AI 理解提示词。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                             TransactionType.entries.forEachIndexed { idx, type ->
+                                val typeCount = remember(settings, type, allTransactions, allRules) {
+                                    CategoryCatalog.allExistingCategoriesForType(
+                                        type = type,
+                                        settings = settings,
+                                        transactions = allTransactions,
+                                        rules = allRules
+                                    ).size
+                                }
                                 SegmentedButton(
                                     selected = selectedType == type,
                                     onClick = { selectedType = type },
@@ -130,7 +159,7 @@ fun CategoryManagementScreen(
                                     ),
                                     modifier = Modifier.testTag("category_tab_${type.name}")
                                 ) {
-                                    Text("${type.label} (${CategoryCatalog.categoriesForType(type, settings).size})")
+                                    Text("${type.label} ($typeCount)")
                                 }
                             }
                         }
@@ -166,13 +195,24 @@ fun CategoryManagementScreen(
                 }
             }
 
-            items(activeCategories, key = { "${selectedType.name}_$it" }) { catName ->
+            items(allDisplayedCategories, key = { "${selectedType.name}_$it" }) { catName ->
                 val txCount = txCountByCategory[catName] ?: 0
                 val ruleCount = ruleCountByCategory[catName] ?: 0
+                val isDiscoveredOnly = catName !in configuredForType
+                val customIconKey = settings.categoryIcons[catName]
+                val iconVec = categoryIcon(catName, settings.categoryIcons)
+
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isDiscoveredOnly) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                        } else {
+                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        }
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("category_item_$catName")
@@ -180,20 +220,81 @@ fun CategoryManagementScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = catName,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(accentColor.copy(alpha = 0.14f))
+                                .clickable { editingIconCategory = catName }
+                                .testTag("category_icon_picker_$catName"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = iconVec,
+                                contentDescription = "修改「$catName」图标",
+                                tint = accentColor,
+                                modifier = Modifier.size(22.dp)
                             )
+                        }
+
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = catName,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                if (isDiscoveredOnly) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "历史/规则发现",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                } else if (!customIconKey.isNullOrBlank()) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "自定义图标",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
                             Text(
-                                text = "关联 $txCount 笔账单 · $ruleCount 条识别规则",
+                                text = "关联 $txCount 笔账单 · $ruleCount 条规则 · 点击左侧换图标",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        IconButton(
+                            onClick = { editingIconCategory = catName },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("category_edit_icon_$catName")
+                        ) {
+                            Icon(
+                                imageVector = AppIcons.Palette,
+                                contentDescription = "更换图标",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                         IconButton(
@@ -202,10 +303,11 @@ fun CategoryManagementScreen(
                                 .minimumInteractiveComponentSize()
                                 .testTag("category_rename_$catName")
                         ) {
-                            Icon(Icons.Rounded.Edit, contentDescription = "修改分类名称")
+                            Icon(Icons.Rounded.Edit, contentDescription = "修改分类名称", modifier = Modifier.size(20.dp))
                         }
+                        val canDelete = isDiscoveredOnly || configuredForType.size > 1
                         IconButton(
-                            enabled = activeCategories.size > 1,
+                            enabled = canDelete,
                             onClick = { deletingCategory = catName },
                             modifier = Modifier
                                 .minimumInteractiveComponentSize()
@@ -213,8 +315,9 @@ fun CategoryManagementScreen(
                         ) {
                             Icon(
                                 imageVector = AppIcons.DeleteOutline,
-                                contentDescription = "删除分类",
-                                tint = if (activeCategories.size > 1) ExpenseCoral else MaterialTheme.colorScheme.outline
+                                contentDescription = "删除或迁移分类",
+                                tint = if (canDelete) ExpenseCoral else MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
@@ -223,8 +326,23 @@ fun CategoryManagementScreen(
         }
     }
 
+    editingIconCategory?.let { targetName ->
+        val currentKey = settings.categoryIcons[targetName]
+        CategoryIconPickerDialog(
+            categoryName = targetName,
+            selectedIconKey = currentKey,
+            accentColor = accentColor,
+            onSelectIcon = { key ->
+                viewModel.setCategoryIcon(targetName, key)
+                editingIconCategory = null
+            },
+            onDismiss = { editingIconCategory = null }
+        )
+    }
+
     if (showAddDialog) {
         var newName by remember { mutableStateOf("") }
+        var selectedIconKey by remember { mutableStateOf<String?>(null) }
         var syncAi by remember { mutableStateOf(true) }
         var errorText by remember { mutableStateOf<String?>(null) }
 
@@ -232,7 +350,10 @@ fun CategoryManagementScreen(
             onDismissRequest = { showAddDialog = false },
             title = { Text("新增${selectedType.label}分类") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     OutlinedTextField(
                         value = newName,
                         onValueChange = { newName = it.take(24); errorText = null },
@@ -243,6 +364,43 @@ fun CategoryManagementScreen(
                             .fillMaxWidth()
                             .testTag("category_add_name_input")
                     )
+                    Text(
+                        text = "快捷选择图标（可选）",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CategoryIconCatalog.options.forEach { option ->
+                            val isSelected = selectedIconKey == option.key
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) accentColor.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceContainerLow,
+                                border = BorderStroke(
+                                    width = if (isSelected) 1.6.dp else 1.dp,
+                                    color = if (isSelected) accentColor else MaterialTheme.colorScheme.outlineVariant
+                                ),
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        selectedIconKey = if (isSelected) null else option.key
+                                    }
+                                    .testTag("category_add_icon_${option.key}")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = option.icon,
+                                        contentDescription = option.label,
+                                        tint = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -274,14 +432,15 @@ fun CategoryManagementScreen(
                             errorText = "请输入分类名称"
                             return@Button
                         }
-                        if (trimmed in activeCategories) {
+                        if (trimmed in configuredForType) {
                             errorText = "该分类已存在"
                             return@Button
                         }
                         viewModel.addCustomCategory(
                             type = selectedType,
                             name = trimmed,
-                            syncAiPrompt = syncAi
+                            syncAiPrompt = syncAi,
+                            iconKey = selectedIconKey
                         )
                         showAddDialog = false
                     },
@@ -331,7 +490,7 @@ fun CategoryManagementScreen(
                     )
                     CategorySyncToggleRow(
                         title = "同步更新 AI 理解提示词",
-                        subtitle = "更新系统/自定义提示词中的分类映射名称",
+                        subtitle = "动态更新系统/自定义提示词中的分类映射名称",
                         checked = syncAi,
                         onCheckedChange = { syncAi = it }
                     )
@@ -374,8 +533,8 @@ fun CategoryManagementScreen(
     }
 
     deletingCategory?.let { targetName ->
-        val remainingOptions = remember(activeCategories, targetName) {
-            activeCategories.filterNot { it == targetName }
+        val remainingOptions = remember(allDisplayedCategories, targetName) {
+            allDisplayedCategories.filterNot { it == targetName }.ifEmpty { listOf("其他") }
         }
         var fallbackCategory by remember(targetName) {
             mutableStateOf(
@@ -455,11 +614,20 @@ fun CategoryManagementScreen(
     }
 
     if (showResetConfirm) {
+        var resetIconsToo by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { showResetConfirm = false },
             title = { Text("恢复默认分类列表？") },
             text = {
-                Text("将把支出、收入与转账分类列表恢复为系统内置默认分类，并同步刷新 AI 理解提示词（不会修改已有历史账单记录）。")
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("将把支出、收入与转账分类列表恢复为系统内置默认分类，并同步刷新 AI 理解提示词（不会修改已有历史账单记录）。")
+                    CategorySyncToggleRow(
+                        title = "同时重置自定义分类图标",
+                        subtitle = "关闭则保留已设置的分类图标",
+                        checked = resetIconsToo,
+                        onCheckedChange = { resetIconsToo = it }
+                    )
+                }
             },
             dismissButton = {
                 TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
@@ -467,7 +635,7 @@ fun CategoryManagementScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.resetCategoriesToDefault(syncAiPrompt = true)
+                        viewModel.resetCategoriesToDefault(syncAiPrompt = true, resetIcons = resetIconsToo)
                         showResetConfirm = false
                     },
                     modifier = Modifier.testTag("category_reset_confirm_button")
@@ -477,6 +645,94 @@ fun CategoryManagementScreen(
             }
         )
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CategoryIconPickerDialog(
+    categoryName: String,
+    selectedIconKey: String?,
+    accentColor: androidx.compose.ui.graphics.Color,
+    onSelectIcon: (String?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("选择「$categoryName」图标")
+                Text(
+                    text = "点选后立即生效，同步应用到账单列表、详情页与分析图表",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CategoryIconCatalog.options.forEach { option ->
+                        val isSelected = selectedIconKey.equals(option.key, ignoreCase = true)
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (isSelected) accentColor.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceContainerLow,
+                            border = BorderStroke(
+                                width = if (isSelected) 1.6.dp else 1.dp,
+                                color = if (isSelected) accentColor else MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onSelectIcon(option.key) }
+                                .testTag("icon_picker_option_${option.key}")
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .width(64.dp)
+                                    .padding(vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = option.icon,
+                                    contentDescription = option.label,
+                                    tint = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Text(
+                                    text = option.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            if (!selectedIconKey.isNullOrBlank()) {
+                TextButton(
+                    onClick = { onSelectIcon(null) },
+                    modifier = Modifier.testTag("icon_picker_reset_default")
+                ) {
+                    Text("恢复默认图标")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
 }
 
 @Composable

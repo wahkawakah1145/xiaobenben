@@ -426,11 +426,18 @@ class LedgerRepository(
         }
     }
 
-    suspend fun recordIgnoredNotificationRule(
+    data class NonBillMarkUndoSnapshot(
+        val transaction: LedgerTransaction,
+        val bookLinks: List<TransactionBookLink> = emptyList(),
+        val createdOrUpdatedRule: CustomParsingRule? = null,
+        val previousRuleBeforeOverwrite: CustomParsingRule? = null
+    )
+
+    suspend fun recordIgnoredNotificationRuleWithPrevious(
         packageName: String,
         title: String,
         content: String
-    ): Result<CustomParsingRule> {
+    ): Result<Pair<CustomParsingRule, CustomParsingRule?>> {
         return try {
             val rawCombined = "$title\n$content".trim()
             val sig = com.example.parser.ChinaNotificationParser
@@ -467,7 +474,7 @@ class LedgerRepository(
                 updatedAtMillis = now
             )
             dao.upsertRule(ParsingRuleEntity.fromDomain(rule))
-            Result.success(rule)
+            Result.success(rule to existingIgnore)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -475,7 +482,17 @@ class LedgerRepository(
         }
     }
 
-    suspend fun markTransactionAsNonBill(tx: LedgerTransaction): Result<CustomParsingRule?> {
+    suspend fun recordIgnoredNotificationRule(
+        packageName: String,
+        title: String,
+        content: String
+    ): Result<CustomParsingRule> = recordIgnoredNotificationRuleWithPrevious(
+        packageName = packageName,
+        title = title,
+        content = content
+    ).map { it.first }
+
+    suspend fun markTransactionAsNonBillWithUndoSnapshot(tx: LedgerTransaction): Result<NonBillMarkUndoSnapshot> {
         return try {
             val raw = tx.rawNotification?.trim().orEmpty()
             val lines = raw.lines().map { it.trim() }.filter { it.isNotEmpty() }
@@ -499,8 +516,9 @@ class LedgerRepository(
                 com.example.model.SourceApp.UNIONPAY -> "com.unionpay"
                 else -> "*"
             }
-            val learnedRule = if (title.isNotBlank() || content.isNotBlank()) {
-                recordIgnoredNotificationRule(
+            val bookLinks = getBookLinksForTransactionsOnce(listOf(tx.id))
+            val rulePair = if (title.isNotBlank() || content.isNotBlank()) {
+                recordIgnoredNotificationRuleWithPrevious(
                     packageName = packageHint,
                     title = title,
                     content = content
@@ -510,12 +528,24 @@ class LedgerRepository(
             }
             dao.deleteRefsByTransactionId(tx.id)
             dao.deleteTransactionById(tx.id)
-            Result.success(learnedRule)
+            pruneDedupExcludedIds(setOf(tx.id))
+            Result.success(
+                NonBillMarkUndoSnapshot(
+                    transaction = tx,
+                    bookLinks = bookLinks,
+                    createdOrUpdatedRule = rulePair?.first,
+                    previousRuleBeforeOverwrite = rulePair?.second
+                )
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun markTransactionAsNonBill(tx: LedgerTransaction): Result<CustomParsingRule?> {
+        return markTransactionAsNonBillWithUndoSnapshot(tx).map { it.createdOrUpdatedRule }
     }
 
     private suspend fun upsertTemplateFromEditedTransaction(
@@ -613,6 +643,7 @@ class LedgerRepository(
             require(txId.isNotBlank()) { "账单 ID 不能为空" }
             dao.deleteRefsByTransactionId(txId)
             dao.deleteTransactionById(txId)
+            pruneDedupExcludedIds(setOf(txId))
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -629,11 +660,82 @@ class LedgerRepository(
                 dao.deleteRefsByTransactionIds(chunk)
                 dao.deleteTransactionsByIds(chunk)
             }
+            pruneDedupExcludedIds(cleanIds.toHashSet())
             Result.success(cleanIds.size)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    suspend fun getBookLinksForTransactionsOnce(txIds: Collection<String>): List<TransactionBookLink> {
+        val cleanIds = txIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (cleanIds.isEmpty()) return emptyList()
+        return buildList {
+            cleanIds.chunked(400).forEach { chunk ->
+                addAll(dao.getBookRefsByTransactionIds(chunk).map { it.toDomain() })
+            }
+        }
+    }
+
+    suspend fun restoreBookLinks(links: List<TransactionBookLink>) {
+        if (links.isEmpty()) return
+        val existingTxIds = dao.getAllTransactionIdsOnce().toHashSet()
+        val existingBookIds = dao.getAllBooksOnce().mapTo(HashSet()) { it.id }
+        val valid = links
+            .filter { it.transactionId in existingTxIds && it.bookId in existingBookIds }
+            .map { TransactionBookCrossRefEntity.fromDomain(it) }
+        valid.chunked(400).forEach { chunk ->
+            dao.insertBookRefs(chunk)
+        }
+    }
+
+    suspend fun restoreInquiry(inquiry: NotificationInquiry) {
+        dao.upsertInquiry(NotificationInquiryEntity.fromDomain(inquiry))
+    }
+
+    suspend fun excludeTransactionsFromDedup(txIds: Collection<String>): Result<Int> {
+        return try {
+            val clean = txIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (clean.isEmpty()) return Result.success(0)
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val merged = (settings.dedupExcludedTransactionIds + clean).distinct()
+            val addedCount = (merged.size - settings.dedupExcludedTransactionIds.distinct().size).coerceAtLeast(0)
+            settingsStore.saveBudgetSettings(settings.copy(dedupExcludedTransactionIds = merged))
+            Result.success(addedCount)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun restoreExcludedDedupTransactions(txIds: Collection<String>): Result<Int> {
+        return try {
+            val removeSet = txIds.map { it.trim() }.filter { it.isNotEmpty() }.toHashSet()
+            if (removeSet.isEmpty()) return Result.success(0)
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val remaining = settings.dedupExcludedTransactionIds.filterNot { it in removeSet }
+            val removed = (settings.dedupExcludedTransactionIds.size - remaining.size).coerceAtLeast(0)
+            if (removed > 0) {
+                settingsStore.saveBudgetSettings(settings.copy(dedupExcludedTransactionIds = remaining))
+            }
+            Result.success(removed)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun pruneDedupExcludedIds(removedIds: Set<String>) {
+        if (removedIds.isEmpty()) return
+        val settings = settingsStore.getBudgetSettingsOnce()
+        if (settings.dedupExcludedTransactionIds.isEmpty()) return
+        val filtered = settings.dedupExcludedTransactionIds.filterNot { it in removedIds }
+        if (filtered.size != settings.dedupExcludedTransactionIds.size) {
+            settingsStore.saveBudgetSettings(settings.copy(dedupExcludedTransactionIds = filtered))
         }
     }
 
@@ -944,30 +1046,59 @@ class LedgerRepository(
         }
     }
 
+    suspend fun setCategoryIcon(
+        categoryName: String,
+        iconKey: String?
+    ): Result<Unit> {
+        return try {
+            val cleanName = categoryName.trim().take(24)
+            require(cleanName.isNotEmpty()) { "分类名称不能为空" }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedIcons = settings.categoryIcons.toMutableMap()
+            val cleanKey = iconKey?.trim()?.take(48).orEmpty()
+            if (cleanKey.isEmpty()) {
+                updatedIcons.remove(cleanName)
+            } else {
+                updatedIcons[cleanName] = cleanKey
+            }
+            settingsStore.saveBudgetSettings(settings.copy(categoryIcons = updatedIcons))
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun addCustomCategory(
         type: TransactionType,
         rawName: String,
-        syncAiPrompt: Boolean = true
+        syncAiPrompt: Boolean = true,
+        iconKey: String? = null
     ): Result<CategorySyncResult> {
         return try {
             val cleanName = rawName.trim().take(24)
             require(cleanName.isNotEmpty()) { "分类名称不能为空" }
             val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedIcons = settings.categoryIcons.toMutableMap().apply {
+                val cleanKey = iconKey?.trim()?.take(48).orEmpty()
+                if (cleanKey.isNotEmpty()) put(cleanName, cleanKey)
+            }
             val updatedSettings = when (type) {
                 TransactionType.EXPENSE -> {
                     val cur = CategoryCatalog.activeExpenseCategories(settings)
                     require(cur.none { it == cleanName }) { "该支出分类已存在" }
-                    settings.copy(expenseCategories = cur + cleanName)
+                    settings.copy(expenseCategories = cur + cleanName, categoryIcons = updatedIcons)
                 }
                 TransactionType.INCOME -> {
                     val cur = CategoryCatalog.activeIncomeCategories(settings)
                     require(cur.none { it == cleanName }) { "该收入分类已存在" }
-                    settings.copy(incomeCategories = cur + cleanName)
+                    settings.copy(incomeCategories = cur + cleanName, categoryIcons = updatedIcons)
                 }
                 TransactionType.TRANSFER -> {
                     val cur = CategoryCatalog.activeTransferCategories(settings)
                     require(cur.none { it == cleanName }) { "该转账分类已存在" }
-                    settings.copy(transferCategories = cur + cleanName)
+                    settings.copy(transferCategories = cur + cleanName, categoryIcons = updatedIcons)
                 }
             }
             settingsStore.saveBudgetSettings(updatedSettings)
@@ -1008,21 +1139,39 @@ class LedgerRepository(
             require(cleanOld != cleanNew) { "新分类名称与原名称相同" }
 
             val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedIcons = settings.categoryIcons.toMutableMap().apply {
+                val prevIcon = remove(cleanOld)
+                if (!prevIcon.isNullOrBlank() && !containsKey(cleanNew)) {
+                    put(cleanNew, prevIcon)
+                }
+            }
             val updatedSettings = when (type) {
                 TransactionType.EXPENSE -> {
                     val cur = CategoryCatalog.activeExpenseCategories(settings)
-                    val replaced = cur.map { if (it == cleanOld) cleanNew else it }.distinct()
-                    settings.copy(expenseCategories = replaced)
+                    val replaced = if (cleanOld in cur) {
+                        cur.map { if (it == cleanOld) cleanNew else it }.distinct()
+                    } else {
+                        (cur + cleanNew).distinct()
+                    }
+                    settings.copy(expenseCategories = replaced, categoryIcons = updatedIcons)
                 }
                 TransactionType.INCOME -> {
                     val cur = CategoryCatalog.activeIncomeCategories(settings)
-                    val replaced = cur.map { if (it == cleanOld) cleanNew else it }.distinct()
-                    settings.copy(incomeCategories = replaced)
+                    val replaced = if (cleanOld in cur) {
+                        cur.map { if (it == cleanOld) cleanNew else it }.distinct()
+                    } else {
+                        (cur + cleanNew).distinct()
+                    }
+                    settings.copy(incomeCategories = replaced, categoryIcons = updatedIcons)
                 }
                 TransactionType.TRANSFER -> {
                     val cur = CategoryCatalog.activeTransferCategories(settings)
-                    val replaced = cur.map { if (it == cleanOld) cleanNew else it }.distinct()
-                    settings.copy(transferCategories = replaced)
+                    val replaced = if (cleanOld in cur) {
+                        cur.map { if (it == cleanOld) cleanNew else it }.distinct()
+                    } else {
+                        (cur + cleanNew).distinct()
+                    }
+                    settings.copy(transferCategories = replaced, categoryIcons = updatedIcons)
                 }
             }
             settingsStore.saveBudgetSettings(updatedSettings)
@@ -1082,21 +1231,39 @@ class LedgerRepository(
             val updatedSettings = when (type) {
                 TransactionType.EXPENSE -> {
                     val cur = CategoryCatalog.activeExpenseCategories(settings)
-                    require(cur.size > 1) { "至少需保留 1 个支出分类" }
-                    settings.copy(expenseCategories = cur.filterNot { it == cleanTarget })
+                    if (cleanTarget in cur) {
+                        require(cur.size > 1) { "至少需保留 1 个支出分类" }
+                        settings.copy(expenseCategories = cur.filterNot { it == cleanTarget })
+                    } else {
+                        settings
+                    }
                 }
                 TransactionType.INCOME -> {
                     val cur = CategoryCatalog.activeIncomeCategories(settings)
-                    require(cur.size > 1) { "至少需保留 1 个收入分类" }
-                    settings.copy(incomeCategories = cur.filterNot { it == cleanTarget })
+                    if (cleanTarget in cur) {
+                        require(cur.size > 1) { "至少需保留 1 个收入分类" }
+                        settings.copy(incomeCategories = cur.filterNot { it == cleanTarget })
+                    } else {
+                        settings
+                    }
                 }
                 TransactionType.TRANSFER -> {
                     val cur = CategoryCatalog.activeTransferCategories(settings)
-                    require(cur.size > 1) { "至少需保留 1 个转账分类" }
-                    settings.copy(transferCategories = cur.filterNot { it == cleanTarget })
+                    if (cleanTarget in cur) {
+                        require(cur.size > 1) { "至少需保留 1 个转账分类" }
+                        settings.copy(transferCategories = cur.filterNot { it == cleanTarget })
+                    } else {
+                        settings
+                    }
                 }
             }
-            settingsStore.saveBudgetSettings(updatedSettings)
+            val remainingCategories = CategoryCatalog.allActiveCategories(updatedSettings)
+            val cleanedIcons = if (cleanTarget !in remainingCategories) {
+                updatedSettings.categoryIcons - cleanTarget
+            } else {
+                updatedSettings.categoryIcons
+            }
+            settingsStore.saveBudgetSettings(updatedSettings.copy(categoryIcons = cleanedIcons))
             val now = System.currentTimeMillis()
             val updatedTx = if (syncTransactions && cleanFallback != cleanTarget) {
                 dao.renameTransactionCategory(cleanTarget, cleanFallback, now)
@@ -1136,13 +1303,17 @@ class LedgerRepository(
         }
     }
 
-    suspend fun resetCategoriesToDefault(syncAiPrompt: Boolean = true): Result<Unit> {
+    suspend fun resetCategoriesToDefault(
+        syncAiPrompt: Boolean = true,
+        resetIcons: Boolean = false
+    ): Result<Unit> {
         return try {
             val settings = settingsStore.getBudgetSettingsOnce()
             val reset = settings.copy(
                 expenseCategories = CategoryCatalog.expenseCategories,
                 incomeCategories = CategoryCatalog.incomeCategories,
-                transferCategories = CategoryCatalog.transferCategories
+                transferCategories = CategoryCatalog.transferCategories,
+                categoryIcons = if (resetIcons) emptyMap() else settings.categoryIcons
             )
             settingsStore.saveBudgetSettings(reset)
             if (syncAiPrompt) {

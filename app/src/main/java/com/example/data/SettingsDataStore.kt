@@ -107,6 +107,8 @@ class SettingsDataStore(private val context: Context) {
         val EXPENSE_CATEGORIES_JSON = stringPreferencesKey("custom_expense_categories_json")
         val INCOME_CATEGORIES_JSON = stringPreferencesKey("custom_income_categories_json")
         val TRANSFER_CATEGORIES_JSON = stringPreferencesKey("custom_transfer_categories_json")
+        val CATEGORY_ICONS_JSON = stringPreferencesKey("custom_category_icons_json")
+        val DEDUP_EXCLUDED_TX_IDS_JSON = stringPreferencesKey("dedup_excluded_tx_ids_json")
 
         val AI_PROVIDER_MODE = stringPreferencesKey("ai_provider_mode")
         val AI_LOCAL_MODEL_ID = stringPreferencesKey("ai_local_model_id")
@@ -156,7 +158,9 @@ class SettingsDataStore(private val context: Context) {
             } ?: CategoryCatalog.incomeCategories,
             transferCategories = prefs[Keys.TRANSFER_CATEGORIES_JSON]?.let { rawJson ->
                 CategoryCatalog.normalizeCategoryList(decodeStringListJson(rawJson), CategoryCatalog.transferCategories)
-            } ?: CategoryCatalog.transferCategories
+            } ?: CategoryCatalog.transferCategories,
+            categoryIcons = decodeStringMapJson(prefs[Keys.CATEGORY_ICONS_JSON]),
+            dedupExcludedTransactionIds = decodeStringListJson(prefs[Keys.DEDUP_EXCLUDED_TX_IDS_JSON])
         )
     }
 
@@ -291,6 +295,20 @@ class SettingsDataStore(private val context: Context) {
             }.toString()
             prefs[Keys.TRANSFER_CATEGORIES_JSON] = JSONArray().apply {
                 CategoryCatalog.normalizeCategoryList(settings.transferCategories, CategoryCatalog.transferCategories)
+                    .forEach { put(it) }
+            }.toString()
+            prefs[Keys.CATEGORY_ICONS_JSON] = JSONObject().apply {
+                settings.categoryIcons.forEach { (k, v) ->
+                    val ck = k.trim().take(24)
+                    val cv = v.trim().take(48)
+                    if (ck.isNotEmpty() && cv.isNotEmpty()) put(ck, cv)
+                }
+            }.toString()
+            prefs[Keys.DEDUP_EXCLUDED_TX_IDS_JSON] = JSONArray().apply {
+                settings.dedupExcludedTransactionIds
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
                     .forEach { put(it) }
             }.toString()
         }
@@ -429,5 +447,22 @@ class SettingsDataStore(private val context: Context) {
                 }
             }.distinct()
         }.getOrDefault(emptyList())
+    }
+
+    private fun decodeStringMapJson(raw: String?): Map<String, String> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(raw)
+            val result = LinkedHashMap<String, String>()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next().trim().take(24)
+                val value = obj.optString(key).trim().take(48)
+                if (key.isNotEmpty() && value.isNotEmpty()) {
+                    result[key] = value
+                }
+            }
+            result
+        }.getOrDefault(emptyMap())
     }
 }

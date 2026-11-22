@@ -58,6 +58,18 @@ object LedgerBackupCodec {
                 put("transferCategories", JSONArray().apply {
                     CategoryCatalog.activeTransferCategories(settings).forEach { put(it) }
                 })
+                if (settings.categoryIcons.isNotEmpty()) {
+                    put("categoryIcons", JSONObject().apply {
+                        settings.categoryIcons.forEach { (k, v) ->
+                            if (k.isNotBlank() && v.isNotBlank()) put(k, v)
+                        }
+                    })
+                }
+                if (settings.dedupExcludedTransactionIds.isNotEmpty()) {
+                    put("dedupExcludedTransactionIds", JSONArray().apply {
+                        settings.dedupExcludedTransactionIds.distinct().forEach { put(it) }
+                    })
+                }
             })
             put("transactions", JSONArray().apply {
                 transactions.forEach { tx ->
@@ -307,7 +319,25 @@ object LedgerBackupCodec {
                         },
                         currentSettings.transferCategories
                     )
-                } ?: currentSettings.transferCategories
+                } ?: currentSettings.transferCategories,
+                categoryIcons = s.optJSONObject("categoryIcons")?.let { obj ->
+                    val map = LinkedHashMap<String, String>()
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next().trim().take(24)
+                        val v = obj.optString(k).trim().take(48)
+                        if (k.isNotEmpty() && v.isNotEmpty()) map[k] = v
+                    }
+                    map
+                } ?: currentSettings.categoryIcons,
+                dedupExcludedTransactionIds = s.optJSONArray("dedupExcludedTransactionIds")?.let { arr ->
+                    buildList(arr.length()) {
+                        for (i in 0 until arr.length()) {
+                            val id = arr.optString(i).trim()
+                            if (id.isNotEmpty()) add(id)
+                        }
+                    }.distinct()
+                } ?: currentSettings.dedupExcludedTransactionIds
             )
         }
 

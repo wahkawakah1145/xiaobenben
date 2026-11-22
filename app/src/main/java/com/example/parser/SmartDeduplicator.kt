@@ -109,13 +109,15 @@ object SmartDeduplicator {
         timeWindow: DeduplicationTimeWindow = DeduplicationTimeWindow.ONE_MINUTE,
         channelFilter: DeduplicationChannelFilter = DeduplicationChannelFilter.ALL,
         minSimilarity: Double = 0.58,
-        requireMerchantSimilarity: Boolean = false
+        requireMerchantSimilarity: Boolean = false,
+        excludedTransactionIds: Set<String> = emptySet()
     ): List<DuplicateGroup> = findDuplicateGroups(
         transactions = transactions,
         maxWindowMillis = timeWindow.maxDiffMillis,
         channelFilter = channelFilter,
         minSimilarity = minSimilarity,
-        requireMerchantSimilarity = requireMerchantSimilarity
+        requireMerchantSimilarity = requireMerchantSimilarity,
+        excludedTransactionIds = excludedTransactionIds
     )
 
     fun findDuplicateGroups(
@@ -123,12 +125,18 @@ object SmartDeduplicator {
         maxWindowMillis: Long,
         channelFilter: DeduplicationChannelFilter = DeduplicationChannelFilter.ALL,
         minSimilarity: Double = 0.58,
-        requireMerchantSimilarity: Boolean = false
+        requireMerchantSimilarity: Boolean = false,
+        excludedTransactionIds: Set<String> = emptySet()
     ): List<DuplicateGroup> {
-        if (transactions.size < 2) return emptyList()
+        val candidateTransactions = if (excludedTransactionIds.isEmpty()) {
+            transactions
+        } else {
+            transactions.filterNot { it.id in excludedTransactionIds }
+        }
+        if (candidateTransactions.size < 2) return emptyList()
 
         val boundedWindow = maxWindowMillis.coerceIn(MIN_SHORT_WINDOW_MILLIS, MAX_SHORT_WINDOW_MILLIS)
-        val buckets = transactions.groupBy { tx ->
+        val buckets = candidateTransactions.groupBy { tx ->
             Triple(tx.amountCents, tx.currencyCode.uppercase(), tx.txType)
         }
 

@@ -419,6 +419,9 @@ interface LedgerDao {
     @Query("DELETE FROM transaction_book_cross_ref WHERE transactionId IN (:txIds)")
     suspend fun deleteRefsByTransactionIds(txIds: List<String>)
 
+    @Query("SELECT * FROM transaction_book_cross_ref WHERE transactionId IN (:txIds)")
+    suspend fun getBookRefsByTransactionIds(txIds: List<String>): List<TransactionBookCrossRefEntity>
+
     @Query("DELETE FROM transaction_book_cross_ref WHERE bookId = :bookId AND transactionId IN (:txIds)")
     suspend fun deleteRefsByBookAndTransactionIds(bookId: String, txIds: List<String>)
 }

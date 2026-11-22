@@ -975,6 +975,12 @@ fun LedgerHomeScreen(
 
     selectedTransaction?.let { tx ->
         val (recordedBase, recordedRate, recordedCents) = viewModel.recordedSnapshotDisplay(tx)
+        val txAssignedBookIds = remember(bookLinks, tx.id) {
+            bookLinks.asSequence()
+                .filter { it.transactionId == tx.id }
+                .map { it.bookId }
+                .toSet()
+        }
         TransactionDetailSheet(
             transaction = tx,
             baseCurrencyCode = baseCurrency,
@@ -996,6 +1002,14 @@ fun LedgerHomeScreen(
                     selectedTransaction = null
                 }
             } else null,
+            books = books,
+            assignedBookIds = txAssignedBookIds,
+            onUpdateTransactionBooks = { chosen ->
+                viewModel.setBooksForTransaction(tx.id, chosen)
+            },
+            onCreateBookQuick = { name, onCreated ->
+                viewModel.saveBook(name = name, onSaved = onCreated)
+            },
             onEdit = {
                 editingTransaction = tx
                 selectedTransaction = null

@@ -71,6 +71,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -256,9 +257,11 @@ fun AppNavigation(
             }
 
             val transactionsState by viewModel.transactionsState.collectAsStateWithLifecycle()
+            val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
             val books by viewModel.booksState.collectAsStateWithLifecycle()
             val bookLinks by viewModel.bookLinksState.collectAsStateWithLifecycle()
             val selectedAnalyticsBookId by viewModel.selectedAnalyticsBookId.collectAsStateWithLifecycle()
+            val openBookDetailId by viewModel.openBookDetailId.collectAsStateWithLifecycle()
             val inquiries by viewModel.inquiriesState.collectAsStateWithLifecycle()
             val settings by viewModel.settingsState.collectAsStateWithLifecycle()
             val exchangeRates by viewModel.exchangeRateState.collectAsStateWithLifecycle()
@@ -266,6 +269,10 @@ fun AppNavigation(
             val storageFootprint by viewModel.storageFootprintState.collectAsStateWithLifecycle()
             val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
             val deleteUndoBanner by viewModel.deleteUndoBanner.collectAsStateWithLifecycle()
+
+            CompositionLocalProvider(
+                com.example.ui.components.LocalCategoryIcons provides settings.categoryIcons
+            ) {
 
             LaunchedEffect(settings.exchangeRateUpdateFrequency) {
                 viewModel.checkExchangeRateAutoUpdateIfDue()
@@ -344,8 +351,19 @@ fun AppNavigation(
             }
 
             val currentTab = visibleTabs.getOrElse(pagerState.currentPage) { MainBottomTab.LEDGER }
+            val openBookDetail = remember(books, openBookDetailId) {
+                openBookDetailId?.let { id -> books.firstOrNull { it.id == id } }
+            }
+            var previousTrackedTab by remember { mutableStateOf(MainBottomTab.LEDGER) }
 
-            LaunchedEffect(currentTab) {
+            LaunchedEffect(currentTab, openBookDetailId) {
+                if (previousTrackedTab == MainBottomTab.BOOKS &&
+                    currentTab == MainBottomTab.ANALYTICS &&
+                    !openBookDetailId.isNullOrBlank()
+                ) {
+                    viewModel.selectAnalyticsBook(openBookDetailId)
+                }
+                previousTrackedTab = currentTab
                 lastTrackedTab = currentTab
             }
 
@@ -355,6 +373,7 @@ fun AppNavigation(
 
             val homeListState = rememberLazyListState()
             val booksListState = rememberLazyListState()
+            val bookDetailListState = rememberLazyListState()
             val analyticsListState = rememberLazyListState()
             val settingsListState = rememberLazyListState()
             var lastTabTapPage by remember { mutableIntStateOf(-1) }
@@ -403,7 +422,13 @@ fun AppNavigation(
                         scope.launch {
                             when (tappedTab) {
                                 MainBottomTab.LEDGER -> homeListState.animateScrollToItem(0)
-                                MainBottomTab.BOOKS -> booksListState.animateScrollToItem(0)
+                                MainBottomTab.BOOKS -> {
+                                    if (openBookDetail != null) {
+                                        bookDetailListState.animateScrollToItem(0)
+                                    } else {
+                                        booksListState.animateScrollToItem(0)
+                                    }
+                                }
                                 MainBottomTab.ANALYTICS -> analyticsListState.animateScrollToItem(0)
                                 MainBottomTab.SETTINGS -> settingsListState.animateScrollToItem(0)
                                 null -> Unit
@@ -413,8 +438,16 @@ fun AppNavigation(
                 }
             }
 
-            // On non-home main tab: system back / predictive back returns to Ledger tab
-            if (isTopLevelRoute && currentTab != MainBottomTab.LEDGER && !isAnalyticsCalendarOpen) {
+            val isTopLevelBookDetailOpen = isTopLevelRoute && currentTab == MainBottomTab.BOOKS && openBookDetail != null
+            val isSubRouteBookDetailOpen = currentRoute == ROUTE_SETTINGS_BOOKS && openBookDetail != null
+
+            // While viewing a book detail inside Books tab: Back returns to Books home list
+            if (isTopLevelBookDetailOpen) {
+                BackHandler(enabled = true) {
+                    viewModel.closeBookDetail()
+                }
+            } else if (isTopLevelRoute && currentTab != MainBottomTab.LEDGER && !isAnalyticsCalendarOpen) {
+                // On non-home main tab: system back / predictive back returns to Ledger tab
                 if (appearance.predictiveBackEnabled) {
                     PredictiveBackHandler(enabled = true) { progress: Flow<BackEventCompat> ->
                         try {
@@ -438,13 +471,13 @@ fun AppNavigation(
 
             val currentTitle = when (currentRoute) {
                 ROUTE_MAIN_TABS -> when (currentTab) {
-                    MainBottomTab.BOOKS -> "账本"
+                    MainBottomTab.BOOKS -> openBookDetail?.let { "账本 · ${it.name}" } ?: "账本"
                     MainBottomTab.ANALYTICS -> "收支分析"
                     MainBottomTab.SETTINGS -> "设置"
                     MainBottomTab.LEDGER -> appearance.homeBrandCustomName.ifBlank { stringResource(R.string.app_name) }
                 }
                 ROUTE_SETTINGS_LEDGER_MGMT -> "账单工具"
-                ROUTE_SETTINGS_BOOKS -> "账本管理"
+                ROUTE_SETTINGS_BOOKS -> openBookDetail?.let { "账本 · ${it.name}" } ?: "账本管理"
                 ROUTE_BOOK_ANALYTICS -> {
                     val bName = selectedAnalyticsBookId?.let { id -> books.firstOrNull { it.id == id }?.name }
                     if (bName != null) "账本分析 · $bName" else "账本分析"
@@ -521,6 +554,10 @@ fun AppNavigation(
                             settings = settings,
                             exchangeRates = exchangeRates,
                             viewModel = viewModel,
+                            openBookId = openBookDetail?.id,
+                            onOpenBook = { bookId -> viewModel.openBookDetail(bookId) },
+                            onCloseBook = { viewModel.closeBookDetail() },
+                            canSwipeToAnalytics = visibleTabs.contains(MainBottomTab.ANALYTICS),
                             onAnalyzeBook = { bookId ->
                                 viewModel.selectAnalyticsBook(bookId)
                                 val analyticsIdx = visibleTabs.indexOf(MainBottomTab.ANALYTICS)
@@ -530,7 +567,8 @@ fun AppNavigation(
                                     navController.navigate(ROUTE_BOOK_ANALYTICS)
                                 }
                             },
-                            listState = booksListState
+                            listState = booksListState,
+                            detailListState = bookDetailListState
                         )
                         MainBottomTab.ANALYTICS -> AnalyticsScreen(
                             transactionsState = transactionsState,
@@ -583,11 +621,16 @@ fun AppNavigation(
                         settings = settings,
                         exchangeRates = exchangeRates,
                         viewModel = viewModel,
+                        openBookId = openBookDetail?.id,
+                        onOpenBook = { bookId -> viewModel.openBookDetail(bookId) },
+                        onCloseBook = { viewModel.closeBookDetail() },
+                        canSwipeToAnalytics = false,
                         onAnalyzeBook = { bookId ->
                             viewModel.selectAnalyticsBook(bookId)
                             navController.navigate(ROUTE_BOOK_ANALYTICS)
                         },
-                        listState = booksListState
+                        listState = booksListState,
+                        detailListState = bookDetailListState
                     )
                     ROUTE_BOOK_ANALYTICS -> AnalyticsScreen(
                         transactionsState = transactionsState,
@@ -610,6 +653,7 @@ fun AppNavigation(
                     ROUTE_SETTINGS_CATEGORIES -> CategoryManagementScreen(
                         settings = settings,
                         transactionsState = transactionsState,
+                        rulesState = rulesState,
                         viewModel = viewModel
                     )
                     ROUTE_SETTINGS_BILL_BEHAVIOR -> BookkeepingBehaviorScreen(
@@ -624,6 +668,9 @@ fun AppNavigation(
                     )
                     ROUTE_SETTINGS_DEDUP -> SmartDeduplicationScreen(
                         transactionsState = transactionsState,
+                        settings = settings,
+                        books = books,
+                        bookLinks = bookLinks,
                         viewModel = viewModel
                     )
                     ROUTE_SETTINGS_STORAGE_OPT -> StorageOptimizationScreen(viewModel = viewModel)
@@ -773,7 +820,17 @@ fun AppNavigation(
                                     )
                                 },
                                 navigationIcon = {
-                                    if (!isTopLevelRoute) {
+                                    if (isTopLevelBookDetailOpen || isSubRouteBookDetailOpen) {
+                                        IconButton(
+                                            onClick = { viewModel.closeBookDetail() },
+                                            modifier = Modifier.testTag("book_detail_back_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                                contentDescription = "返回账本主页"
+                                            )
+                                        }
+                                    } else if (!isTopLevelRoute) {
                                         IconButton(
                                             onClick = popWithStyle,
                                             modifier = Modifier.testTag("top_bar_back_button")
@@ -956,6 +1013,10 @@ fun AppNavigation(
                                                     settings = settings,
                                                     exchangeRates = exchangeRates,
                                                     viewModel = viewModel,
+                                                    openBookId = openBookDetail?.id,
+                                                    onOpenBook = { bookId -> viewModel.openBookDetail(bookId) },
+                                                    onCloseBook = { viewModel.closeBookDetail() },
+                                                    canSwipeToAnalytics = visibleTabs.contains(MainBottomTab.ANALYTICS),
                                                     onAnalyzeBook = { bookId ->
                                                         viewModel.selectAnalyticsBook(bookId)
                                                         val analyticsIdx = visibleTabs.indexOf(MainBottomTab.ANALYTICS)
@@ -965,7 +1026,8 @@ fun AppNavigation(
                                                             navController.navigate(ROUTE_BOOK_ANALYTICS)
                                                         }
                                                     },
-                                                    listState = booksListState
+                                                    listState = booksListState,
+                                                    detailListState = bookDetailListState
                                                 )
                                                 MainBottomTab.ANALYTICS -> AnalyticsScreen(
                                                     transactionsState = transactionsState,
@@ -1031,8 +1093,14 @@ fun AppNavigation(
                                 ROUTE_SETTINGS_ABOUT
                             ).forEach { subRoute ->
                                 composable(subRoute) {
+                                    val interceptBookDetailBack = subRoute == ROUTE_SETTINGS_BOOKS && openBookDetail != null
+                                    if (interceptBookDetailBack) {
+                                        BackHandler(enabled = true) {
+                                            viewModel.closeBookDetail()
+                                        }
+                                    }
                                     SwipeBackContainer(
-                                        active = currentRoute == subRoute,
+                                        active = currentRoute == subRoute && !interceptBookDetailBack,
                                         predictiveBackEnabled = appearance.predictiveBackEnabled,
                                         style = appearance.predictiveBackStyle,
                                         onNavigateUp = popFromGestureImmediate,
@@ -1071,6 +1139,7 @@ fun AppNavigation(
                     }
                 }
                 }
+            }
             }
         }
     }

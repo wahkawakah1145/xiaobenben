@@ -1333,6 +1333,12 @@ fun AnalyticsScreen(
 
     inspectingTransaction?.let { tx ->
         val (recordedBase, recordedRate, recordedCents) = viewModel.recordedSnapshotDisplay(tx)
+        val txAssignedBookIds = remember(bookLinks, tx.id) {
+            bookLinks.asSequence()
+                .filter { it.transactionId == tx.id }
+                .map { it.bookId }
+                .toSet()
+        }
         TransactionDetailSheet(
             transaction = tx,
             baseCurrencyCode = baseCurrency,
@@ -1342,6 +1348,20 @@ fun AnalyticsScreen(
             recordedRateToBase = recordedRate,
             recordedConvertedBaseCents = recordedCents,
             onDismiss = { inspectingTransaction = null },
+            onMarkNonBill = if (!tx.confirmed || !tx.rawNotification.isNullOrBlank()) {
+                {
+                    viewModel.markTransactionAsNonBill(tx)
+                    inspectingTransaction = null
+                }
+            } else null,
+            books = books,
+            assignedBookIds = txAssignedBookIds,
+            onUpdateTransactionBooks = { chosen ->
+                viewModel.setBooksForTransaction(tx.id, chosen)
+            },
+            onCreateBookQuick = { name, onCreated ->
+                viewModel.saveBook(name = name, onSaved = onCreated)
+            },
             onEdit = {
                 editingTransaction = tx
                 inspectingTransaction = null

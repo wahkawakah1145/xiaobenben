@@ -1542,6 +1542,243 @@ class ExampleRobolectricTest {
     // Cleanup
     repo.deleteParsingRule(createdRule.id)
   }
+
+  @Test
+  fun `smart deduplicator excludes persistent ids and repository prunes excluded ids on delete`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val originalSettings = repo.observeSettings().first()
+    val baseTime = 1_763_720_000_000L
+
+    val txA1 = com.example.model.LedgerTransaction(
+      id = "dedup-excl-a1",
+      amountCents = 4200L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "喜茶",
+      channel = "微信支付",
+      occurredAtMillis = baseTime,
+      confirmed = true
+    )
+    val txA2 = txA1.copy(id = "dedup-excl-a2", occurredAtMillis = baseTime + 10_000L, channel = "其他")
+    val txB1 = txA1.copy(id = "dedup-excl-b1", amountCents = 8800L, merchant = "海底捞")
+    val txB2 = txB1.copy(id = "dedup-excl-b2", occurredAtMillis = baseTime + 12_000L, channel = "其他")
+
+    repo.importTransactions(listOf(txA1, txA2, txB1, txB2)).getOrThrow()
+
+    // Exclude group A from smart deduplication
+    val added = repo.excludeTransactionsFromDedup(listOf(txA1.id, txA2.id)).getOrThrow()
+    assertEquals(2, added)
+    val excludedSet = repo.observeSettings().first().dedupExcludedTransactionIds.toSet()
+    org.junit.Assert.assertTrue(txA1.id in excludedSet && txA2.id in excludedSet)
+
+    val groups = com.example.parser.SmartDeduplicator.findDuplicateGroups(
+      transactions = listOf(txA1, txA2, txB1, txB2),
+      maxWindowMillis = 60_000L,
+      excludedTransactionIds = excludedSet
+    )
+    assertEquals(1, groups.size)
+    assertEquals(setOf(txB1.id, txB2.id), groups.first().items.map { it.id }.toSet())
+
+    // Deleting an excluded transaction automatically prunes its ID from dedupExcludedTransactionIds
+    repo.deleteTransaction(txA1.id).getOrThrow()
+    val afterDelete = repo.observeSettings().first().dedupExcludedTransactionIds
+    org.junit.Assert.assertFalse(txA1.id in afterDelete)
+    org.junit.Assert.assertTrue(txA2.id in afterDelete)
+
+    // Restore remaining excluded ID
+    val restored = repo.restoreExcludedDedupTransactions(listOf(txA2.id)).getOrThrow()
+    assertEquals(1, restored)
+    org.junit.Assert.assertFalse(txA2.id in repo.observeSettings().first().dedupExcludedTransactionIds)
+
+    // Cleanup
+    repo.deleteTransactions(listOf(txA2.id, txB1.id, txB2.id))
+    repo.saveSettings(originalSettings)
+  }
+
+  @Test
+  fun `markTransactionAsNonBill emits undo banner and undo restores transaction book links and removes ignore rule`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val vm = com.example.viewmodel.LedgerViewModel(repo)
+
+    val book = repo.saveBook(
+      com.example.model.LedgerBook(id = "nonbill-undo-book", name = "撤销测试账本")
+    ).getOrThrow()
+    val tx = com.example.model.LedgerTransaction(
+      id = "nonbill-undo-tx-1",
+      amountCents = 1990L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "其他",
+      merchant = "测试运营商活动",
+      channel = "短信通知",
+      rawNotification = "运营商活动提醒 | 限时赠送19.90元代金券立即领取",
+      occurredAtMillis = 1_763_721_000_000L,
+      confirmed = false
+    )
+    repo.addTransaction(tx).getOrThrow()
+    repo.setBooksForTransaction(tx.id, listOf(book.id)).getOrThrow()
+    assertEquals(listOf(book.id), repo.getBookLinksForTransactionsOnce(listOf(tx.id)).map { it.bookId })
+
+    vm.markTransactionAsNonBill(tx)
+    var deadline = System.currentTimeMillis() + 3000L
+    while (vm.deleteUndoBanner.value == null && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+    val banner = vm.deleteUndoBanner.value
+    org.junit.Assert.assertNotNull(banner)
+    org.junit.Assert.assertTrue(banner!!.isNonBillMark)
+    assertEquals(1, banner.deletedItems.size)
+    assertEquals(1, banner.deletedBookLinks.size)
+    val createdRuleId = banner.createdNonBillRuleId
+    org.junit.Assert.assertNotNull(createdRuleId)
+    org.junit.Assert.assertTrue(repo.getTransactionsByIdsOnce(listOf(tx.id)).isEmpty())
+    org.junit.Assert.assertTrue(repo.observeParsingRules().first().any { it.id == createdRuleId })
+
+    // Undo should restore transaction, restore its book membership, and remove the auto-created IGNORE rule
+    vm.clearActionMessage()
+    vm.undoLastDelete()
+    deadline = System.currentTimeMillis() + 3000L
+    while (vm.actionMessage.value == null && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+    assertEquals(1, repo.getTransactionsByIdsOnce(listOf(tx.id)).size)
+    assertEquals(listOf(book.id), repo.getBookLinksForTransactionsOnce(listOf(tx.id)).map { it.bookId })
+    org.junit.Assert.assertFalse(repo.observeParsingRules().first().any { it.id == createdRuleId })
+
+    // Cleanup
+    repo.deleteTransaction(tx.id)
+    repo.deleteBook(book.id)
+  }
+
+  @Test
+  fun `single transaction book membership can be updated and cleared via setBooksForTransaction and book detail syncs analytics`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val vm = com.example.viewmodel.LedgerViewModel(repo)
+
+    val book1 = repo.saveBook(com.example.model.LedgerBook(id = "global-bk-1", name = "日常")).getOrThrow()
+    val book2 = repo.saveBook(com.example.model.LedgerBook(id = "global-bk-2", name = "旅行")).getOrThrow()
+    val tx = com.example.model.LedgerTransaction(
+      id = "global-bk-tx-1",
+      amountCents = 5600L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "机场餐厅",
+      channel = "支付宝",
+      occurredAtMillis = 1_763_722_000_000L,
+      confirmed = true
+    )
+    repo.addTransaction(tx).getOrThrow()
+
+    repo.setBooksForTransaction(tx.id, listOf(book1.id, book2.id)).getOrThrow()
+    assertEquals(setOf(book1.id, book2.id), repo.getBookLinksForTransactionsOnce(listOf(tx.id)).map { it.bookId }.toSet())
+
+    repo.setBooksForTransaction(tx.id, listOf(book2.id)).getOrThrow()
+    assertEquals(listOf(book2.id), repo.getBookLinksForTransactionsOnce(listOf(tx.id)).map { it.bookId })
+
+    repo.setBooksForTransaction(tx.id, emptyList()).getOrThrow()
+    org.junit.Assert.assertTrue(repo.getBookLinksForTransactionsOnce(listOf(tx.id)).isEmpty())
+
+    // Opening book detail synchronizes analytics book selection; closing book detail clears openBookDetailId
+    vm.openBookDetail(book2.id)
+    assertEquals(book2.id, vm.openBookDetailId.value)
+    assertEquals(book2.id, vm.selectedAnalyticsBookId.value)
+    vm.closeBookDetail()
+    org.junit.Assert.assertNull(vm.openBookDetailId.value)
+
+    // Cleanup
+    repo.deleteTransaction(tx.id)
+    repo.deleteBook(book1.id)
+    repo.deleteBook(book2.id)
+  }
+
+  @Test
+  fun `category discovery lists all existing categories custom icons migrate on rename and round-trip in backup`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val originalSettings = repo.observeSettings().first()
+    val originalAi = repo.observeAiConfig().first()
+
+    val legacyTx = com.example.model.LedgerTransaction(
+      id = "cat-disc-tx-1",
+      amountCents = 9900L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "宠物养护",
+      merchant = "萌宠医院",
+      channel = "微信支付",
+      occurredAtMillis = 1_763_723_000_000L,
+      confirmed = true
+    )
+    val legacyRule = com.example.model.CustomParsingRule(
+      id = "cat-disc-rule-1",
+      name = "手办规则",
+      keywordPattern = "盲盒旗舰店",
+      channelName = "支付宝",
+      defaultCategory = "潮玩手办",
+      defaultType = com.example.model.TransactionType.EXPENSE.name
+    )
+    repo.addTransaction(legacyTx).getOrThrow()
+    repo.saveParsingRule(legacyRule).getOrThrow()
+
+    val discovered = com.example.model.CategoryCatalog.allExistingCategoriesForType(
+      type = com.example.model.TransactionType.EXPENSE,
+      settings = originalSettings,
+      transactions = listOf(legacyTx),
+      rules = listOf(legacyRule)
+    )
+    org.junit.Assert.assertTrue("宠物养护" in discovered)
+    org.junit.Assert.assertTrue("潮玩手办" in discovered)
+
+    // Assign custom icon to discovered category, then rename and verify icon + tx + rule + AI prompt sync
+    repo.setCategoryIcon("宠物养护", "pets").getOrThrow()
+    assertEquals("pets", repo.observeSettings().first().categoryIcons["宠物养护"])
+
+    repo.saveAiConfig(originalAi.copy(customSystemPrompt = "系统提示词含 宠物养护 分类"))
+    val renameResult = repo.renameCategory(
+      type = com.example.model.TransactionType.EXPENSE,
+      oldName = "宠物养护",
+      rawNewName = "爱宠消费",
+      syncTransactions = true,
+      syncRules = true,
+      syncAiPrompt = true
+    ).getOrThrow()
+    assertEquals(1, renameResult.updatedTransactions)
+    org.junit.Assert.assertTrue(renameResult.aiPromptSynced)
+
+    val updatedSettings = repo.observeSettings().first()
+    assertEquals("pets", updatedSettings.categoryIcons["爱宠消费"])
+    org.junit.Assert.assertNull(updatedSettings.categoryIcons["宠物养护"])
+    org.junit.Assert.assertTrue("爱宠消费" in com.example.model.CategoryCatalog.activeExpenseCategories(updatedSettings))
+
+    // Backup codec round-trips categoryIcons and dedupExcludedTransactionIds
+    val enrichedSettings = updatedSettings.copy(dedupExcludedTransactionIds = listOf("tx-excl-99"))
+    val backupJson = com.example.data.LedgerBackupCodec.encodeBackupJson(
+      transactions = emptyList(),
+      rules = emptyList(),
+      settings = enrichedSettings
+    )
+    val decoded = com.example.data.LedgerBackupCodec.decodeBackupJson(backupJson)
+    assertEquals("pets", decoded.settings?.categoryIcons?.get("爱宠消费"))
+    assertEquals(listOf("tx-excl-99"), decoded.settings?.dedupExcludedTransactionIds)
+
+    // Cleanup
+    repo.deleteTransaction(legacyTx.id)
+    repo.deleteParsingRule(legacyRule.id)
+    repo.saveSettings(originalSettings)
+    repo.saveAiConfig(originalAi)
+  }
 }
+
 
 
