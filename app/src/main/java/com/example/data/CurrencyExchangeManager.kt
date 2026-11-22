@@ -15,7 +15,8 @@ data class ParsedRatesPayload(
     val ratesToCny: Map<String, Double>,
     val updatedCount: Int,
     val sourceLabel: String,
-    val rateDateText: String
+    val rateDateText: String,
+    val availableCurrencyCodes: List<String> = ratesToCny.keys.sorted()
 )
 
 class CurrencyExchangeManager {
@@ -73,22 +74,31 @@ class CurrencyExchangeManager {
                 settings.enabledCurrencyCodes,
                 ensureCode = settings.baseCurrencyCode
             )
+            // Parse ALL currencies returned by the selected/custom data source so every returned currency becomes selectable
             val parsed = parseRatesPayload(
                 bodyText = bodyText,
                 fallbackSourceLabel = defaultSourceLabel,
-                targetForeignCodes = enabledCodes.ifEmpty { null }
+                targetForeignCodes = null
             ) ?: return@withContext Result.failure(
                 IllegalStateException("无法解析该接口返回的汇率 JSON 格式（需包含 rates / conversion_rates / cny 等字段）")
             )
 
+            val enabledUpdatedCount = enabledCodes.count { it in parsed.ratesToCny }
+            val totalAvailableCount = parsed.availableCurrencyCodes.size
             val now = System.currentTimeMillis()
-            val status = "已从 ${selectedSource.label} 更新 ${parsed.updatedCount} 种已启用货币汇率"
+            val status = if (selectedSource == ExchangeRateSource.CUSTOM) {
+                "已从自定义源同步 $totalAvailableCount 种可选币种（已启用 $enabledUpdatedCount 种更新）"
+            } else {
+                "已从 ${selectedSource.label} 更新 $enabledUpdatedCount 种已启用汇率（共 $totalAvailableCount 种可选币种）"
+            }
             repository.saveExchangeRates(
                 ratesToCny = parsed.ratesToCny,
                 updatedAtMillis = now,
                 status = status,
                 dataSource = parsed.sourceLabel,
-                rateDateText = parsed.rateDateText
+                rateDateText = parsed.rateDateText,
+                sourceId = selectedSource.name,
+                sourceAvailableCodes = parsed.availableCurrencyCodes
             )
             Result.success(
                 ExchangeRateState(
@@ -96,7 +106,9 @@ class CurrencyExchangeManager {
                     updatedAtMillis = now,
                     lastStatus = status,
                     dataSource = parsed.sourceLabel,
-                    rateDateText = parsed.rateDateText
+                    rateDateText = parsed.rateDateText,
+                    sourceId = selectedSource.name,
+                    sourceAvailableCodes = parsed.availableCurrencyCodes
                 )
             )
         } catch (e: CancellationException) {
@@ -107,6 +119,11 @@ class CurrencyExchangeManager {
     }
 
     companion object {
+        private val IGNORED_TOP_LEVEL_KEYS = setOf(
+            "DATE", "TIME", "TIMESTAMP", "TTL", "CODE", "STATUS", "RESULT", "OK",
+            "SUCCESS", "ERROR", "VERSION", "COUNT", "TOTAL", "BASE", "AMOUNT"
+        )
+
         fun parseRatesPayload(
             bodyText: String,
             fallbackSourceLabel: String,
@@ -119,6 +136,7 @@ class CurrencyExchangeManager {
                 .trim()
                 .uppercase()
 
+            var usedTopLevelFallback = false
             val rawRatesObj: JSONObject = when {
                 json.optJSONObject("rates") != null -> json.getJSONObject("rates")
                 json.optJSONObject("conversion_rates") != null -> json.getJSONObject("conversion_rates")
@@ -135,17 +153,21 @@ class CurrencyExchangeManager {
                     json.getJSONObject("eur")
                 }
                 json.optJSONObject("data") != null -> json.getJSONObject("data")
-                else -> json
+                else -> {
+                    usedTopLevelFallback = true
+                    json
+                }
             }
 
             if (baseCode.isBlank()) baseCode = "CNY"
 
-            val perBaseMap = mutableMapOf<String, Double>()
+            val perBaseMap = LinkedHashMap<String, Double>()
             val keys = rawRatesObj.keys()
             while (keys.hasNext()) {
                 val rawKey = keys.next()
                 val code = rawKey.trim().uppercase()
-                if (code.length !in 3..4 || !code.all { it in 'A'..'Z' }) continue
+                if (!CurrencyCatalog.isValidCurrencyCode(code)) continue
+                if (usedTopLevelFallback && code in IGNORED_TOP_LEVEL_KEYS) continue
                 val directVal = rawRatesObj.optDouble(rawKey, Double.NaN)
                 val resolvedVal = when {
                     !directVal.isNaN() && directVal > 0.0 -> directVal
@@ -163,19 +185,32 @@ class CurrencyExchangeManager {
             val cnyPerBase = if (baseCode == "CNY") 1.0 else (perBaseMap["CNY"] ?: return null)
             if (cnyPerBase <= 0.0) return null
 
-            val targetSet = targetForeignCodes?.map { it.uppercase() }?.toSet()
-            val updatedMap = mutableMapOf<String, Double>("CNY" to 1.0)
+            val allAvailableCodes = perBaseMap.keys.toMutableSet().apply { add("CNY") }.sorted()
+            val targetSet = targetForeignCodes?.map { it.trim().uppercase() }?.filter { it.isNotEmpty() }?.toSet()
+            val updatedMap = LinkedHashMap<String, Double>()
+            updatedMap["CNY"] = 1.0
             var updatedCount = 0
-            CurrencyCatalog.currencies.forEach { info ->
-                if (info.code == "CNY") {
-                    updatedMap["CNY"] = 1.0
-                } else if (targetSet == null || info.code in targetSet) {
-                    val unitPerBase = perBaseMap[info.code]
+
+            if (targetSet != null) {
+                // Explicit filter mode (e.g. unit test requesting only specific foreign codes)
+                targetSet.forEach { code ->
+                    if (code == "CNY") return@forEach
+                    val unitPerBase = perBaseMap[code]
                     if (unitPerBase != null && unitPerBase > 0.0) {
-                        updatedMap[info.code] = cnyPerBase / unitPerBase
+                        updatedMap[code] = cnyPerBase / unitPerBase
                         updatedCount += 1
                     } else {
-                        updatedMap[info.code] = info.defaultRateToCny
+                        CurrencyCatalog.byCode[code]?.let { updatedMap[code] = it.defaultRateToCny }
+                    }
+                }
+            } else {
+                // Full-source mode: include EVERY currency returned by the source (standard + custom codes)
+                perBaseMap.forEach { (code, unitPerBase) ->
+                    if (code == "CNY") {
+                        updatedMap["CNY"] = 1.0
+                    } else if (unitPerBase > 0.0) {
+                        updatedMap[code] = cnyPerBase / unitPerBase
+                        updatedCount += 1
                     }
                 }
             }
@@ -197,7 +232,8 @@ class CurrencyExchangeManager {
                 ratesToCny = updatedMap,
                 updatedCount = updatedCount,
                 sourceLabel = sourceLabel,
-                rateDateText = rateDateText
+                rateDateText = rateDateText,
+                availableCurrencyCodes = allAvailableCodes
             )
         }
 

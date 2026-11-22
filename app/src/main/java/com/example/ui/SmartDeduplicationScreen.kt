@@ -62,12 +62,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.IconButton
 import com.example.model.BudgetSettings
 import com.example.model.CategoryCatalog
+import com.example.model.FeatureTipsCatalog
 import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionBookLink
@@ -76,6 +78,7 @@ import com.example.parser.DeduplicationTimeWindow
 import com.example.parser.DuplicateGroup
 import com.example.parser.SmartDeduplicator
 import com.example.ui.components.ChannelBadge
+import com.example.ui.components.FeatureTipBanner
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
 import com.example.ui.components.formatCurrency
@@ -98,6 +101,7 @@ fun SmartDeduplicationScreen(
     modifier: Modifier = Modifier
 ) {
     val observedSettings by viewModel.settingsState.collectAsStateWithLifecycle()
+    val appearance by viewModel.appearanceState.collectAsStateWithLifecycle()
     val effectiveSettings = settings ?: observedSettings
     val haptic = LocalHapticFeedback.current
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
@@ -231,19 +235,17 @@ fun SmartDeduplicationScreen(
                                     style = MaterialTheme.typography.titleMedium
                                 )
                             }
-                            Text(
-                                text = settingsHighlightedText(
-                                    "默认仅判断「金额相同 + 时间相近」的条目，并优先勾选删除信息量较少的条目；可按需开启「交易对象相似」缩小范围，支持删除或改为不计收支的转账（当前窗口：${SmartDeduplicator.formatWindowLabelSeconds(customWindowSeconds)}；点击勾选，长按条目弹窗查看详情）。",
-                                    ROUTE_SETTINGS_DEDUP
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            FeatureTipBanner(
+                                tipId = FeatureTipsCatalog.DEDUP_RULE,
+                                text = "默认按「同金额 + 短时窗口（${SmartDeduplicator.formatWindowLabelSeconds(customWindowSeconds)}）」筛选并优先勾选信息量少的条目；搜索时批量操作仅影响当前搜索结果；长按条目可查看详情，删除或改转账均可撤回。",
+                                appearance = appearance,
+                                onDismiss = { viewModel.dismissFeatureTip(it) }
                             )
 
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
-                                placeholder = { Text("筛选交易对象、渠道或金额（批量操作仅影响当前搜索结果）") },
+                                placeholder = { Text("搜索待去重条目") },
                                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                                 trailingIcon = if (searchQuery.isNotEmpty()) {
                                     {
@@ -474,22 +476,24 @@ fun SmartDeduplicationScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.CheckCircle,
-                                    contentDescription = null,
-                                    tint = IncomeJade,
-                                    modifier = Modifier.size(40.dp)
+                                Text(
+                                    text = "🤗",
+                                    fontSize = 64.sp,
+                                    lineHeight = 72.sp,
+                                    modifier = Modifier.testTag("dedup_empty_emoji")
                                 )
                                 Text("未发现匹配的疑似重复账单", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    text = if (requireMerchantSimilarity) {
-                                        "当前筛选条件下没有金额相同、时间相近且交易对象相似的冲突记录。"
-                                    } else {
-                                        "当前时间窗口内没有金额相同的疑似重复记录。"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                if (appearance.isFeatureTipVisible(FeatureTipsCatalog.DEDUP_RULE)) {
+                                    Text(
+                                        text = if (requireMerchantSimilarity) {
+                                            "当前筛选条件下没有金额相同、时间相近且交易对象相似的冲突记录。"
+                                        } else {
+                                            "当前时间窗口内没有金额相同的疑似重复记录。"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }

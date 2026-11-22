@@ -3,13 +3,14 @@ package com.example.ui
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import com.example.ui.components.CategoryIconAvatar
@@ -64,6 +66,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -84,6 +87,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -92,14 +96,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -109,7 +117,9 @@ import com.example.parser.QuickAnalysisReport
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.data.CurrencyExchangeManager
@@ -120,6 +130,7 @@ import com.example.model.CategoryCatalog
 import com.example.model.CurrencyCatalog
 import com.example.model.ExchangeRateState
 import com.example.model.FabPlacement
+import com.example.model.FeatureTipsCatalog
 import com.example.model.HomeHeaderOrder
 import com.example.model.HomeStatsDimension
 import com.example.model.IconVisualStyle
@@ -135,6 +146,7 @@ import com.example.service.NotificationBridge
 import com.example.ui.components.BatchEditTransactionsDialog
 import com.example.ui.components.BatchSelectionActionBar
 import com.example.ui.components.ChannelBadge
+import com.example.ui.components.FeatureTipBanner
 import com.example.ui.components.ParseMethodBadge
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
@@ -154,6 +166,13 @@ import java.util.TimeZone
 import kotlin.math.roundToLong
 import kotlin.random.Random
 
+private data class HomeDateSection(
+    val dateHeader: String,
+    val items: List<LedgerTransaction>,
+    val dayExpense: Long,
+    val dayIncome: Long
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LedgerHomeScreen(
@@ -165,6 +184,7 @@ fun LedgerHomeScreen(
     isListenerEnabled: Boolean,
     viewModel: LedgerViewModel,
     onNavigateToParser: () -> Unit,
+    onNavigateToManualImport: () -> Unit = {},
     books: List<LedgerBook> = emptyList(),
     bookLinks: List<TransactionBookLink> = emptyList(),
     listState: LazyListState = rememberLazyListState(),
@@ -373,12 +393,128 @@ fun LedgerHomeScreen(
         minAmountInput.isNotBlank() ||
         maxAmountInput.isNotBlank()
 
-    val groupedByDate by remember(filteredTransactions, currentYear) {
+    val pageBatchSize = appearance.homePageLoadBatchSize.coerceIn(20, 500)
+    var visibleItemLimit by remember(
+        pageBatchSize,
+        searchQuery,
+        selectedFilter,
+        listTimeDimension,
+        customStartDateText,
+        customEndDateText,
+        selectedTimeOfDaySlot,
+        customStartTimeText,
+        customEndTimeText,
+        minAmountInput,
+        maxAmountInput
+    ) {
+        mutableIntStateOf(pageBatchSize)
+    }
+
+    val displayedTransactions by remember(filteredTransactions, visibleItemLimit) {
         derivedStateOf {
-            filteredTransactions.groupBy { formatDateHeader(it.occurredAtMillis, currentYear) }
+            if (filteredTransactions.size > visibleItemLimit) {
+                filteredTransactions.take(visibleItemLimit)
+            } else {
+                filteredTransactions
+            }
+        }
+    }
+    val remainingTransactionsCount = (filteredTransactions.size - displayedTransactions.size).coerceAtLeast(0)
+    val hasMoreTransactions = remainingTransactionsCount > 0
+
+    // Precompute date headers & per-day totals ONLY for currently loaded items (O(batchSize)),
+    // avoiding synchronous O(N) recomputation inside LazyColumn DSL on every recomposition.
+    val groupedSections by remember(displayedTransactions, currentYear, baseCurrency, exchangeRates.ratesToCny) {
+        derivedStateOf {
+            val map = LinkedHashMap<String, MutableList<LedgerTransaction>>()
+            displayedTransactions.forEach { tx ->
+                val header = formatDateHeader(tx.occurredAtMillis, currentYear)
+                map.getOrPut(header) { ArrayList() }.add(tx)
+            }
+            map.entries.map { (header, dayItems) ->
+                var dayExp = 0L
+                var dayInc = 0L
+                dayItems.forEach { tx ->
+                    val base = CurrencyExchangeManager.convertCents(
+                        tx.amountCents,
+                        tx.currencyCode,
+                        baseCurrency,
+                        exchangeRates.ratesToCny
+                    )
+                    when (tx.txType) {
+                        TransactionType.EXPENSE -> dayExp += base
+                        TransactionType.INCOME -> dayInc += base
+                        else -> Unit
+                    }
+                }
+                HomeDateSection(
+                    dateHeader = header,
+                    items = dayItems,
+                    dayExpense = dayExp,
+                    dayIncome = dayInc
+                )
+            }
         }
     }
 
+    val density = LocalDensity.current
+    val loadMorePullTriggerPx = with(density) { 44.dp.toPx() }
+    var bottomPullUpPx by remember { mutableFloatStateOf(0f) }
+    val animatedBottomPullPx by animateFloatAsState(
+        targetValue = bottomPullUpPx,
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 480f),
+        label = "home_bottom_pull_load"
+    )
+    val loadNextPage: () -> Unit = {
+        if (hasMoreTransactions) {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            visibleItemLimit = (visibleItemLimit + pageBatchSize).coerceAtMost(filteredTransactions.size)
+        }
+    }
+    val bottomPullLoadConnection = remember(hasMoreTransactions, pageBatchSize, filteredTransactions.size, loadMorePullTriggerPx) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && bottomPullUpPx > 0f && available.y > 0f) {
+                    val next = (bottomPullUpPx - available.y).coerceAtLeast(0f)
+                    val delta = bottomPullUpPx - next
+                    bottomPullUpPx = next
+                    return Offset(0f, delta)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (!hasMoreTransactions || source != NestedScrollSource.UserInput) return Offset.Zero
+                if (!listState.canScrollForward && available.y < 0f) {
+                    bottomPullUpPx = (bottomPullUpPx + (-available.y) * 0.65f)
+                        .coerceIn(0f, loadMorePullTriggerPx * 1.4f)
+                    if (bottomPullUpPx >= loadMorePullTriggerPx) {
+                        bottomPullUpPx = 0f
+                        loadNextPage()
+                    }
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (hasMoreTransactions && bottomPullUpPx >= loadMorePullTriggerPx * 0.5f) {
+                    bottomPullUpPx = 0f
+                    loadNextPage()
+                } else {
+                    bottomPullUpPx = 0f
+                }
+                return Velocity.Zero
+            }
+        }
+    }
+
+    // Multi-select ALWAYS operates on ALL filteredTransactions (including unloaded ones),
+    // never truncated to displayedTransactions!
     val isSelectionMode = selectedIds.isNotEmpty()
     val visibleFilteredIds = remember(filteredTransactions) {
         filteredTransactions.map { it.id }.filter { it.isNotBlank() }.toSet()
@@ -417,14 +553,21 @@ fun LedgerHomeScreen(
     )
 
     Box(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .nestedScroll(bottomPullLoadConnection),
         contentAlignment = Alignment.TopCenter
     ) {
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
-                .fillMaxSize(),
+                .fillMaxSize()
+                .graphicsLayer {
+                    if (animatedBottomPullPx > 0.5f) {
+                        translationY = -(animatedBottomPullPx * 0.35f)
+                    }
+                },
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = listBottomPadding),
             verticalArrangement = Arrangement.spacedBy(cardSpacing)
         ) {
@@ -532,7 +675,7 @@ fun LedgerHomeScreen(
                         OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
-                            placeholder = { Text("多关键词空格隔开，搜对方/商品/分类/币种/单号/备注") },
+                            placeholder = { Text("搜索账单") },
                             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                             trailingIcon = {
                                 if (searchQuery.isNotEmpty()) {
@@ -635,7 +778,9 @@ fun LedgerHomeScreen(
                                     customEndTimeText = ""
                                     minAmountInput = ""
                                     maxAmountInput = ""
-                                }
+                                },
+                                appearance = appearance,
+                                onDismissTip = { viewModel.dismissFeatureTip(it) }
                             )
                         }
 
@@ -646,7 +791,7 @@ fun LedgerHomeScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "筛选 ${filteredTransactions.size} 笔（长按多选）",
+                                    text = "筛选 ${filteredTransactions.size} 笔",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -759,20 +904,26 @@ fun LedgerHomeScreen(
                         item(key = "empty") {
                             EmptyLedgerCard(
                                 hasSearch = hasAnyListFilter,
+                                appearance = appearance,
+                                onImportFile = onNavigateToManualImport,
                                 onOpenParser = onNavigateToParser,
                                 onAddManual = { showCreateDialog = true }
                             )
                         }
                     } else {
-                        groupedByDate.forEach { (dateHeader, itemsForDay) ->
-                            val dayExpense = itemsForDay
-                                .filter { it.txType == TransactionType.EXPENSE }
-                                .sumOf { viewModel.convertToBaseCents(it) }
-                            val dayIncome = itemsForDay
-                                .filter { it.txType == TransactionType.INCOME }
-                                .sumOf { viewModel.convertToBaseCents(it) }
+                        if (!isSelectionMode) {
+                            item(key = "home_contextual_tip", contentType = "feature_tip") {
+                                FeatureTipBanner(
+                                    tipId = FeatureTipsCatalog.HOME_MULTI_SELECT,
+                                    text = "点击统计卡片可切换维度；长按账单进入多选，支持批量修改、快速分析或加入账本。",
+                                    appearance = appearance,
+                                    onDismiss = { viewModel.dismissFeatureTip(it) }
+                                )
+                            }
+                        }
 
-                            item(key = "header_$dateHeader") {
+                        groupedSections.forEach { section ->
+                            item(key = "header_${section.dateHeader}", contentType = "date_header") {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -781,21 +932,21 @@ fun LedgerHomeScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = dateHeader,
+                                        text = section.dateHeader,
                                         style = MaterialTheme.typography.labelLarge,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        if (dayExpense > 0L) {
+                                        if (section.dayExpense > 0L) {
                                             Text(
-                                                text = "支 ${formatCurrency(dayExpense, baseCurrency)}",
+                                                text = "支 ${formatCurrency(section.dayExpense, baseCurrency)}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = ExpenseCoral
                                             )
                                         }
-                                        if (dayIncome > 0L) {
+                                        if (section.dayIncome > 0L) {
                                             Text(
-                                                text = "收 ${formatCurrency(dayIncome, baseCurrency)}",
+                                                text = "收 ${formatCurrency(section.dayIncome, baseCurrency)}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = IncomeJade
                                             )
@@ -805,10 +956,21 @@ fun LedgerHomeScreen(
                             }
 
                             items(
-                                items = itemsForDay,
-                                key = { it.id.ifBlank { "${it.occurredAtMillis}_${it.merchant}" } }
+                                items = section.items,
+                                key = { it.id.ifBlank { "${it.occurredAtMillis}_${it.merchant}" } },
+                                contentType = { "tx_card" }
                             ) { tx ->
-                                val (recordedBase, recordedRate, recordedCents) = viewModel.recordedSnapshotDisplay(tx)
+                                val (recordedBase, recordedRate, recordedCents) = remember(
+                                    tx.id,
+                                    tx.amountCents,
+                                    tx.currencyCode,
+                                    tx.recordedRateToBase,
+                                    tx.recordedBaseCurrencyCode,
+                                    baseCurrency,
+                                    exchangeRates.ratesToCny
+                                ) {
+                                    viewModel.recordedSnapshotDisplay(tx)
+                                }
                                 val isSelected = tx.id in selectedIds
                                 TransactionRowCard(
                                     transaction = tx,
@@ -839,6 +1001,70 @@ fun LedgerHomeScreen(
                                         }
                                     }
                                 )
+                            }
+                        }
+
+                        if (hasMoreTransactions) {
+                            item(key = "home_load_more_footer", contentType = "load_more_footer") {
+                                val nextBatchCount = minOf(pageBatchSize, remainingTransactionsCount)
+                                val pullRatio = (bottomPullUpPx / loadMorePullTriggerPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                                Surface(
+                                    onClick = loadNextPage,
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (pullRatio > 0.2f) {
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerLow
+                                    },
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (pullRatio > 0.2f) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 6.dp)
+                                        .testTag("home_load_more_button")
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.KeyboardArrowUp,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Text(
+                                                text = if (pullRatio >= 0.8f) {
+                                                    "松手立即加载后续 $nextBatchCount 条"
+                                                } else {
+                                                    "已加载 ${displayedTransactions.size} / ${filteredTransactions.size} 条 · 触底上划或点击加载 $nextBatchCount 条"
+                                                },
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+                                        if (pullRatio > 0.05f) {
+                                            LinearProgressIndicator(
+                                                progress = { pullRatio },
+                                                modifier = Modifier
+                                                    .fillMaxWidth(0.55f)
+                                                    .height(3.dp)
+                                                    .clip(RoundedCornerShape(999.dp))
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -953,6 +1179,53 @@ fun LedgerHomeScreen(
                                 ) {
                                     Text(
                                         text = "导出账单",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (appearance.fabPlacement != FabPlacement.BOTTOM_START) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shadowElevation = 3.dp
+                                ) {
+                                    Text(
+                                        text = "导入账单",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                            SmallFloatingActionButton(
+                                onClick = {
+                                    fabExpanded = false
+                                    onNavigateToManualImport()
+                                },
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("fab_action_import_bills")
+                            ) {
+                                Icon(AppIcons.FileOpen, contentDescription = "导入账单")
+                            }
+                            if (appearance.fabPlacement == FabPlacement.BOTTOM_START) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shadowElevation = 3.dp
+                                ) {
+                                    Text(
+                                        text = "导入账单",
                                         style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.SemiBold,
                                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
@@ -2590,7 +2863,9 @@ internal fun HomeRangeFilterPanel(
     onEndTimeChange: (String) -> Unit,
     onMinAmountChange: (String) -> Unit,
     onMaxAmountChange: (String) -> Unit,
-    onResetAll: () -> Unit
+    onResetAll: () -> Unit,
+    appearance: AppearanceSettings? = null,
+    onDismissTip: (String) -> Unit = {}
 ) {
     var startDateField by remember {
         mutableStateOf(TextFieldValue(customStartDateText, TextRange(customStartDateText.length)))
@@ -2653,6 +2928,15 @@ internal fun HomeRangeFilterPanel(
                 }
             }
 
+            if (appearance != null) {
+                FeatureTipBanner(
+                    tipId = FeatureTipsCatalog.HOME_SEARCH_SYNTAX,
+                    text = "搜索框支持空格分隔多关键词（匹配对方、商品、分类、币种、单号、备注）；日期框输入数字自动补全连字符，时段筛选按每日发生时间过滤。",
+                    appearance = appearance,
+                    onDismiss = onDismissTip
+                )
+            }
+
             Text("快捷日期", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2671,7 +2955,7 @@ internal fun HomeRangeFilterPanel(
                 }
             }
 
-            Text("自定义日期区间（输入数字自动补全 -）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("自定义日期区间", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = startDateField,
@@ -2715,7 +2999,7 @@ internal fun HomeRangeFilterPanel(
                 )
             }
 
-            Text("可选时段（每日发生时间）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("时段", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -3009,9 +3293,12 @@ private fun TransactionRowCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EmptyLedgerCard(
     hasSearch: Boolean,
+    appearance: AppearanceSettings,
+    onImportFile: () -> Unit,
     onOpenParser: () -> Unit,
     onAddManual: () -> Unit
 ) {
@@ -3025,40 +3312,60 @@ private fun EmptyLedgerCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(24.dp),
+                .padding(horizontal = 24.dp, vertical = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.img_empty_ledger),
-                contentDescription = stringResource(R.string.empty_ledger_cd),
-                modifier = Modifier
-                    .height(132.dp)
-                    .clip(RoundedCornerShape(16.dp)),
-                contentScale = ContentScale.Fit
+            Text(
+                text = "🤗",
+                fontSize = 76.sp,
+                lineHeight = 84.sp,
+                modifier = Modifier.testTag("empty_state_emoji")
             )
             Text(
                 text = if (hasSearch) "没有匹配的账单记录" else "还没有账单记录",
-                style = MaterialTheme.typography.titleMedium
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
             )
-            Text(
-                text = if (hasSearch) {
-                    "可以切换筛选条件或清空搜索关键词。"
-                } else {
-                    "开启通知权限后会自动捕捉消费通知，也可以手动记一笔或测试识别规则。"
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (appearance.isFeatureTipVisible(FeatureTipsCatalog.HOME_MULTI_SELECT)) {
+                Text(
+                    text = if (hasSearch) {
+                        "可调整筛选条件或清空关键词。"
+                    } else {
+                        "可从文件或文本导入历史账单、手动记一笔，或开启通知自动记录。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
             if (!hasSearch) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(
-                        onClick = onAddManual,
-                        modifier = Modifier.minimumInteractiveComponentSize()
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = onImportFile,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("empty_import_bills_button")
                     ) {
+                        Icon(AppIcons.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("导入账单")
+                    }
+                    FilledTonalButton(
+                        onClick = onAddManual,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("empty_add_manual_button")
+                    ) {
+                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text("记一笔")
                     }
-                    Button(
+                    OutlinedButton(
                         onClick = onOpenParser,
                         modifier = Modifier
                             .minimumInteractiveComponentSize()

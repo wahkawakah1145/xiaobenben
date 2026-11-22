@@ -97,13 +97,108 @@ object CurrencyCatalog {
     /** Default 5 most commonly used foreign currencies for exchange rates (CNY is always active as base). */
     val defaultEnabledForeignCodes: List<String> = listOf("USD", "HKD", "EUR", "JPY", "GBP")
 
+    /** Official ECB reference currencies supported by Frankfurter. */
+    val frankfurterCodes: List<String> = listOf(
+        "AUD", "BGN", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP",
+        "HKD", "HUF", "IDR", "ILS", "INR", "ISK", "JPY", "KRW", "MXN", "MYR",
+        "NOK", "NZD", "PHP", "PLN", "RON", "SEK", "SGD", "THB", "TRY", "USD", "ZAR"
+    )
+
+    /** Popular crypto / precious-metal codes commonly included in Currency-API sources. */
+    private val currencyApiExtraCodes: List<String> = listOf(
+        "BTC", "ETH", "USDT", "USDC", "BNB", "SOL", "XRP", "DOGE", "LTC", "ADA",
+        "TRX", "TON", "XAU", "XAG", "XPT", "XPD"
+    )
+
+    private val dynamicInfoCache = java.util.concurrent.ConcurrentHashMap<String, CurrencyInfo>()
+
+    /** All active ISO-4217 currency codes available from Android's built-in ICU data (0 KB APK cost). */
+    val allIsoCurrencyCodes: List<String> by lazy {
+        val codes = LinkedHashSet<String>()
+        currencies.forEach { codes.add(it.code) }
+        runCatching {
+            java.util.Currency.getAvailableCurrencies()
+                .asSequence()
+                .map { it.currencyCode.trim().uppercase() }
+                .filter { it.length == 3 && it.all { ch -> ch in 'A'..'Z' } }
+                .filterNot { it.startsWith("X") && it !in setOf("XAF", "XCD", "XOF", "XPF", "XAU", "XAG", "XPT", "XPD") }
+                .sorted()
+                .forEach { codes.add(it) }
+        }
+        codes.toList()
+    }
+
+    fun isValidCurrencyCode(raw: String?): Boolean {
+        val upper = raw?.trim()?.uppercase().orEmpty()
+        if (upper.length !in 2..8) return false
+        return upper.all { it in 'A'..'Z' || it in '0'..'9' } && upper.any { it in 'A'..'Z' }
+    }
+
+    fun resolve(code: String?): CurrencyInfo {
+        val upper = code?.trim()?.uppercase().orEmpty()
+        if (upper.isEmpty()) return currencies.first()
+        byCode[upper]?.let { return it }
+        if (!isValidCurrencyCode(upper)) return currencies.first()
+        return dynamicInfoCache.getOrPut(upper) { buildDynamicCurrencyInfo(upper) }
+    }
+
+    private fun buildDynamicCurrencyInfo(upper: String): CurrencyInfo {
+        val builtInCustomNames = mapOf(
+            "BTC" to ("比特币" to "₿"),
+            "ETH" to ("以太坊" to "Ξ"),
+            "USDT" to ("泰达币" to "USDT"),
+            "USDC" to ("美元稳定币" to "USDC"),
+            "BNB" to ("币安币" to "BNB"),
+            "SOL" to ("索拉纳" to "SOL"),
+            "XRP" to ("瑞波币" to "XRP"),
+            "DOGE" to ("狗狗币" to "DOGE"),
+            "LTC" to ("莱特币" to "LTC"),
+            "ADA" to ("艾达币" to "ADA"),
+            "TRX" to ("波场币" to "TRX"),
+            "TON" to ("TON 币" to "TON"),
+            "XAU" to ("黄金(盎司)" to "XAU"),
+            "XAG" to ("白银(盎司)" to "XAG"),
+            "XPT" to ("铂金(盎司)" to "XPT"),
+            "XPD" to ("钯金(盎司)" to "XPD"),
+            "CNH" to ("离岸人民币" to "¥")
+        )
+        builtInCustomNames[upper]?.let { (zh, sym) ->
+            return CurrencyInfo(
+                code = upper,
+                symbol = sym,
+                chineseName = zh,
+                defaultRateToCny = 1.0,
+                zeroDecimalDisplay = false
+            )
+        }
+        val jvmCurrency = runCatching { java.util.Currency.getInstance(upper) }.getOrNull()
+        val zhName = runCatching {
+            jvmCurrency?.getDisplayName(java.util.Locale.SIMPLIFIED_CHINESE)?.trim()
+        }.getOrNull()?.takeIf { it.isNotEmpty() && !it.equals(upper, ignoreCase = true) } ?: upper
+        val enName = runCatching {
+            jvmCurrency?.getDisplayName(java.util.Locale.US)?.trim()
+        }.getOrNull()?.takeIf { it.isNotEmpty() && !it.equals(upper, ignoreCase = true) }
+        val symbol = runCatching {
+            jvmCurrency?.getSymbol(java.util.Locale.SIMPLIFIED_CHINESE)?.trim()
+        }.getOrNull()?.takeIf { it.isNotEmpty() } ?: upper
+        val zeroDecimal = runCatching { jvmCurrency?.defaultFractionDigits == 0 }.getOrDefault(false)
+        return CurrencyInfo(
+            code = upper,
+            symbol = symbol,
+            chineseName = zhName,
+            defaultRateToCny = 1.0,
+            zeroDecimalDisplay = zeroDecimal,
+            aliases = listOfNotNull(enName)
+        )
+    }
+
     fun normalizeEnabledForeignCodes(raw: List<String>, ensureCode: String? = null): List<String> {
         val valid = raw.mapNotNull { code ->
             val upper = code.trim().uppercase()
-            if (upper != "CNY" && byCode.containsKey(upper)) upper else null
+            if (upper != "CNY" && isValidCurrencyCode(upper)) upper else null
         }.distinct().toMutableList()
         val extra = ensureCode?.trim()?.uppercase()
-        if (extra != null && extra != "CNY" && byCode.containsKey(extra) && extra !in valid) {
+        if (extra != null && extra != "CNY" && isValidCurrencyCode(extra) && extra !in valid) {
             valid.add(extra)
         }
         return valid
@@ -112,12 +207,63 @@ object CurrencyCatalog {
     fun enabledCurrenciesWithCny(enabledForeignCodes: List<String>, ensureCode: String? = null): List<CurrencyInfo> {
         val normalized = normalizeEnabledForeignCodes(enabledForeignCodes, ensureCode)
         val result = mutableListOf(byCode.getValue("CNY"))
-        normalized.forEach { code -> byCode[code]?.let { result.add(it) } }
+        normalized.forEach { code -> result.add(resolve(code)) }
         return result
     }
 
-    fun resolve(code: String?): CurrencyInfo =
-        byCode[code?.trim()?.uppercase()] ?: currencies.first()
+    /**
+     * Returns all selectable currencies covered by the selected exchange rate [source].
+     * - For built-in sources, covers the source's full currency set union any synced codes.
+     * - For [ExchangeRateSource.CUSTOM], automatically derives selectable currencies from
+     *   the custom endpoint's returned payload codes (falling back to built-in catalog before first sync).
+     */
+    fun availableCurrenciesForSource(
+        source: ExchangeRateSource,
+        exchangeRates: ExchangeRateState
+    ): List<CurrencyInfo> {
+        val syncedMatchesSource = exchangeRates.sourceId.equals(source.name, ignoreCase = true) &&
+            exchangeRates.sourceAvailableCodes.isNotEmpty()
+        val orderedCodes = LinkedHashSet<String>()
+        orderedCodes.add("CNY")
+        when (source) {
+            ExchangeRateSource.FRANKFURTER -> {
+                if (syncedMatchesSource) {
+                    exchangeRates.sourceAvailableCodes.forEach { if (isValidCurrencyCode(it)) orderedCodes.add(it.uppercase()) }
+                }
+                frankfurterCodes.forEach { orderedCodes.add(it) }
+            }
+            ExchangeRateSource.EXCHANGE_RATE_API -> {
+                currencies.forEach { orderedCodes.add(it.code) }
+                if (syncedMatchesSource) {
+                    exchangeRates.sourceAvailableCodes.forEach { if (isValidCurrencyCode(it)) orderedCodes.add(it.uppercase()) }
+                }
+                allIsoCurrencyCodes.forEach { orderedCodes.add(it) }
+            }
+            ExchangeRateSource.CURRENCY_API_JSDELIVR,
+            ExchangeRateSource.CURRENCY_API_PAGES -> {
+                currencies.forEach { orderedCodes.add(it.code) }
+                if (syncedMatchesSource) {
+                    exchangeRates.sourceAvailableCodes.forEach { if (isValidCurrencyCode(it)) orderedCodes.add(it.uppercase()) }
+                }
+                allIsoCurrencyCodes.forEach { orderedCodes.add(it) }
+                currencyApiExtraCodes.forEach { orderedCodes.add(it) }
+            }
+            ExchangeRateSource.CUSTOM -> {
+                if (syncedMatchesSource) {
+                    // Prioritize popular built-in ones that exist in custom payload, then all custom codes
+                    val customSet = exchangeRates.sourceAvailableCodes
+                        .map { it.trim().uppercase() }
+                        .filter { isValidCurrencyCode(it) }
+                        .toSet()
+                    currencies.forEach { if (it.code in customSet) orderedCodes.add(it.code) }
+                    customSet.sorted().forEach { orderedCodes.add(it) }
+                } else {
+                    currencies.forEach { orderedCodes.add(it.code) }
+                }
+            }
+        }
+        return orderedCodes.map { resolve(it) }
+    }
 
     fun matchesQuery(info: CurrencyInfo, rawQuery: String): Boolean {
         val q = rawQuery.trim()
@@ -128,10 +274,10 @@ object CurrencyCatalog {
             info.aliases.any { it.contains(q, ignoreCase = true) }
     }
 
-    fun search(rawQuery: String): List<CurrencyInfo> {
+    fun search(rawQuery: String, pool: List<CurrencyInfo> = currencies): List<CurrencyInfo> {
         val q = rawQuery.trim()
-        if (q.isEmpty()) return currencies
-        return currencies.filter { matchesQuery(it, q) }
+        if (q.isEmpty()) return pool
+        return pool.filter { matchesQuery(it, q) }
     }
 
     fun findByToken(rawToken: String?): CurrencyInfo? {
@@ -224,7 +370,9 @@ data class ExchangeRateState(
     val updatedAtMillis: Long = 0L,
     val lastStatus: String = "",
     val dataSource: String = "内置参考汇率（初始基准）",
-    val rateDateText: String = ""
+    val rateDateText: String = "",
+    val sourceId: String = "",
+    val sourceAvailableCodes: List<String> = emptyList()
 )
 
 enum class ThemeMode(val label: String) {
@@ -530,12 +678,96 @@ data class AppearanceSettings(
     val showBooksTab: Boolean = true,
     val bottomTabOrder: List<MainBottomTab> = MainBottomTab.defaultOrder,
     val globalSnackbarDuration: GlobalToastDuration = GlobalToastDuration.STANDARD,
-    val deleteUndoDuration: DeleteUndoDuration = DeleteUndoDuration.MANUAL_ONLY
+    val deleteUndoDuration: DeleteUndoDuration = DeleteUndoDuration.MANUAL_ONLY,
+    val hideAllFeatureTips: Boolean = false,
+    val dismissedTipIds: Set<String> = emptySet(),
+    val homePageLoadBatchSize: Int = 100
 ) {
     fun visibleBottomTabs(): List<MainBottomTab> {
         val normalized = MainBottomTab.normalizeOrder(bottomTabOrder)
         return if (showBooksTab) normalized else normalized.filter { it != MainBottomTab.BOOKS }
     }
+
+    fun isFeatureTipVisible(tipId: String): Boolean =
+        !hideAllFeatureTips && tipId !in dismissedTipIds
+}
+
+data class FeatureTipSpec(
+    val id: String,
+    val title: String,
+    val shortText: String
+)
+
+object FeatureTipsCatalog {
+    const val HOME_MULTI_SELECT = "home_multi_select"
+    const val HOME_SEARCH_SYNTAX = "home_search_syntax"
+    const val BOOKS_OVERVIEW = "books_overview"
+    const val BOOK_DETAIL_GESTURE = "book_detail_gesture"
+    const val ANALYTICS_CALENDAR_LEGEND = "analytics_calendar_legend"
+    const val ANALYTICS_PIE_PINCH = "analytics_pie_pinch"
+    const val CALENDAR_GESTURES = "calendar_gestures"
+    const val DEDUP_RULE = "dedup_rule"
+    const val CHANNEL_ATTRIBUTION = "channel_attribution"
+    const val MANUAL_IMPORT_FORMAT = "manual_import_format"
+    const val AI_AMOUNT_GUARD = "ai_amount_guard"
+
+    val allTips: List<FeatureTipSpec> = listOf(
+        FeatureTipSpec(
+            id = HOME_MULTI_SELECT,
+            title = "账单主页多选与分页提示",
+            shortText = "点击统计卡片切维度；长按账单多选批量操作；触底上划加载更多"
+        ),
+        FeatureTipSpec(
+            id = HOME_SEARCH_SYNTAX,
+            title = "账单搜索与筛选说明",
+            shortText = "多关键词用空格隔开，搜对方/商品/分类/币种/单号/备注；日期输数字自动补全 -，支持按时段筛选"
+        ),
+        FeatureTipSpec(
+            id = BOOKS_OVERVIEW,
+            title = "账本主页使用说明",
+            shortText = "点击账本进明细，明细页横滑可看本账本分析；可在主页多选或详情页归入账本"
+        ),
+        FeatureTipSpec(
+            id = BOOK_DETAIL_GESTURE,
+            title = "账本详情手势与多选提示",
+            shortText = "右滑/顶下拉返回账本，左滑看该账本分析；支持多关键词搜索，长按账单可多选"
+        ),
+        FeatureTipSpec(
+            id = ANALYTICS_CALENDAR_LEGEND,
+            title = "收支分析日历与图例提示",
+            shortText = "顶部下拉跟随手势展开全屏日历；点图例筛选明细，长按明细编辑"
+        ),
+        FeatureTipSpec(
+            id = ANALYTICS_PIE_PINCH,
+            title = "饼图双指缩放提示",
+            shortText = "双指捏合饼图可无级调节大小"
+        ),
+        FeatureTipSpec(
+            id = CALENDAR_GESTURES,
+            title = "收支日历手势提示",
+            shortText = "左右横滑切周期 · 双指缩放切 年 / 月 / 周 / 日"
+        ),
+        FeatureTipSpec(
+            id = DEDUP_RULE,
+            title = "智能去重聚类说明",
+            shortText = "按同金额+近时间聚类，优先保留信息较全的一条；搜索后批量操作仅影响当前搜索结果，长按可看详情"
+        ),
+        FeatureTipSpec(
+            id = CHANNEL_ATTRIBUTION,
+            title = "支付渠道自动归属说明",
+            shortText = "花呗/余额宝自动归属「支付宝」，零钱/零钱通自动归属「微信支付」"
+        ),
+        FeatureTipSpec(
+            id = MANUAL_IMPORT_FORMAT,
+            title = "导入文件格式说明",
+            shortText = "支持微信/支付宝 11 列及农行等银行流水 CSV / XLSX / JSON，自动识别重复与互转"
+        ),
+        FeatureTipSpec(
+            id = AI_AMOUNT_GUARD,
+            title = "AI 金额单位防误触说明",
+            shortText = "仅识别含明确货币单位的金额，自动过滤 10086、验证码等无单位裸数字通知"
+        )
+    )
 }
 
 enum class HomeStatsDimension(val label: String, val shortLabel: String) {

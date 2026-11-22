@@ -140,38 +140,54 @@ fun formatCurrency(
 fun formatYuan(cents: Long, showSign: Boolean = false, type: TransactionType? = null): String =
     formatCurrency(cents, "CNY", showSign, type)
 
+private val tlCalendar: ThreadLocal<Calendar> = object : ThreadLocal<Calendar>() {
+    override fun initialValue(): Calendar = Calendar.getInstance()
+}
+private val tlTimeShortFmt: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("HH:mm:ss", Locale.CHINA)
+}
+private val tlDateHeaderThisYearFmt: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("MM月dd日 EEEE", Locale.CHINA)
+}
+private val tlDateHeaderOtherYearFmt: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy年MM月dd日 EEEE", Locale.CHINA)
+}
+private val tlDateTimeFullFmt: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+}
+
 fun formatTimeShort(millis: Long): String {
-    return SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date(millis))
+    return tlTimeShortFmt.get()!!.format(Date(millis))
 }
 
 fun formatDateHeader(
     millis: Long,
-    nowYear: Int = Calendar.getInstance().get(Calendar.YEAR)
+    nowYear: Int = tlCalendar.get()!!.apply { timeInMillis = System.currentTimeMillis() }.get(Calendar.YEAR)
 ): String {
-    val txCal = Calendar.getInstance().apply { timeInMillis = millis }
-    val pattern = if (txCal.get(Calendar.YEAR) != nowYear) {
-        "yyyy年MM月dd日 EEEE"
+    val txCal = tlCalendar.get()!!.apply { timeInMillis = millis }
+    val fmt = if (txCal.get(Calendar.YEAR) != nowYear) {
+        tlDateHeaderOtherYearFmt.get()!!
     } else {
-        "MM月dd日 EEEE"
+        tlDateHeaderThisYearFmt.get()!!
     }
-    return SimpleDateFormat(pattern, Locale.CHINA).format(Date(millis))
+    return fmt.format(Date(millis))
 }
 
 fun formatItemTimeCompact(
     millis: Long,
-    nowYear: Int = Calendar.getInstance().get(Calendar.YEAR)
+    nowYear: Int = tlCalendar.get()!!.apply { timeInMillis = System.currentTimeMillis() }.get(Calendar.YEAR)
 ): String {
-    val txCal = Calendar.getInstance().apply { timeInMillis = millis }
-    val pattern = if (txCal.get(Calendar.YEAR) != nowYear) {
-        "yyyy-MM-dd HH:mm:ss"
+    val txCal = tlCalendar.get()!!.apply { timeInMillis = millis }
+    val fmt = if (txCal.get(Calendar.YEAR) != nowYear) {
+        tlDateTimeFullFmt.get()!!
     } else {
-        "HH:mm:ss"
+        tlTimeShortFmt.get()!!
     }
-    return SimpleDateFormat(pattern, Locale.CHINA).format(Date(millis))
+    return fmt.format(Date(millis))
 }
 
 fun formatDateTimeFull(millis: Long): String {
-    return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(Date(millis))
+    return tlDateTimeFullFmt.get()!!.format(Date(millis))
 }
 
 fun channelBrandColor(channel: String): Color {
@@ -502,7 +518,7 @@ fun TransactionDetailSheet(
                         }
                         if (assignedBooks.isEmpty()) {
                             Text(
-                                text = "暂未加入任何账本，点击右侧可快速归类至一个或多个账本",
+                                text = "未加入账本",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -862,11 +878,19 @@ fun TransactionEditorDialog(
         )
     }
     var currencyQuery by remember { mutableStateOf("") }
-    val filteredCurrencies = remember(currencyQuery, enabledCurrencyCodes, selectedCurrency) {
+    val allSearchableCurrencies = remember(enabledCurrencyCodes, selectedCurrency) {
+        val codes = LinkedHashSet<String>()
+        codes.add("CNY")
+        enabledCurrencyCodes.forEach { if (CurrencyCatalog.isValidCurrencyCode(it)) codes.add(it.uppercase()) }
+        if (CurrencyCatalog.isValidCurrencyCode(selectedCurrency)) codes.add(selectedCurrency.uppercase())
+        CurrencyCatalog.allIsoCurrencyCodes.forEach { codes.add(it) }
+        codes.map { CurrencyCatalog.resolve(it) }
+    }
+    val filteredCurrencies = remember(currencyQuery, enabledCurrencyCodes, selectedCurrency, allSearchableCurrencies) {
         if (currencyQuery.isBlank()) {
             CurrencyCatalog.enabledCurrenciesWithCny(enabledCurrencyCodes, ensureCode = selectedCurrency)
         } else {
-            CurrencyCatalog.search(currencyQuery)
+            CurrencyCatalog.search(currencyQuery, pool = allSearchableCurrencies).take(40)
         }
     }
     val initialMillis = remember(initialTransaction) {
@@ -1029,7 +1053,7 @@ fun TransactionEditorDialog(
                 OutlinedTextField(
                     value = currencyQuery,
                     onValueChange = { currencyQuery = it },
-                    placeholder = { Text("搜索币种，如 hkd / 港元 / 泰铢") },
+                    placeholder = { Text("搜索币种") },
                     leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     singleLine = true,
                     modifier = Modifier

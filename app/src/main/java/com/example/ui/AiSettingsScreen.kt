@@ -67,6 +67,8 @@ import com.example.data.LocalModelCatalog
 import com.example.model.AiConfig
 import com.example.model.AiProviderMode
 import com.example.model.CategoryCatalog
+import com.example.model.FeatureTipsCatalog
+import com.example.ui.components.FeatureTipBanner
 import com.example.ui.components.formatCurrency
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
@@ -89,6 +91,7 @@ fun AiSettingsScreen(
     val aiTestState by viewModel.aiTestState.collectAsStateWithLifecycle()
     val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
+    val appearance by viewModel.appearanceState.collectAsStateWithLifecycle()
     val aiManager = remember { AiUnderstandingManager() }
     val allRules = (rulesState as? UiState.Success)?.data ?: emptyList()
     val activeCategories = remember(settings) { CategoryCatalog.allActiveCategories(settings) }
@@ -206,6 +209,12 @@ fun AiSettingsScreen(
                                 text = settingsHighlightedText(selectedMode.description, ROUTE_SETTINGS_AI),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            FeatureTipBanner(
+                                tipId = FeatureTipsCatalog.AI_AMOUNT_GUARD,
+                                text = "AI 自动过滤无金额单位的普通数字（如验证码、10086 等）；误识别账单可标记为「非账单」并支持撤回。",
+                                appearance = appearance,
+                                onDismiss = { viewModel.dismissFeatureTip(it) }
                             )
 
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {

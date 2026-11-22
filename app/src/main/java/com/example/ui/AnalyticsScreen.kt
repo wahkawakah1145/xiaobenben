@@ -2,6 +2,7 @@ package com.example.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -65,13 +66,16 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,6 +86,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -102,12 +107,14 @@ import com.example.model.AnalyticsGranularity
 import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.ExchangeRateState
+import com.example.model.FeatureTipsCatalog
 import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
 import com.example.model.TransactionBookLink
 import com.example.model.TransactionType
 import com.example.ui.components.AnalyticsCalendarSection
 import com.example.ui.components.ChannelBadge
+import com.example.ui.components.FeatureTipBanner
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
 import com.example.ui.components.channelBrandColor
@@ -163,39 +170,18 @@ fun AnalyticsScreen(
         onCalendarFullScreenChange(false)
     }
 
-    var topPullDistancePx by remember { mutableFloatStateOf(0f) }
-    val pullTriggerDp = appearance.analyticsPullCalendarDistanceDp.coerceIn(80, 560)
-    val pullTriggerPx = with(density) { pullTriggerDp.dp.toPx() }
-    val pullDownToCalendarConnection = remember(isCalendarFullScreen, pullTriggerPx) {
-        object : NestedScrollConnection {
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource
-            ): Offset {
-                if (isCalendarFullScreen || source != NestedScrollSource.UserInput) return Offset.Zero
-                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                if (atTop && available.y > 0f) {
-                    topPullDistancePx = (topPullDistancePx + available.y).coerceIn(0f, pullTriggerPx * 1.4f)
-                    if (topPullDistancePx >= pullTriggerPx) {
-                        topPullDistancePx = 0f
-                        onCalendarFullScreenChange(true)
-                    }
-                    return available
-                } else if (available.y < 0f && topPullDistancePx > 0f) {
-                    topPullDistancePx = (topPullDistancePx + available.y).coerceAtLeast(0f)
-                }
-                return Offset.Zero
-            }
+    val scope = rememberCoroutineScope()
+    val calendarReveal = remember { Animatable(if (isCalendarFullScreen) 1f else 0f) }
+    var isCalendarGestureActive by remember { mutableStateOf(false) }
 
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (!isCalendarFullScreen && topPullDistancePx >= pullTriggerPx * 0.85f) {
-                    topPullDistancePx = 0f
-                    onCalendarFullScreenChange(true)
-                } else {
-                    topPullDistancePx = 0f
-                }
-                return Velocity.Zero
+    LaunchedEffect(isCalendarFullScreen) {
+        if (!isCalendarGestureActive) {
+            val target = if (isCalendarFullScreen) 1f else 0f
+            if (kotlin.math.abs(calendarReveal.value - target) > 0.002f) {
+                calendarReveal.animateTo(
+                    targetValue = target,
+                    animationSpec = spring(dampingRatio = 0.88f, stiffness = 360f)
+                )
             }
         }
     }
@@ -325,56 +311,97 @@ fun AnalyticsScreen(
         AnalyticsGranularity.DAY -> "当日暂无支出记录。"
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .nestedScroll(pullDownToCalendarConnection),
+    BoxWithConstraints(
+        modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
     ) {
+        val containerHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
+        val dragSpanPx = (containerHeightPx * 0.62f).coerceAtLeast(with(density) { 260.dp.toPx() })
+
+        val pullDownToCalendarConnection = remember(isCalendarFullScreen, dragSpanPx) {
+            object : NestedScrollConnection {
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    if (!isCalendarFullScreen && source == NestedScrollSource.UserInput && calendarReveal.value > 0f && available.y < 0f) {
+                        isCalendarGestureActive = true
+                        val current = calendarReveal.value
+                        val next = (current + available.y / dragSpanPx).coerceIn(0f, 1f)
+                        val consumedY = (next - current) * dragSpanPx
+                        scope.launch { calendarReveal.snapTo(next) }
+                        return Offset(0f, consumedY)
+                    }
+                    return Offset.Zero
+                }
+
+                override fun onPostScroll(
+                    consumed: Offset,
+                    available: Offset,
+                    source: NestedScrollSource
+                ): Offset {
+                    if (isCalendarFullScreen || source != NestedScrollSource.UserInput) return Offset.Zero
+                    val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                    if (atTop && available.y > 0f) {
+                        isCalendarGestureActive = true
+                        val next = (calendarReveal.value + available.y / dragSpanPx).coerceIn(0f, 1f)
+                        scope.launch { calendarReveal.snapTo(next) }
+                        return available
+                    }
+                    return Offset.Zero
+                }
+
+                override suspend fun onPreFling(available: Velocity): Velocity {
+                    if (!isCalendarFullScreen && (isCalendarGestureActive || calendarReveal.value > 0f)) {
+                        val current = calendarReveal.value
+                        val shouldOpen = current >= 0.22f || (current > 0.03f && available.y > 260f)
+                        isCalendarGestureActive = false
+                        if (shouldOpen) {
+                            onCalendarFullScreenChange(true)
+                            calendarReveal.animateTo(
+                                targetValue = 1f,
+                                animationSpec = spring(dampingRatio = 0.88f, stiffness = 340f)
+                            )
+                        } else {
+                            calendarReveal.animateTo(
+                                targetValue = 0f,
+                                animationSpec = spring(dampingRatio = 0.88f, stiffness = 400f)
+                            )
+                        }
+                        return available
+                    }
+                    return Velocity.Zero
+                }
+            }
+        }
+
+        val revealProgress = calendarReveal.value.coerceIn(0f, 1f)
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .nestedScroll(pullDownToCalendarConnection),
+            contentAlignment = Alignment.TopCenter
+        ) {
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
-                .fillMaxSize(),
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationY = revealProgress * containerHeightPx * 0.32f
+                    val scale = 1f - 0.04f * revealProgress
+                    scaleX = scale
+                    scaleY = scale
+                    alpha = (1f - revealProgress * 0.62f).coerceIn(0.38f, 1f)
+                },
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            if (topPullDistancePx > 4f) {
-                item(key = "pull_calendar_hint") {
-                    val progressRatio = (topPullDistancePx / pullTriggerPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
-                    val ready = topPullDistancePx >= pullTriggerPx * 0.85f
-                    Box(
-                        modifier = Modifier.fillMaxWidth(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(999.dp),
-                            color = if (ready) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = if (ready) {
-                                        "松手进入全屏收支日历"
-                                    } else {
-                                        "继续下拉打开收支日历 (${(progressRatio * 100).roundToInt()}% · ${pullTriggerDp}dp)"
-                                    },
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
-                }
+            item(key = "analytics_contextual_tip") {
+                FeatureTipBanner(
+                    tipId = FeatureTipsCatalog.ANALYTICS_CALENDAR_LEGEND,
+                    text = "顶部下拉可跟随手势展开全屏日历；点图例筛选明细，长按明细编辑。",
+                    appearance = appearance,
+                    onDismiss = { viewModel.dismissFeatureTip(it) }
+                )
             }
             if (books.isNotEmpty()) {
                 item(key = "analytics_book_selector") {
@@ -595,11 +622,13 @@ fun AnalyticsScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("支出分类占比", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    text = "点击图例或分类行可筛选条目（完整展示全部数据）",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                if (appearance.isFeatureTipVisible(FeatureTipsCatalog.ANALYTICS_CALENDAR_LEGEND)) {
+                                    Text(
+                                        text = "点击图例或分类行可筛选条目",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                             ChartStyleToggleButton(
                                 style = categoryChartStyle,
@@ -609,11 +638,20 @@ fun AnalyticsScreen(
                         }
 
                         if (categoryData.isEmpty() || totalExpense <= 0L) {
-                            Text(
-                                text = emptyPeriodMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 18.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(text = "🤗", fontSize = 56.sp)
+                                Text(
+                                    text = emptyPeriodMessage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         } else {
                             if (categoryChartStyle == AnalyticsChartStyle.PIE) {
                                 Column(
@@ -673,10 +711,11 @@ fun AnalyticsScreen(
                                         }
                                     }
 
-                                    Text(
+                                    FeatureTipBanner(
+                                        tipId = FeatureTipsCatalog.ANALYTICS_PIE_PINCH,
                                         text = "双指捏合饼图可无级调节大小 (${livePieSizeDp.roundToInt()}dp)",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+                                        appearance = appearance,
+                                        onDismiss = { viewModel.dismissFeatureTip(it) },
                                         modifier = Modifier.testTag("analytics_pie_pinch_hint")
                                     )
 
@@ -783,6 +822,7 @@ fun AnalyticsScreen(
                                     transactions = filteredCategoryTxs,
                                     baseCurrencyCode = baseCurrency,
                                     ratesToCny = exchangeRates.ratesToCny,
+                                    showInteractionHint = appearance.isFeatureTipVisible(FeatureTipsCatalog.ANALYTICS_CALENDAR_LEGEND),
                                     onClearFilter = {
                                         selectedCategoryFilter = null
                                         expandAllCategoryLegends = false
@@ -814,15 +854,17 @@ fun AnalyticsScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("渠道分布", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    text = if (hasCompositeChannels) {
-                                        "组合支付已按「&」等符号拆分分别统计 · 点击图例筛选明细"
-                                    } else {
-                                        "点击图例或渠道行可筛选条目（完整展示全部渠道）"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                if (appearance.isFeatureTipVisible(FeatureTipsCatalog.ANALYTICS_CALENDAR_LEGEND)) {
+                                    Text(
+                                        text = if (hasCompositeChannels) {
+                                            "组合支付已按「&」等符号拆分分别统计 · 点击图例筛选明细"
+                                        } else {
+                                            "点击图例或渠道行可筛选条目"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                             ChartStyleToggleButton(
                                 style = channelChartStyle,
@@ -832,11 +874,20 @@ fun AnalyticsScreen(
                         }
 
                         if (channelData.isEmpty() || totalExpense <= 0L) {
-                            Text(
-                                text = "暂无渠道数据",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 18.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(text = "🤗", fontSize = 56.sp)
+                                Text(
+                                    text = "暂无渠道数据",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         } else {
                             if (channelChartStyle == AnalyticsChartStyle.PIE) {
                                 Column(
@@ -1000,6 +1051,7 @@ fun AnalyticsScreen(
                                     transactions = filteredChannelTxs,
                                     baseCurrencyCode = baseCurrency,
                                     ratesToCny = exchangeRates.ratesToCny,
+                                    showInteractionHint = appearance.isFeatureTipVisible(FeatureTipsCatalog.ANALYTICS_CALENDAR_LEGEND),
                                     onClearFilter = {
                                         selectedChannelFilter = null
                                         expandAllChannelLegends = false
@@ -1282,11 +1334,13 @@ fun AnalyticsScreen(
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
-                                Text(
-                                    text = "在顶部向下划动或点击此处展开 年/月/周/日 日历视图",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                if (appearance.isFeatureTipVisible(FeatureTipsCatalog.ANALYTICS_CALENDAR_LEGEND)) {
+                                    Text(
+                                        text = "顶部下拉跟随手势展开或点击进入",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                         Icon(
@@ -1299,36 +1353,65 @@ fun AnalyticsScreen(
             }
         }
 
-        AnimatedVisibility(
-            visible = isCalendarFullScreen,
-            enter = slideInVertically(
-                animationSpec = spring(dampingRatio = 0.86f, stiffness = 360f),
-                initialOffsetY = { -it }
-            ) + fadeIn(tween(220)),
-            exit = slideOutVertically(
-                animationSpec = spring(dampingRatio = 0.90f, stiffness = 420f),
-                targetOffsetY = { -it }
-            ) + fadeOut(tween(180)),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            AnalyticsCalendarSection(
-                transactions = allTransactions,
-                granularity = selectedGranularity,
-                anchorMillis = anchorMillis,
-                baseCurrencyCode = baseCurrency,
-                ratesToCny = exchangeRates.ratesToCny,
-                onGranularityAndAnchorChange = { nextGran, nextAnchor ->
-                    selectedGranularity = nextGran
-                    anchorMillis = nextAnchor
-                    selectedCategoryFilter = null
-                    selectedChannelFilter = null
-                },
-                onTransactionClick = { inspectingTransaction = it },
-                isFullScreen = true,
-                onRequestExitFullScreen = { onCalendarFullScreenChange(false) },
-                scopeTitle = activeBook?.name?.let { "账本「$it」" } ?: "全部账单",
-                modifier = Modifier.fillMaxSize()
-            )
+        if (revealProgress > 0.002f || isCalendarFullScreen) {
+            val cornerDp = (24.dp * (1f - revealProgress)).coerceAtLeast(0.dp)
+            Surface(
+                color = MaterialTheme.colorScheme.background,
+                shape = RoundedCornerShape(bottomStart = cornerDp, bottomEnd = cornerDp),
+                shadowElevation = if (revealProgress < 0.995f) 12.dp else 0.dp,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        translationY = -(1f - revealProgress) * containerHeightPx
+                        alpha = (0.35f + 0.65f * revealProgress).coerceIn(0f, 1f)
+                    }
+            ) {
+                AnalyticsCalendarSection(
+                    transactions = allTransactions,
+                    granularity = selectedGranularity,
+                    anchorMillis = anchorMillis,
+                    baseCurrencyCode = baseCurrency,
+                    ratesToCny = exchangeRates.ratesToCny,
+                    onGranularityAndAnchorChange = { nextGran, nextAnchor ->
+                        selectedGranularity = nextGran
+                        anchorMillis = nextAnchor
+                        selectedCategoryFilter = null
+                        selectedChannelFilter = null
+                    },
+                    onTransactionClick = { inspectingTransaction = it },
+                    isFullScreen = isCalendarFullScreen,
+                    onRequestExitFullScreen = { onCalendarFullScreenChange(false) },
+                    onInteractiveExitDragDelta = { deltaY ->
+                        isCalendarGestureActive = true
+                        val next = (calendarReveal.value + deltaY / dragSpanPx).coerceIn(0f, 1f)
+                        scope.launch { calendarReveal.snapTo(next) }
+                    },
+                    onInteractiveExitDragRelease = { velocityY ->
+                        val current = calendarReveal.value
+                        val shouldClose = current <= 0.78f || velocityY < -260f
+                        isCalendarGestureActive = false
+                        scope.launch {
+                            if (shouldClose) {
+                                onCalendarFullScreenChange(false)
+                                calendarReveal.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(dampingRatio = 0.88f, stiffness = 360f)
+                                )
+                            } else {
+                                calendarReveal.animateTo(
+                                    targetValue = 1f,
+                                    animationSpec = spring(dampingRatio = 0.88f, stiffness = 400f)
+                                )
+                            }
+                        }
+                    },
+                    appearance = appearance,
+                    onDismissTip = { viewModel.dismissFeatureTip(it) },
+                    scopeTitle = activeBook?.name?.let { "账本「$it」" } ?: "全部账单",
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
         }
     }
 
@@ -1862,6 +1945,7 @@ private fun FilteredTransactionsPanel(
     transactions: List<LedgerTransaction>,
     baseCurrencyCode: String,
     ratesToCny: Map<String, Double>,
+    showInteractionHint: Boolean = true,
     onClearFilter: () -> Unit,
     onTransactionClick: (LedgerTransaction) -> Unit,
     onTransactionLongClick: (LedgerTransaction) -> Unit = onTransactionClick
@@ -1890,11 +1974,13 @@ private fun FilteredTransactionsPanel(
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                         maxLines = 2
                     )
-                    Text(
-                        text = "点按查看详情 · 长按直接编辑",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (showInteractionHint) {
+                        Text(
+                            text = "点按查看详情 · 长按直接编辑",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 TextButton(
                     onClick = onClearFilter,
@@ -1907,11 +1993,20 @@ private fun FilteredTransactionsPanel(
             }
             HorizontalDivider()
             if (transactions.isEmpty()) {
-                Text(
-                    text = "暂无匹配条目",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(text = "🤗", fontSize = 48.sp)
+                    Text(
+                        text = "暂无匹配条目",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             } else {
                 transactions.forEach { tx ->
                     Surface(

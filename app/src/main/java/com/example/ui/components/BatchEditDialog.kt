@@ -61,6 +61,7 @@ fun BatchSelectionActionBar(
     onBatchDelete: () -> Unit,
     onQuickAnalyze: () -> Unit = {},
     onAddToBooks: () -> Unit = {},
+    onRemoveFromBook: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -141,7 +142,7 @@ fun BatchSelectionActionBar(
             ) {
                 FilledTonalButton(
                     onClick = onQuickAnalyze,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                     modifier = Modifier
                         .weight(1f)
                         .minimumInteractiveComponentSize()
@@ -150,15 +151,34 @@ fun BatchSelectionActionBar(
                     Icon(
                         imageVector = AppIcons.Insights,
                         contentDescription = null,
-                        modifier = Modifier.size(17.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(5.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text("快速分析", maxLines = 1)
+                }
+
+                if (onRemoveFromBook != null) {
+                    FilledTonalButton(
+                        onClick = onRemoveFromBook,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .minimumInteractiveComponentSize()
+                            .testTag("batch_remove_from_book_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("移出本账本", maxLines = 1)
+                    }
                 }
 
                 FilledTonalButton(
                     onClick = onAddToBooks,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                     modifier = Modifier
                         .weight(1f)
                         .minimumInteractiveComponentSize()
@@ -167,10 +187,10 @@ fun BatchSelectionActionBar(
                     Icon(
                         imageVector = AppIcons.LibraryAdd,
                         contentDescription = null,
-                        modifier = Modifier.size(17.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(5.dp))
-                    Text("加入账本", maxLines = 1)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (onRemoveFromBook != null) "加入其他" else "加入账本", maxLines = 1)
                 }
             }
 

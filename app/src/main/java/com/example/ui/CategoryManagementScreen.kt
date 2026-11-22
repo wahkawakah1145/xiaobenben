@@ -146,7 +146,7 @@ fun CategoryManagementScreen(
                         )
                         Text(
                             text = settingsHighlightedText(
-                                "自动汇总当前设置、历史账单与识别规则中的所有分类；轻点左侧图标可快捷更换分类图标，新增/修改/删除分类时动态同步对应规则与 AI 理解提示词。",
+                                "轻点左侧图标更换分类图标，改名或删除时同步规则与 AI 提示词。",
                                 ROUTE_SETTINGS_CATEGORIES
                             ),
                             style = MaterialTheme.typography.bodySmall,

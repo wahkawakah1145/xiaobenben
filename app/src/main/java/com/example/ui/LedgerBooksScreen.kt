@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -9,12 +10,15 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
@@ -87,6 +91,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -95,6 +100,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -102,13 +108,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.CurrencyExchangeManager
 import com.example.model.BudgetSettings
 import com.example.model.CategoryCatalog
 import com.example.model.ChannelCatalog
 import com.example.model.ExchangeRateState
+import com.example.model.FeatureTipsCatalog
 import com.example.model.HomeStatsDimension
 import com.example.model.IconVisualStyle
 import com.example.model.LedgerBook
@@ -117,8 +126,11 @@ import com.example.model.TransactionBookLink
 import com.example.model.TransactionType
 import com.example.parser.QuickAnalysisBreakdownItem
 import com.example.parser.QuickAnalysisReport
+import com.example.ui.components.BatchEditTransactionsDialog
+import com.example.ui.components.BatchSelectionActionBar
 import com.example.ui.components.CategoryIconAvatar
 import com.example.ui.components.ChannelBadge
+import com.example.ui.components.FeatureTipBanner
 import com.example.ui.components.LedgerExportDialog
 import com.example.ui.components.TransactionDetailSheet
 import com.example.ui.components.TransactionEditorDialog
@@ -174,6 +186,8 @@ fun LedgerBooksScreen(
 ) {
     val allTransactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
     val txById = remember(allTransactions) { allTransactions.associateBy { it.id } }
+    val appearance by viewModel.appearanceState.collectAsStateWithLifecycle()
+    val haptic = LocalHapticFeedback.current
     val baseCurrency = settings.baseCurrencyCode
     val numberFont = LocalNumberFontFamily.current
 
@@ -394,6 +408,26 @@ fun LedgerBooksScreen(
                     }
                     val netCents = incomeCents - expenseCents
                     val accent = Color(openBook.colorArgb.toInt())
+
+                    var detailSelectedIds by remember(openBook.id) { mutableStateOf(emptySet<String>()) }
+                    val isDetailSelectionMode = detailSelectedIds.isNotEmpty()
+                    var showDetailBatchEdit by remember(openBook.id) { mutableStateOf(false) }
+                    var showDetailBatchDeleteConfirm by remember(openBook.id) { mutableStateOf(false) }
+                    var showDetailAddToOtherBooks by remember(openBook.id) { mutableStateOf(false) }
+
+                    LaunchedEffect(bookTxList) {
+                        if (detailSelectedIds.isNotEmpty()) {
+                            val validIds = bookTxList.map { it.id }.toSet()
+                            val pruned = detailSelectedIds.intersect(validIds)
+                            if (pruned.size != detailSelectedIds.size) {
+                                detailSelectedIds = pruned
+                            }
+                        }
+                    }
+
+                    BackHandler(enabled = isDetailSelectionMode) {
+                        detailSelectedIds = emptySet()
+                    }
 
                     Box(
                         modifier = Modifier
@@ -647,26 +681,20 @@ fun LedgerBooksScreen(
                                 }
                             }
 
-                            // Hint moved outside & below the hero card
+                            // Dismissible contextual tip below the hero card
                             item(key = "book_detail_hint_below_card") {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = accent.copy(alpha = 0.08f),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("book_detail_gesture_hint")
-                                ) {
-                                    Text(
-                                        text = if (canSwipeToAnalytics) {
-                                            "手势提示：右滑或在顶部下拉可返回账本主页（再右滑回到账单主页）；左滑可直接切换到本账本的「收支分析」"
-                                        } else {
-                                            "手势提示：右滑或在顶部下拉可返回账本主页；按返回键同样回到账本列表"
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                                    )
-                                }
+                                FeatureTipBanner(
+                                    tipId = FeatureTipsCatalog.BOOK_DETAIL_GESTURE,
+                                    text = if (canSwipeToAnalytics) {
+                                        "右滑或顶部下拉返回账本主页，左滑分析本账本；长按账单可批量移出或修改。"
+                                    } else {
+                                        "右滑或顶部下拉返回账本主页；长按账单可多选批量移出、修改或删除。"
+                                    },
+                                    appearance = appearance,
+                                    onDismiss = { viewModel.dismissFeatureTip(it) },
+                                    accentColor = accent,
+                                    modifier = Modifier.testTag("book_detail_gesture_hint")
+                                )
                             }
 
                             if (bookTxList.isNotEmpty()) {
@@ -686,7 +714,7 @@ fun LedgerBooksScreen(
                                             OutlinedTextField(
                                                 value = detailSearchQuery,
                                                 onValueChange = { detailSearchQuery = it },
-                                                placeholder = { Text("在「${openBook.name}」中搜索（多关键词空格隔开）") },
+                                                placeholder = { Text("搜索本账本") },
                                                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                                                 trailingIcon = {
                                                     if (detailSearchQuery.isNotEmpty()) {
@@ -789,7 +817,9 @@ fun LedgerBooksScreen(
                                                         detailEndTimeText = ""
                                                         detailMinAmountInput = ""
                                                         detailMaxAmountInput = ""
-                                                    }
+                                                    },
+                                                    appearance = appearance,
+                                                    onDismissTip = { viewModel.dismissFeatureTip(it) }
                                                 )
                                             }
 
@@ -872,18 +902,20 @@ fun LedgerBooksScreen(
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                             verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = AppIcons.ReceiptLong,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                                modifier = Modifier.size(36.dp)
+                                            Text(
+                                                text = "🤗",
+                                                fontSize = 68.sp,
+                                                lineHeight = 76.sp,
+                                                modifier = Modifier.testTag("book_detail_empty_emoji")
                                             )
                                             Text("该账本暂无明细", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                                            Text(
-                                                text = "可在主页长按选中账单点击「加入账本」，或点击任意账单详情中的「添加到账本」归入此账本。",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                            if (appearance.isFeatureTipVisible(FeatureTipsCatalog.BOOK_DETAIL_GESTURE)) {
+                                                Text(
+                                                    text = "可在主页长按选中账单「加入账本」，或在账单详情页归入此账本。",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -901,24 +933,66 @@ fun LedgerBooksScreen(
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                             verticalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            Text("未匹配到符合条件的账单", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                             Text(
-                                                text = "请调整搜索关键词、日期时段或金额范围",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                text = "🤗",
+                                                fontSize = 60.sp,
+                                                lineHeight = 68.sp,
+                                                modifier = Modifier.testTag("book_detail_filter_empty_emoji")
                                             )
+                                            Text("未匹配到符合条件的账单", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                            if (appearance.isFeatureTipVisible(FeatureTipsCatalog.BOOK_DETAIL_GESTURE)) {
+                                                Text(
+                                                    text = "请调整搜索关键词、日期时段或金额范围",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             } else {
-                                items(filteredBookTxs, key = { it.id }) { tx ->
+                                items(
+                                    items = filteredBookTxs,
+                                    key = { it.id },
+                                    contentType = { "book_detail_tx" }
+                                ) { tx ->
+                                    val isSelected = tx.id in detailSelectedIds
                                     Surface(
                                         shape = RoundedCornerShape(16.dp),
-                                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceContainerLow
+                                        },
+                                        border = if (isSelected) {
+                                            BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                                        } else {
+                                            null
+                                        },
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clip(RoundedCornerShape(16.dp))
-                                            .clickable { inspectingTx = tx }
+                                            .combinedClickable(
+                                                onClick = {
+                                                    if (isDetailSelectionMode) {
+                                                        detailSelectedIds = if (isSelected) {
+                                                            detailSelectedIds - tx.id
+                                                        } else {
+                                                            detailSelectedIds + tx.id
+                                                        }
+                                                    } else {
+                                                        inspectingTx = tx
+                                                    }
+                                                },
+                                                onLongClick = {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    detailSelectedIds = if (isSelected) {
+                                                        detailSelectedIds - tx.id
+                                                    } else {
+                                                        detailSelectedIds + tx.id
+                                                    }
+                                                }
+                                            )
                                             .testTag("book_detail_tx_${tx.id}")
                                     ) {
                                         Row(
@@ -928,12 +1002,34 @@ fun LedgerBooksScreen(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                                         ) {
-                                            CategoryIconAvatar(
-                                                category = tx.category,
-                                                tintColor = transactionTypeColor(tx.txType),
-                                                visualStyle = IconVisualStyle.FILLED,
-                                                size = 38.dp
-                                            )
+                                            if (isDetailSelectionMode) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(38.dp)
+                                                        .clip(CircleShape)
+                                                        .background(
+                                                            if (isSelected) MaterialTheme.colorScheme.primary
+                                                            else MaterialTheme.colorScheme.surfaceContainerHighest
+                                                        ),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    if (isSelected) {
+                                                        Icon(
+                                                            imageVector = Icons.Rounded.Check,
+                                                            contentDescription = "已选中",
+                                                            tint = MaterialTheme.colorScheme.onPrimary,
+                                                            modifier = Modifier.size(20.dp)
+                                                        )
+                                                    }
+                                                }
+                                            } else {
+                                                CategoryIconAvatar(
+                                                    category = tx.category,
+                                                    tintColor = transactionTypeColor(tx.txType),
+                                                    visualStyle = IconVisualStyle.FILLED,
+                                                    size = 38.dp
+                                                )
+                                            }
                                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                                 Text(
                                                     text = tx.merchant,
@@ -962,26 +1058,79 @@ fun LedgerBooksScreen(
                                                 color = transactionTypeColor(tx.txType),
                                                 fontWeight = FontWeight.Bold
                                             )
-                                            IconButton(
-                                                onClick = { viewModel.removeTransactionsFromBook(listOf(tx.id), openBook.id) },
-                                                modifier = Modifier
-                                                    .minimumInteractiveComponentSize()
-                                                    .testTag("remove_tx_from_book_${tx.id}")
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Rounded.Close,
-                                                    contentDescription = "从账本移出",
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
+                                            if (!isDetailSelectionMode) {
+                                                IconButton(
+                                                    onClick = { viewModel.removeTransactionsFromBook(listOf(tx.id), openBook.id) },
+                                                    modifier = Modifier
+                                                        .minimumInteractiveComponentSize()
+                                                        .testTag("remove_tx_from_book_${tx.id}")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.Close,
+                                                        contentDescription = "从账本移出",
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
                             item(key = "book_detail_bottom_spacer") {
-                                Spacer(modifier = Modifier.height(64.dp))
+                                Spacer(modifier = Modifier.height(if (isDetailSelectionMode) 176.dp else 64.dp))
                             }
+                        }
+
+                        // Floating multi-select batch action bar inside book detail
+                        AnimatedVisibility(
+                            visible = isDetailSelectionMode,
+                            enter = fadeIn(tween(160)) + slideInVertically { it / 2 },
+                            exit = fadeOut(tween(140)) + slideOutVertically { it / 2 },
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .widthIn(max = 680.dp)
+                        ) {
+                            val allDetailFilteredIds = remember(filteredBookTxs) {
+                                filteredBookTxs.map { it.id }.toSet()
+                            }
+                            val allDetailSelected = allDetailFilteredIds.isNotEmpty() &&
+                                allDetailFilteredIds.all { it in detailSelectedIds }
+                            BatchSelectionActionBar(
+                                selectedCount = detailSelectedIds.size,
+                                allVisibleSelected = allDetailSelected,
+                                onToggleSelectAll = {
+                                    detailSelectedIds = if (allDetailSelected) {
+                                        detailSelectedIds - allDetailFilteredIds
+                                    } else {
+                                        detailSelectedIds + allDetailFilteredIds
+                                    }
+                                },
+                                onInvertSelection = {
+                                    detailSelectedIds = (detailSelectedIds - allDetailFilteredIds) +
+                                        (allDetailFilteredIds - detailSelectedIds)
+                                },
+                                onClearSelection = { detailSelectedIds = emptySet() },
+                                onQuickAnalyze = {
+                                    val picked = filteredBookTxs.filter { it.id in detailSelectedIds }
+                                    if (picked.isNotEmpty()) {
+                                        val report = viewModel.buildQuickSelectionReport(
+                                            transactions = picked,
+                                            scopeTitle = "账本「${openBook.name}」选中 ${picked.size} 笔快速分析"
+                                        )
+                                        quickSummaryBook = "选中账单快速分析" to report
+                                    }
+                                },
+                                onRemoveFromBook = {
+                                    val idsToRemove = detailSelectedIds
+                                    detailSelectedIds = emptySet()
+                                    viewModel.removeTransactionsFromBook(idsToRemove, openBook.id)
+                                },
+                                onAddToBooks = { showDetailAddToOtherBooks = true },
+                                onBatchEdit = { showDetailBatchEdit = true },
+                                onBatchDelete = { showDetailBatchDeleteConfirm = true }
+                            )
                         }
 
                         // Pull-down visual feedback pill when pulling at top
@@ -1038,6 +1187,74 @@ fun LedgerBooksScreen(
                                 DatePicker(state = datePickerState)
                             }
                         }
+
+                        if (showDetailBatchEdit && detailSelectedIds.isNotEmpty()) {
+                            BatchEditTransactionsDialog(
+                                selectedCount = detailSelectedIds.size,
+                                expenseCategories = CategoryCatalog.activeExpenseCategories(settings),
+                                incomeCategories = CategoryCatalog.activeIncomeCategories(settings),
+                                transferCategories = CategoryCatalog.activeTransferCategories(settings),
+                                onDismiss = { showDetailBatchEdit = false },
+                                onConfirm = { type, category, channel, merchant, currencyCode, note ->
+                                    val ids = detailSelectedIds
+                                    showDetailBatchEdit = false
+                                    detailSelectedIds = emptySet()
+                                    viewModel.batchUpdateTransactions(
+                                        txIds = ids,
+                                        type = type,
+                                        category = category,
+                                        channel = channel,
+                                        merchant = merchant,
+                                        currencyCode = currencyCode,
+                                        note = note
+                                    )
+                                }
+                            )
+                        }
+
+                        if (showDetailAddToOtherBooks && detailSelectedIds.isNotEmpty()) {
+                            AddToBooksMultiSelectDialog(
+                                selectedTxCount = detailSelectedIds.size,
+                                books = books,
+                                preselectedBookIds = setOf(openBook.id),
+                                onCreateBookQuick = { name, onCreated ->
+                                    viewModel.saveBook(name = name, onSaved = onCreated)
+                                },
+                                onDismiss = { showDetailAddToOtherBooks = false },
+                                onConfirm = { chosenBookIds ->
+                                    val ids = detailSelectedIds
+                                    showDetailAddToOtherBooks = false
+                                    detailSelectedIds = emptySet()
+                                    viewModel.addTransactionsToBooks(ids, chosenBookIds)
+                                }
+                            )
+                        }
+
+                        if (showDetailBatchDeleteConfirm && detailSelectedIds.isNotEmpty()) {
+                            val count = detailSelectedIds.size
+                            AlertDialog(
+                                onDismissRequest = { showDetailBatchDeleteConfirm = false },
+                                title = { Text("删除选中的 $count 笔账单？") },
+                                text = { Text("将从全部账单及所属账本中删除这 $count 笔记录，删除后可点击底部「撤回」恢复。") },
+                                dismissButton = {
+                                    TextButton(onClick = { showDetailBatchDeleteConfirm = false }) { Text("取消") }
+                                },
+                                confirmButton = {
+                                    Button(
+                                        onClick = {
+                                            val ids = detailSelectedIds
+                                            showDetailBatchDeleteConfirm = false
+                                            detailSelectedIds = emptySet()
+                                            viewModel.deleteTransactions(ids)
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = ExpenseCoral),
+                                        modifier = Modifier.testTag("book_detail_confirm_batch_delete")
+                                    ) {
+                                        Text("确认删除")
+                                    }
+                                }
+                            )
+                        }
                     }
                 } else {
                 LazyColumn(
@@ -1080,11 +1297,6 @@ fun LedgerBooksScreen(
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
-                                    Text(
-                                        text = "点击任意账本进入明细列表；在明细页可直接横滑进入该账本的收支分析",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
                                 }
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Button(
@@ -1099,6 +1311,15 @@ fun LedgerBooksScreen(
                                 }
                             }
                         }
+                    }
+
+                    item(key = "books_overview_tip") {
+                        FeatureTipBanner(
+                            tipId = FeatureTipsCatalog.BOOKS_OVERVIEW,
+                            text = "点击任意账本进入明细列表，在明细页可直接横滑进入该账本的收支分析。",
+                            appearance = appearance,
+                            onDismiss = { viewModel.dismissFeatureTip(it) }
+                        )
                     }
 
                     if (books.isEmpty()) {
@@ -1117,18 +1338,20 @@ fun LedgerBooksScreen(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = AppIcons.MenuBook,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
-                                        modifier = Modifier.size(44.dp)
+                                    Text(
+                                        text = "🤗",
+                                        fontSize = 72.sp,
+                                        lineHeight = 80.sp,
+                                        modifier = Modifier.testTag("books_empty_emoji")
                                     )
                                     Text("还没有创建账本", style = MaterialTheme.typography.titleMedium)
-                                    Text(
-                                        text = "新建账本后，可在主页长按选中账单点击底部「加入账本」，或在账单详情页直接添加到账本。",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    if (appearance.isFeatureTipVisible(FeatureTipsCatalog.BOOKS_OVERVIEW)) {
+                                        Text(
+                                            text = "新建账本后，可在主页长按选中账单「加入账本」，或在账单详情页添加。",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                     OutlinedButton(
                                         onClick = { showCreateBookDialog = true },
                                         modifier = Modifier.testTag("books_empty_create_button")

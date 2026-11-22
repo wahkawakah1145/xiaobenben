@@ -94,12 +94,17 @@ class SettingsDataStore(private val context: Context) {
         val BOTTOM_TAB_ORDER = stringPreferencesKey("appearance_bottom_tab_order")
         val GLOBAL_SNACKBAR_DURATION = stringPreferencesKey("appearance_global_snackbar_duration")
         val DELETE_UNDO_DURATION = stringPreferencesKey("appearance_delete_undo_duration")
+        val HIDE_ALL_FEATURE_TIPS = booleanPreferencesKey("appearance_hide_all_feature_tips")
+        val DISMISSED_TIP_IDS_JSON = stringPreferencesKey("appearance_dismissed_tip_ids_json")
+        val HOME_PAGE_LOAD_BATCH_SIZE = intPreferencesKey("appearance_home_page_load_batch_size")
 
         val EXCHANGE_RATES_JSON = stringPreferencesKey("exchange_rates_json")
         val EXCHANGE_RATES_UPDATED_AT = longPreferencesKey("exchange_rates_updated_at")
         val EXCHANGE_RATES_STATUS = stringPreferencesKey("exchange_rates_status")
         val EXCHANGE_RATES_SOURCE = stringPreferencesKey("exchange_rates_source")
         val EXCHANGE_RATES_DATE_TEXT = stringPreferencesKey("exchange_rates_date_text")
+        val EXCHANGE_RATES_SOURCE_ID = stringPreferencesKey("exchange_rates_source_id")
+        val EXCHANGE_RATES_SOURCE_CODES_JSON = stringPreferencesKey("exchange_rates_source_codes_json")
         val EXCHANGE_RATE_AUTO_UPDATE_FREQ = stringPreferencesKey("exchange_rate_auto_update_freq")
         val EXCHANGE_RATE_SOURCE = stringPreferencesKey("exchange_rate_source")
         val CUSTOM_EXCHANGE_RATE_URL = stringPreferencesKey("custom_exchange_rate_url")
@@ -217,7 +222,10 @@ class SettingsDataStore(private val context: Context) {
             showBooksTab = prefs[Keys.SHOW_BOOKS_TAB] ?: true,
             bottomTabOrder = MainBottomTab.decodeOrder(prefs[Keys.BOTTOM_TAB_ORDER]),
             globalSnackbarDuration = GlobalToastDuration.fromRaw(prefs[Keys.GLOBAL_SNACKBAR_DURATION]),
-            deleteUndoDuration = DeleteUndoDuration.fromRaw(prefs[Keys.DELETE_UNDO_DURATION])
+            deleteUndoDuration = DeleteUndoDuration.fromRaw(prefs[Keys.DELETE_UNDO_DURATION]),
+            hideAllFeatureTips = prefs[Keys.HIDE_ALL_FEATURE_TIPS] ?: false,
+            dismissedTipIds = decodeStringListJson(prefs[Keys.DISMISSED_TIP_IDS_JSON]).toSet(),
+            homePageLoadBatchSize = (prefs[Keys.HOME_PAGE_LOAD_BATCH_SIZE] ?: 100).coerceIn(20, 500)
         )
     }
 
@@ -242,11 +250,15 @@ class SettingsDataStore(private val context: Context) {
             updatedAtMillis = prefs[Keys.EXCHANGE_RATES_UPDATED_AT] ?: 0L,
             lastStatus = prefs[Keys.EXCHANGE_RATES_STATUS] ?: "",
             dataSource = prefs[Keys.EXCHANGE_RATES_SOURCE] ?: "内置参考汇率（初始基准）",
-            rateDateText = prefs[Keys.EXCHANGE_RATES_DATE_TEXT] ?: ""
+            rateDateText = prefs[Keys.EXCHANGE_RATES_DATE_TEXT] ?: "",
+            sourceId = prefs[Keys.EXCHANGE_RATES_SOURCE_ID] ?: "",
+            sourceAvailableCodes = decodeStringListJson(prefs[Keys.EXCHANGE_RATES_SOURCE_CODES_JSON])
         )
     }
 
     suspend fun getBudgetSettingsOnce(): BudgetSettings = budgetSettingsFlow.first()
+
+    suspend fun getAppearanceSettingsOnce(): AppearanceSettings = appearanceSettingsFlow.first()
 
     suspend fun getWebDavConfigOnce(): WebDavConfig = webDavConfigFlow.first()
 
@@ -390,6 +402,9 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.BOTTOM_TAB_ORDER] = MainBottomTab.encodeOrder(settings.bottomTabOrder)
             prefs[Keys.GLOBAL_SNACKBAR_DURATION] = settings.globalSnackbarDuration.name
             prefs[Keys.DELETE_UNDO_DURATION] = settings.deleteUndoDuration.name
+            prefs[Keys.HIDE_ALL_FEATURE_TIPS] = settings.hideAllFeatureTips
+            prefs[Keys.DISMISSED_TIP_IDS_JSON] = encodeStringListJson(settings.dismissedTipIds.toList())
+            prefs[Keys.HOME_PAGE_LOAD_BATCH_SIZE] = settings.homePageLoadBatchSize.coerceIn(20, 500)
         }
     }
 
@@ -415,19 +430,28 @@ class SettingsDataStore(private val context: Context) {
         updatedAtMillis: Long,
         status: String,
         dataSource: String,
-        rateDateText: String
+        rateDateText: String,
+        sourceId: String = "",
+        sourceAvailableCodes: List<String> = emptyList()
     ) {
         val json = JSONObject().apply {
             ratesToCny.forEach { (code, value) ->
                 if (value > 0.0) put(code, value)
             }
         }.toString()
+        val codesJson = encodeStringListJson(sourceAvailableCodes.map { it.uppercase() })
         context.smartLedgerDataStore.edit { prefs ->
             prefs[Keys.EXCHANGE_RATES_JSON] = json
             prefs[Keys.EXCHANGE_RATES_UPDATED_AT] = updatedAtMillis
             prefs[Keys.EXCHANGE_RATES_STATUS] = status
             prefs[Keys.EXCHANGE_RATES_SOURCE] = dataSource
             prefs[Keys.EXCHANGE_RATES_DATE_TEXT] = rateDateText
+            if (sourceId.isNotBlank()) {
+                prefs[Keys.EXCHANGE_RATES_SOURCE_ID] = sourceId
+            }
+            if (sourceAvailableCodes.isNotEmpty()) {
+                prefs[Keys.EXCHANGE_RATES_SOURCE_CODES_JSON] = codesJson
+            }
         }
     }
 
@@ -457,6 +481,11 @@ class SettingsDataStore(private val context: Context) {
             }.distinct()
         }.getOrDefault(emptyList())
     }
+
+    private fun encodeStringListJson(items: List<String>): String =
+        JSONArray().apply {
+            items.map { it.trim() }.filter { it.isNotEmpty() }.distinct().forEach { put(it) }
+        }.toString()
 
     private fun decodeStringMapJson(raw: String?): Map<String, String> {
         if (raw.isNullOrBlank()) return emptyMap()

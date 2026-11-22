@@ -50,6 +50,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.ChannelCatalog
 import com.example.model.ChannelSplitter
+import com.example.model.FeatureTipsCatalog
+import com.example.ui.components.FeatureTipBanner
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
 
@@ -59,6 +61,7 @@ fun ChannelManagementScreen(
     modifier: Modifier = Modifier
 ) {
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
+    val appearance by viewModel.appearanceState.collectAsStateWithLifecycle()
     val transactionsState by viewModel.transactionsState.collectAsStateWithLifecycle()
     val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
 
@@ -155,35 +158,18 @@ fun ChannelManagementScreen(
                         }
                         Text(
                             text = settingsHighlightedText(
-                                "自动读取所有已配置的渠道，以及历史账单（含「&」组合渠道拆分）与识别规则中的全部渠道。新增、重命名或删除渠道时，可一键同步历史账单、识别规则及 AI 理解提示词，并用于后续通知自动识别。",
+                                "管理全部支付渠道，改名或删除时可同步账单、规则与 AI 提示词。",
                                 ROUTE_SETTINGS_CHANNELS
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.9f)
                         )
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                Icons.Rounded.Info,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = "智能归属：识别到“花呗”“余额宝”自动归属「支付宝」，“零钱”“零钱通”自动归属「微信支付」。",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
+                        FeatureTipBanner(
+                            tipId = FeatureTipsCatalog.CHANNEL_ATTRIBUTION,
+                            text = "智能归属：花呗 / 余额宝自动归属「支付宝」，零钱 / 零钱通自动归属「微信支付」。",
+                            appearance = appearance,
+                            onDismiss = { viewModel.dismissFeatureTip(it) }
+                        )
                     }
                 }
             }

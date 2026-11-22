@@ -985,6 +985,7 @@ fun AppNavigation(
                                                 isListenerEnabled = isListenerEnabled,
                                                 viewModel = viewModel,
                                                 onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                                                onNavigateToManualImport = { navController.navigate(ROUTE_SETTINGS_MANUAL_IMPORT) },
                                                 books = books,
                                                 bookLinks = bookLinks,
                                                 listState = homeListState
@@ -1007,7 +1008,7 @@ fun AppNavigation(
                                         HorizontalPager(
                                             state = pagerState,
                                             userScrollEnabled = !isAnalyticsCalendarOpen,
-                                            beyondViewportPageCount = 0,
+                                            beyondViewportPageCount = 1,
                                             modifier = Modifier.fillMaxSize()
                                         ) { page ->
                                             when (visibleTabs.getOrNull(page)) {
@@ -1020,6 +1021,7 @@ fun AppNavigation(
                                                     isListenerEnabled = isListenerEnabled,
                                                     viewModel = viewModel,
                                                     onNavigateToParser = { navController.navigate(ROUTE_SETTINGS_PARSER) },
+                                                    onNavigateToManualImport = { navController.navigate(ROUTE_SETTINGS_MANUAL_IMPORT) },
                                                     books = books,
                                                     bookLinks = bookLinks,
                                                     listState = homeListState

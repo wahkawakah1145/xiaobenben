@@ -580,7 +580,7 @@ fun StorageOptimizationScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "说明：精简历史原始通知仅移除冗长的通知原文字符串，并清理 30 天前的过期询问记录；金额、商户、分类、卡尾号及交易时间等账目核心数据会完整保留。",
+                                text = "仅清理冗长历史通知原文与过期询问，金额、商户、分类与时间均完整保留。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(12.dp)

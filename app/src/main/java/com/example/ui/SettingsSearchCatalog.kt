@@ -220,6 +220,24 @@ object SettingsSearchCatalog {
             keywords = listOf("tab", "底栏", "底部导航", "账本tab", "排序", "隐藏")
         ),
         SettingsSearchItem(
+            id = "home_batch_load_settings",
+            title = "首页账单单次加载条数",
+            subtitle = "自定义主页初次加载及触底上划续载的条数，提升进出流畅度",
+            categoryLabel = "外观与布局 · 主页与导航",
+            route = ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
+            sectionKey = "home_batch_load_settings",
+            keywords = listOf("加载", "分批加载", "条数", "100条", "性能", "流畅", "上划加载")
+        ),
+        SettingsSearchItem(
+            id = "feature_tips_management",
+            title = "功能提示管理（一键关闭 / 重新打开）",
+            subtitle = "一键关闭所有页面提示条，或逐项重新打开已关闭的功能提示",
+            categoryLabel = "外观与布局 · 主页与导航",
+            route = ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
+            sectionKey = "feature_tips_management",
+            keywords = listOf("提示", "功能提示", "关闭提示", "隐藏提示", "重新打开提示", "引导")
+        ),
+        SettingsSearchItem(
             id = "home_brand_tips",
             title = "主页标题、Tips 与悬浮按钮位置",
             subtitle = "自定义顶部标题与图标尺寸、财务 Tips 文案以及右下/左下悬浮按钮",
@@ -230,12 +248,12 @@ object SettingsSearchCatalog {
         ),
         SettingsSearchItem(
             id = "interaction_gestures",
-            title = "手势交互、下滑日历距离与提示横栏时长",
-            subtitle = "调节收支分析下滑日历触发距离、预测性返回动画、撤回横栏停留时长",
+            title = "导航动画、预测性返回与撤回横栏时长",
+            subtitle = "设置 Tab 切换动画、预测性返回样式与底部提示/撤回横栏停留时长",
             categoryLabel = "外观与布局 · 交互与提示",
             route = ROUTE_SETTINGS_APPEARANCE_INTERACTION,
             sectionKey = "navigation_and_gestures",
-            keywords = listOf("手势", "下滑", "日历距离", "预测性返回", "撤回", "横栏", "提示时长", "动画")
+            keywords = listOf("手势", "预测性返回", "撤回", "横栏", "提示时长", "动画")
         ),
         SettingsSearchItem(
             id = "icon_and_shortcut",

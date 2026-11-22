@@ -78,6 +78,8 @@ class LedgerRepository(
 
     suspend fun getSettingsOnce(): BudgetSettings = settingsStore.getBudgetSettingsOnce()
 
+    suspend fun getAppearanceSettingsOnce(): AppearanceSettings = settingsStore.getAppearanceSettingsOnce()
+
     suspend fun getExchangeRatesOnce(): ExchangeRateState = settingsStore.getExchangeRateStateOnce()
 
     suspend fun getAiConfigOnce(): com.example.model.AiConfig = settingsStore.getAiConfigOnce()
@@ -1579,9 +1581,19 @@ class LedgerRepository(
         updatedAtMillis: Long,
         status: String,
         dataSource: String,
-        rateDateText: String
+        rateDateText: String,
+        sourceId: String = "",
+        sourceAvailableCodes: List<String> = emptyList()
     ) {
-        settingsStore.saveExchangeRates(ratesToCny, updatedAtMillis, status, dataSource, rateDateText)
+        settingsStore.saveExchangeRates(
+            ratesToCny = ratesToCny,
+            updatedAtMillis = updatedAtMillis,
+            status = status,
+            dataSource = dataSource,
+            rateDateText = rateDateText,
+            sourceId = sourceId,
+            sourceAvailableCodes = sourceAvailableCodes
+        )
     }
 
     suspend fun saveWebDavConfig(config: WebDavConfig): Result<Unit> {

@@ -2128,7 +2128,248 @@ class ExampleRobolectricTest {
     assertEquals(24, dayPoints.size)
     assertEquals(25000L, dayPoints[14].expenseCents)
   }
+
+  @Test
+  fun `feature tips visibility and home page load batch size persist and clamp properly`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val store = com.example.data.SettingsDataStore(context)
+
+    val defaultAppearance = com.example.model.AppearanceSettings()
+    assertEquals(100, defaultAppearance.homePageLoadBatchSize)
+    assertEquals(false, defaultAppearance.hideAllFeatureTips)
+    org.junit.Assert.assertTrue(defaultAppearance.isFeatureTipVisible(com.example.model.FeatureTipsCatalog.HOME_MULTI_SELECT))
+
+    // Dismiss one tip individually
+    val singleDismissed = defaultAppearance.copy(
+      dismissedTipIds = setOf(com.example.model.FeatureTipsCatalog.HOME_MULTI_SELECT),
+      homePageLoadBatchSize = 999 // should clamp to 500
+    )
+    store.saveAppearanceSettings(singleDismissed)
+    val loaded1 = store.getAppearanceSettingsOnce()
+    assertEquals(500, loaded1.homePageLoadBatchSize)
+    org.junit.Assert.assertFalse(loaded1.isFeatureTipVisible(com.example.model.FeatureTipsCatalog.HOME_MULTI_SELECT))
+    org.junit.Assert.assertTrue(loaded1.isFeatureTipVisible(com.example.model.FeatureTipsCatalog.BOOK_DETAIL_GESTURE))
+
+    // Global hide all tips + lower bound clamping
+    store.saveAppearanceSettings(loaded1.copy(hideAllFeatureTips = true, homePageLoadBatchSize = 5))
+    val loaded2 = store.getAppearanceSettingsOnce()
+    assertEquals(20, loaded2.homePageLoadBatchSize)
+    org.junit.Assert.assertTrue(loaded2.hideAllFeatureTips)
+    org.junit.Assert.assertFalse(loaded2.isFeatureTipVisible(com.example.model.FeatureTipsCatalog.BOOK_DETAIL_GESTURE))
+  }
+
+  @Test
+  fun `universal undo restores deleted book with links, removed book links, deleted category, deleted channel, dismissed inquiry and removed currency`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val vm = com.example.viewmodel.LedgerViewModel(repo)
+
+    fun drainUntil(timeoutMs: Long = 3000L, predicate: () -> Boolean) {
+      val deadline = System.currentTimeMillis() + timeoutMs
+      while (!predicate() && System.currentTimeMillis() < deadline) {
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        Thread.sleep(10)
+      }
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+    }
+
+    // Seed transaction, book, link, custom category, custom channel, and inquiry
+    val tx = com.example.model.LedgerTransaction(
+      id = "undo-tx-1",
+      amountCents = 4200L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "宠物医疗",
+      merchant = "爱宠诊所",
+      channel = "自定义渠道Alpha",
+      occurredAtMillis = System.currentTimeMillis(),
+      confirmed = true
+    )
+    repo.addTransaction(tx).getOrThrow()
+    repo.addCustomCategory(com.example.model.TransactionType.EXPENSE, "宠物医疗", syncAiPrompt = false).getOrThrow()
+    repo.addCustomChannel("自定义渠道Alpha", syncAiPrompt = false).getOrThrow()
+    val book = repo.saveBook(com.example.model.LedgerBook(id = "undo-book-1", name = "毛孩子账本")).getOrThrow()
+    repo.addTransactionsToBooks(listOf(tx.id), listOf(book.id)).getOrThrow()
+    val inquiry = com.example.model.NotificationInquiry(
+      id = "undo-inq-1",
+      packageName = "com.tencent.mm",
+      appLabel = "微信",
+      title = "支付提醒",
+      content = "支付 42.00 元",
+      suggestedAmountCents = 4200L,
+      suggestedCurrencyCode = "CNY",
+      suggestedType = com.example.model.TransactionType.EXPENSE.name,
+      suggestedCategory = "宠物医疗",
+      suggestedMerchant = "爱宠诊所",
+      suggestedChannel = "微信支付",
+      reason = "待确认"
+    )
+    repo.addInquiry(inquiry).getOrThrow()
+
+    // 1. Remove transaction from book -> undo restores link
+    vm.removeTransactionsFromBook(listOf(tx.id), book.id)
+    drainUntil { vm.deleteUndoBanner.value != null }
+    assertEquals(0, repo.getBookLinksForTransactionsOnce(listOf(tx.id)).size)
+    vm.undoLastDelete()
+    drainUntil { kotlinx.coroutines.runBlocking { repo.getBookLinksForTransactionsOnce(listOf(tx.id)).size == 1 } }
+    assertEquals(1, repo.getBookLinksForTransactionsOnce(listOf(tx.id)).size)
+
+    // 2. Delete book -> undo restores book AND its links
+    vm.deleteBook(book.id)
+    drainUntil { vm.deleteUndoBanner.value != null }
+    assertEquals(0, repo.getAllBooksOnce().count { it.id == book.id })
+    vm.undoLastDelete()
+    drainUntil { kotlinx.coroutines.runBlocking { repo.getAllBooksOnce().any { it.id == book.id } && repo.getAllBookLinksOnce().any { it.bookId == book.id } } }
+    org.junit.Assert.assertTrue(repo.getAllBooksOnce().any { it.id == book.id })
+    org.junit.Assert.assertTrue(repo.getAllBookLinksOnce().any { it.bookId == book.id && it.transactionId == tx.id })
+
+    // 3. Delete custom category -> undo restores category and tx's original category
+    vm.deleteCategory(com.example.model.TransactionType.EXPENSE, "宠物医疗", fallbackCategory = "其他", syncTransactions = true, syncRules = true, syncAiPrompt = false)
+    drainUntil { vm.deleteUndoBanner.value != null }
+    assertEquals("其他", repo.getTransactionsByIdsOnce(listOf(tx.id)).first().category)
+    vm.undoLastDelete()
+    drainUntil { kotlinx.coroutines.runBlocking { repo.getTransactionsByIdsOnce(listOf(tx.id)).first().category == "宠物医疗" } }
+    assertEquals("宠物医疗", repo.getTransactionsByIdsOnce(listOf(tx.id)).first().category)
+    org.junit.Assert.assertTrue("宠物医疗" in repo.getSettingsOnce().expenseCategories)
+
+    // 4. Delete custom channel -> undo restores channel and tx's original channel
+    vm.deleteChannel("自定义渠道Alpha", fallbackChannel = "其他", syncTransactions = true, syncRules = true, syncAiPrompt = false)
+    drainUntil { vm.deleteUndoBanner.value != null }
+    assertEquals("其他", repo.getTransactionsByIdsOnce(listOf(tx.id)).first().channel)
+    vm.undoLastDelete()
+    drainUntil { kotlinx.coroutines.runBlocking { repo.getTransactionsByIdsOnce(listOf(tx.id)).first().channel == "自定义渠道Alpha" } }
+    assertEquals("自定义渠道Alpha", repo.getTransactionsByIdsOnce(listOf(tx.id)).first().channel)
+    org.junit.Assert.assertTrue("自定义渠道Alpha" in repo.getSettingsOnce().customChannels)
+
+    // 5. Dismiss inquiry -> undo restores inquiry
+    vm.dismissInquiry(inquiry.id)
+    drainUntil { vm.deleteUndoBanner.value != null }
+    vm.undoLastDelete()
+    drainUntil { kotlinx.coroutines.runBlocking { repo.observeInquiries().first().any { it.id == inquiry.id } } }
+    org.junit.Assert.assertTrue(repo.observeInquiries().first().any { it.id == inquiry.id })
+
+    // 6. Remove enabled foreign currency -> undo restores it
+    vm.removeEnabledCurrency("JPY")
+    drainUntil { vm.deleteUndoBanner.value != null }
+    org.junit.Assert.assertFalse("JPY" in repo.getSettingsOnce().enabledCurrencyCodes)
+    vm.undoLastDelete()
+    drainUntil { kotlinx.coroutines.runBlocking { "JPY" in repo.getSettingsOnce().enabledCurrencyCodes } }
+    org.junit.Assert.assertTrue("JPY" in repo.getSettingsOnce().enabledCurrencyCodes)
+  }
+
+  @Test
+  fun `thread local formatters, O1 epoch range filters and new settings search entries work accurately`() {
+    val cal2025 = java.util.Calendar.getInstance().apply {
+      set(2025, java.util.Calendar.DECEMBER, 31, 23, 59, 59)
+      set(java.util.Calendar.MILLISECOND, 0)
+    }
+    val cal2026 = java.util.Calendar.getInstance().apply {
+      set(2026, java.util.Calendar.JANUARY, 1, 0, 0, 0)
+      set(java.util.Calendar.MILLISECOND, 0)
+    }
+    val header2025 = com.example.ui.components.formatDateHeader(cal2025.timeInMillis, nowYear = 2026)
+    val header2026 = com.example.ui.components.formatDateHeader(cal2026.timeInMillis, nowYear = 2026)
+    org.junit.Assert.assertTrue(header2025.startsWith("2025年12月31日"))
+    org.junit.Assert.assertTrue(header2026.startsWith("01月01日"))
+    assertEquals("23:59:59", com.example.ui.components.formatTimeShort(cal2025.timeInMillis))
+
+    val tx2025 = com.example.model.LedgerTransaction(id = "y25", amountCents = 100L, occurredAtMillis = cal2025.timeInMillis)
+    val tx2026 = com.example.model.LedgerTransaction(id = "y26", amountCents = 200L, occurredAtMillis = cal2026.timeInMillis)
+    val all = listOf(tx2025, tx2026)
+    assertEquals(listOf("y25"), com.example.viewmodel.LedgerViewModel.filterByYear(all, 2025).map { it.id })
+    assertEquals(listOf("y26"), com.example.viewmodel.LedgerViewModel.filterByYear(all, 2026).map { it.id })
+    assertEquals(listOf("y25"), com.example.viewmodel.LedgerViewModel.filterByMonth(all, 2025, java.util.Calendar.DECEMBER).map { it.id })
+    assertEquals(listOf("y26"), com.example.viewmodel.LedgerViewModel.filterByDay(all, cal2026.timeInMillis).map { it.id })
+
+    val tipHits = com.example.ui.SettingsSearchCatalog.search("功能提示")
+    org.junit.Assert.assertTrue(tipHits.any { it.sectionKey == "feature_tips_management" })
+    val batchHits = com.example.ui.SettingsSearchCatalog.search("加载 条数")
+    org.junit.Assert.assertTrue(batchHits.any { it.sectionKey == "home_batch_load_settings" })
+  }
+
+  @Test
+  fun `currency catalog covers every selected source currency and custom source dynamically adds returned currencies`() {
+    val emptyRates = com.example.model.ExchangeRateState()
+    // Frankfurter covers all 31 ECB currencies (CNY + 30 foreign)
+    val frankfurterList = com.example.model.CurrencyCatalog.availableCurrenciesForSource(
+      source = com.example.model.ExchangeRateSource.FRANKFURTER,
+      exchangeRates = emptyRates
+    )
+    assertEquals(31, frankfurterList.size)
+    org.junit.Assert.assertTrue(frankfurterList.any { it.code == "ISK" })
+    org.junit.Assert.assertFalse(frankfurterList.any { it.code == "VND" })
+
+    // ExchangeRate-API covers full ISO-4217 set (>120 currencies including exotic codes like KZT, UAH, ARS)
+    val erApiList = com.example.model.CurrencyCatalog.availableCurrenciesForSource(
+      source = com.example.model.ExchangeRateSource.EXCHANGE_RATE_API,
+      exchangeRates = emptyRates
+    )
+    org.junit.Assert.assertTrue(erApiList.size >= 120)
+    org.junit.Assert.assertTrue(erApiList.any { it.code == "KZT" })
+    org.junit.Assert.assertTrue(erApiList.any { it.code == "UAH" })
+
+    // Currency-API covers ISO + crypto/metals (BTC, ETH, USDT, XAU)
+    val currencyApiList = com.example.model.CurrencyCatalog.availableCurrenciesForSource(
+      source = com.example.model.ExchangeRateSource.CURRENCY_API_JSDELIVR,
+      exchangeRates = emptyRates
+    )
+    org.junit.Assert.assertTrue(currencyApiList.size > erApiList.size)
+    org.junit.Assert.assertTrue(currencyApiList.any { it.code == "BTC" })
+    org.junit.Assert.assertTrue(currencyApiList.any { it.code == "USDT" })
+    org.junit.Assert.assertTrue(currencyApiList.any { it.code == "XAU" })
+
+    // Custom source dynamically parses and exposes all currencies returned by its JSON payload
+    val customPayload = """
+      {
+        "date": "2026-11-22",
+        "rates": {
+          "CNY": 1.0,
+          "USD": 0.138,
+          "KZT": 68.5,
+          "USDT": 0.1381,
+          "MYC": 2.5
+        }
+      }
+    """.trimIndent()
+    val parsed = com.example.data.CurrencyExchangeManager.parseRatesPayload(
+      bodyText = customPayload,
+      fallbackSourceLabel = "Custom",
+      targetForeignCodes = null
+    )
+    org.junit.Assert.assertNotNull(parsed)
+    val nonNullParsed = parsed!!
+    org.junit.Assert.assertTrue("KZT" in nonNullParsed.availableCurrencyCodes)
+    org.junit.Assert.assertTrue("USDT" in nonNullParsed.availableCurrencyCodes)
+    org.junit.Assert.assertTrue("MYC" in nonNullParsed.availableCurrencyCodes)
+    org.junit.Assert.assertTrue(nonNullParsed.ratesToCny.containsKey("MYC"))
+    org.junit.Assert.assertTrue((nonNullParsed.ratesToCny["MYC"] ?: 0.0) > 0.39 && (nonNullParsed.ratesToCny["MYC"] ?: 0.0) < 0.41)
+
+    val customState = com.example.model.ExchangeRateState(
+      ratesToCny = nonNullParsed.ratesToCny,
+      sourceId = com.example.model.ExchangeRateSource.CUSTOM.name,
+      sourceAvailableCodes = nonNullParsed.availableCurrencyCodes
+    )
+    val customList = com.example.model.CurrencyCatalog.availableCurrenciesForSource(
+      source = com.example.model.ExchangeRateSource.CUSTOM,
+      exchangeRates = customState
+    )
+    assertEquals(setOf("CNY", "USD", "KZT", "USDT", "MYC"), customList.map { it.code }.toSet())
+
+    // Dynamic codes remain valid when enabled in settings
+    val normalized = com.example.model.CurrencyCatalog.normalizeEnabledForeignCodes(listOf("USD", "MYC", "USDT"))
+    assertEquals(listOf("USD", "MYC", "USDT"), normalized)
+    val resolvedCustom = com.example.model.CurrencyCatalog.resolve("MYC")
+    assertEquals("MYC", resolvedCustom.code)
+
+    // Expanded feature tips catalog includes all new non-settings toggleable tips
+    val tipIds = com.example.model.FeatureTipsCatalog.allTips.map { it.id }.toSet()
+    org.junit.Assert.assertTrue(com.example.model.FeatureTipsCatalog.HOME_SEARCH_SYNTAX in tipIds)
+    org.junit.Assert.assertTrue(com.example.model.FeatureTipsCatalog.BOOKS_OVERVIEW in tipIds)
+    org.junit.Assert.assertTrue(com.example.model.FeatureTipsCatalog.ANALYTICS_PIE_PINCH in tipIds)
+    org.junit.Assert.assertTrue(com.example.model.FeatureTipsCatalog.CALENDAR_GESTURES in tipIds)
+  }
 }
+
 
 
 

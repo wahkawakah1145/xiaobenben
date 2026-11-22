@@ -106,6 +106,10 @@ fun AnalyticsCalendarSection(
     onTransactionClick: (LedgerTransaction) -> Unit,
     isFullScreen: Boolean = false,
     onRequestExitFullScreen: (() -> Unit)? = null,
+    onInteractiveExitDragDelta: ((Float) -> Unit)? = null,
+    onInteractiveExitDragRelease: ((Float) -> Unit)? = null,
+    appearance: com.example.model.AppearanceSettings = com.example.model.AppearanceSettings(),
+    onDismissTip: (String) -> Unit = {},
     scopeTitle: String = "全部账单",
     modifier: Modifier = Modifier
 ) {
@@ -205,36 +209,61 @@ fun AnalyticsCalendarSection(
         )
     }
 
-    val exitNestedScrollConnection = remember(isFullScreen, onRequestExitFullScreen) {
+    val exitNestedScrollConnection = remember(
+        isFullScreen,
+        onRequestExitFullScreen,
+        onInteractiveExitDragDelta,
+        onInteractiveExitDragRelease
+    ) {
         object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (!isFullScreen || source != NestedScrollSource.UserInput) return Offset.Zero
+                if (onInteractiveExitDragDelta != null && swipeUpOverscrollPx > 0f && available.y > 0f) {
+                    val consumed = available.y.coerceAtMost(swipeUpOverscrollPx)
+                    swipeUpOverscrollPx = (swipeUpOverscrollPx - consumed).coerceAtLeast(0f)
+                    onInteractiveExitDragDelta(consumed)
+                    return Offset(0f, consumed)
+                }
+                return Offset.Zero
+            }
+
             override fun onPostScroll(
                 consumed: Offset,
                 available: Offset,
                 source: NestedScrollSource
             ): Offset {
-                if (!isFullScreen || onRequestExitFullScreen == null || source != NestedScrollSource.UserInput) {
+                if (!isFullScreen || (onRequestExitFullScreen == null && onInteractiveExitDragDelta == null) || source != NestedScrollSource.UserInput) {
                     return Offset.Zero
                 }
                 if (available.y < 0f && scrollState.value >= scrollState.maxValue) {
                     swipeUpOverscrollPx += -available.y
-                    if (swipeUpOverscrollPx >= swipeExitThresholdPx) {
+                    if (onInteractiveExitDragDelta != null) {
+                        onInteractiveExitDragDelta(available.y)
+                    } else if (swipeUpOverscrollPx >= swipeExitThresholdPx) {
                         swipeUpOverscrollPx = 0f
-                        onRequestExitFullScreen()
+                        onRequestExitFullScreen?.invoke()
                     }
                     return available
                 } else if (available.y > 0f && swipeUpOverscrollPx > 0f) {
-                    swipeUpOverscrollPx = (swipeUpOverscrollPx - available.y).coerceAtLeast(0f)
+                    val back = available.y.coerceAtMost(swipeUpOverscrollPx)
+                    swipeUpOverscrollPx = (swipeUpOverscrollPx - back).coerceAtLeast(0f)
+                    onInteractiveExitDragDelta?.invoke(back)
                 }
                 return Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (isFullScreen && onRequestExitFullScreen != null && swipeUpOverscrollPx > swipeExitThresholdPx * 0.65f) {
+                if (isFullScreen && swipeUpOverscrollPx > 0f) {
                     swipeUpOverscrollPx = 0f
-                    onRequestExitFullScreen()
-                } else {
-                    swipeUpOverscrollPx = 0f
+                    if (onInteractiveExitDragRelease != null) {
+                        onInteractiveExitDragRelease(available.y)
+                        return available
+                    } else if (onRequestExitFullScreen != null) {
+                        onRequestExitFullScreen()
+                        return available
+                    }
                 }
+                swipeUpOverscrollPx = 0f
                 return Velocity.Zero
             }
         }
@@ -306,11 +335,6 @@ fun AnalyticsCalendarSection(
                     )
                     Column {
                         Text("收支日历", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text(
-                            text = "左右横滑切周期 · 双指缩放切 年 / 月 / 周 / 日",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -345,6 +369,13 @@ fun AnalyticsCalendarSection(
                     }
                 }
             }
+
+            FeatureTipBanner(
+                tipId = com.example.model.FeatureTipsCatalog.CALENDAR_GESTURES,
+                text = "左右横滑切周期 · 双指缩放切 年 / 月 / 周 / 日",
+                appearance = appearance,
+                onDismiss = onDismissTip
+            )
 
             if (showTrendChartDialog) {
                 val anchorCal = remember(anchorMillis) { Calendar.getInstance().apply { timeInMillis = anchorMillis } }
@@ -936,12 +967,20 @@ fun AnalyticsCalendarSection(
                         }
 
                         if (dayTxs.isEmpty()) {
-                            Text(
-                                text = "当日暂无账单记录，可点击左上角「缩小」回到周历或月历查看。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(text = "🤗", fontSize = 56.sp)
+                                Text(
+                                    text = "当日暂无账单",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         } else {
                             dayTxs.forEach { tx ->
                                 Surface(

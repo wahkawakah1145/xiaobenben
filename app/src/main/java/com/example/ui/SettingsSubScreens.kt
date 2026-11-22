@@ -103,6 +103,8 @@ import com.example.model.AppearanceSettings
 import com.example.model.BudgetSettings
 import com.example.model.CardDensity
 import com.example.model.CurrencyCatalog
+import com.example.model.FeatureTipsCatalog
+import com.example.ui.components.FeatureTipBanner
 import com.example.model.CustomPaletteStyle
 import com.example.model.ExchangeRateAutoUpdateFrequency
 import com.example.model.ExchangeRateState
@@ -392,15 +394,21 @@ fun CurrencySettingsScreen(
         )
     }
     val enabledForeignCurrencies = remember(enabledForeignCodes) {
-        enabledForeignCodes.mapNotNull { CurrencyCatalog.byCode[it] }
+        enabledForeignCodes.map { CurrencyCatalog.resolve(it) }
     }
     val baseCurrencyChoices = remember(enabledForeignCodes, settings.baseCurrencyCode) {
         CurrencyCatalog.enabledCurrenciesWithCny(enabledForeignCodes, ensureCode = settings.baseCurrencyCode)
     }
-    val availableToAddCurrencies = remember(enabledForeignCodes, currencySearchQuery) {
+    val sourceCurrencyPool = remember(selectedSource, exchangeRates.sourceId, exchangeRates.sourceAvailableCodes) {
+        CurrencyCatalog.availableCurrenciesForSource(selectedSource, exchangeRates)
+    }
+    var expandAllAddableCurrencies by remember(selectedSource) { mutableStateOf(false) }
+    val allAddableCurrencies = remember(sourceCurrencyPool, enabledForeignCodes) {
         val enabledSet = enabledForeignCodes.toSet()
-        CurrencyCatalog.search(currencySearchQuery)
-            .filter { it.code != "CNY" && it.code !in enabledSet }
+        sourceCurrencyPool.filter { it.code != "CNY" && it.code !in enabledSet }
+    }
+    val availableToAddCurrencies = remember(allAddableCurrencies, currencySearchQuery) {
+        CurrencyCatalog.search(currencySearchQuery, pool = allAddableCurrencies)
     }
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -718,9 +726,7 @@ fun CurrencySettingsScreen(
                                 if (!isCurrentBase && enabledForeignCodes.size > 1) {
                                     IconButton(
                                         onClick = {
-                                            viewModel.saveSettings(
-                                                settings.copy(enabledCurrencyCodes = enabledForeignCodes - info.code)
-                                            )
+                                            viewModel.removeEnabledCurrency(info.code)
                                         },
                                         modifier = Modifier.testTag("remove_currency_${info.code}")
                                     ) {
@@ -747,15 +753,29 @@ fun CurrencySettingsScreen(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 if (showAddCurrencyPanel) "收起更多外币列表"
-                                else "按需添加其他外币（还有 ${CurrencyCatalog.currencies.size - 1 - enabledForeignCurrencies.size} 种可选）"
+                                else "按需添加其他外币（${selectedSource.label} 还有 ${allAddableCurrencies.size} 种可选）"
                             )
                         }
 
                         if (showAddCurrencyPanel) {
+                            val customSynced = selectedSource == ExchangeRateSource.CUSTOM &&
+                                exchangeRates.sourceId.equals(ExchangeRateSource.CUSTOM.name, ignoreCase = true) &&
+                                exchangeRates.sourceAvailableCodes.isNotEmpty()
+                            if (selectedSource == ExchangeRateSource.CUSTOM) {
+                                Text(
+                                    text = if (customSynced) {
+                                        "已按自定义数据源返回值自动载入 ${sourceCurrencyPool.size} 种币种"
+                                    } else {
+                                        "更新自定义数据源后，将按返回值自动载入全部可选币种"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             OutlinedTextField(
                                 value = currencySearchQuery,
                                 onValueChange = { currencySearchQuery = it },
-                                placeholder = { Text("搜索待添加外币，如 thb / 泰铢 / sgd / 新币 / 韩元") },
+                                placeholder = { Text("搜索待添加外币（代码/中文名）") },
                                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                                 singleLine = true,
                                 shape = RoundedCornerShape(14.dp),
@@ -765,16 +785,28 @@ fun CurrencySettingsScreen(
                             )
                             if (availableToAddCurrencies.isEmpty()) {
                                 Text(
-                                    text = if (currencySearchQuery.isBlank()) "全部支持的币种均已启用" else "未找到未启用的匹配币种「$currencySearchQuery」",
+                                    text = if (currencySearchQuery.isBlank()) "当前数据源的全部币种均已启用" else "未找到未启用的匹配币种「$currencySearchQuery」",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             } else {
+                                val displayedAddable = remember(availableToAddCurrencies, currencySearchQuery, expandAllAddableCurrencies) {
+                                    if (currencySearchQuery.isNotBlank() || expandAllAddableCurrencies || availableToAddCurrencies.size <= 48) {
+                                        availableToAddCurrencies
+                                    } else {
+                                        availableToAddCurrencies.take(48)
+                                    }
+                                }
                                 FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    availableToAddCurrencies.forEach { info ->
+                                    displayedAddable.forEach { info ->
+                                        val labelText = if (info.chineseName.equals(info.code, ignoreCase = true)) {
+                                            info.code
+                                        } else {
+                                            "${info.code} ${info.chineseName}"
+                                        }
                                         AssistChip(
                                             onClick = {
                                                 viewModel.saveSettings(
@@ -788,9 +820,19 @@ fun CurrencySettingsScreen(
                                                     modifier = Modifier.size(16.dp)
                                                 )
                                             },
-                                            label = { Text("${info.code} ${info.chineseName}") },
+                                            label = { Text(labelText) },
                                             modifier = Modifier.testTag("add_currency_chip_${info.code}")
                                         )
+                                    }
+                                }
+                                if (displayedAddable.size < availableToAddCurrencies.size) {
+                                    TextButton(
+                                        onClick = { expandAllAddableCurrencies = true },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("expand_all_addable_currencies_button")
+                                    ) {
+                                        Text("展开全部 ${availableToAddCurrencies.size} 种可选币种")
                                     }
                                 }
                             }
@@ -851,6 +893,7 @@ fun ManualImportScreen(
         }
     }
 
+    val importAppearance by viewModel.appearanceState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     SettingsAutoScrollEffect(
         listState = listState,
@@ -958,11 +1001,17 @@ fun ManualImportScreen(
                         )
                         Text(
                             text = settingsHighlightedText(
-                                "支持微信/支付宝标准 11 列表头及农业银行等银行流水表头（交易日期、交易时间、交易摘要、交易金额、本次余额、对手信息、日志号、交易渠道、交易附言）的 XLSX / CSV / JSON 文件；数字日期时间自动智能转为时间戳，并自动识别重复条目默认仅导入新增记录。",
+                                "支持微信、支付宝及农业银行等银行流水 XLSX / CSV / JSON 文件。",
                                 ROUTE_SETTINGS_MANUAL_IMPORT
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        FeatureTipBanner(
+                            tipId = FeatureTipsCatalog.MANUAL_IMPORT_FORMAT,
+                            text = "数字日期时间会自动转为时间戳；解析后自动标出重复项与本人互转，默认仅勾选新增账单。",
+                            appearance = importAppearance,
+                            onDismiss = { viewModel.dismissFeatureTip(it) }
                         )
                         Button(
                             enabled = importState !is ImportUiState.Parsing,
@@ -1124,7 +1173,7 @@ fun ManualImportScreen(
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "点击条目切换勾选 · 长按条目查看详情 · 默认全选并自动排除重复与本人互转/不计收支项",
+                                    text = "点击切换勾选 · 长按查看详情",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                                 )
@@ -2193,6 +2242,8 @@ fun AppearanceHomeNavSettingsScreen(
         route = ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
         sectionKeysInOrder = listOf(
             "bottom_tab_bar_customization",
+            "home_batch_load_settings",
+            "feature_tips_management",
             "home_element_positions",
             "home_brand_header_customization",
             "home_tips_customization"
@@ -2342,6 +2393,169 @@ fun AppearanceHomeNavSettingsScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item(key = "home_batch_load_settings") {
+                val batchSize = appearance.homePageLoadBatchSize.coerceIn(20, 500)
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_HOME_NAV, "home_batch_load_settings")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = settingsHighlightedText("首页账单单次加载条数", ROUTE_SETTINGS_APPEARANCE_HOME_NAV),
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = "$batchSize 条/批",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Text(
+                            text = "减少初次加载量以提升进出主页流畅度；滚到底部后上划或点击即可继续加载。全选与反选仍覆盖全部匹配账单。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Slider(
+                            value = batchSize.toFloat(),
+                            onValueChange = { raw ->
+                                val snapped = ((raw / 10f).roundToInt() * 10).coerceIn(20, 500)
+                                viewModel.setHomePageLoadBatchSize(snapped)
+                            },
+                            valueRange = 20f..500f,
+                            modifier = Modifier.testTag("home_batch_size_slider")
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(30, 50, 100, 200, 500).forEach { preset ->
+                                FilterChip(
+                                    selected = batchSize == preset,
+                                    onClick = { viewModel.setHomePageLoadBatchSize(preset) },
+                                    label = { Text(if (preset == 100) "100 条 (默认)" else "$preset 条") },
+                                    modifier = Modifier.testTag("home_batch_preset_$preset")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            item(key = "feature_tips_management") {
+                val hiddenCount = if (appearance.hideAllFeatureTips) {
+                    FeatureTipsCatalog.allTips.size
+                } else {
+                    FeatureTipsCatalog.allTips.count { it.id in appearance.dismissedTipIds }
+                }
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_HOME_NAV, "feature_tips_management")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = settingsHighlightedText("功能提示管理", ROUTE_SETTINGS_APPEARANCE_HOME_NAV),
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = if (hiddenCount == 0) "当前全部提示均处于开启状态" else "已关闭 $hiddenCount / ${FeatureTipsCatalog.allTips.size} 条提示",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = { viewModel.reopenAllFeatureTips() },
+                                modifier = Modifier.testTag("reopen_all_feature_tips_button")
+                            ) {
+                                Text("全部重新打开")
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = settingsHighlightedText("一键关闭所有功能提示", ROUTE_SETTINGS_APPEARANCE_HOME_NAV),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "隐藏各页面功能旁的引导提示条，可随时在此重新开启",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = appearance.hideAllFeatureTips,
+                                onCheckedChange = { viewModel.setHideAllFeatureTips(it) },
+                                modifier = Modifier.testTag("toggle_hide_all_feature_tips")
+                            )
+                        }
+
+                        HorizontalDivider()
+
+                        FeatureTipsCatalog.allTips.forEach { spec ->
+                            val isVisible = appearance.isFeatureTipVisible(spec.id)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(end = 8.dp)
+                                ) {
+                                    Text(
+                                        text = spec.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = spec.shortText,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = isVisible,
+                                    onCheckedChange = { show ->
+                                        viewModel.setFeatureTipDismissed(spec.id, dismissed = !show)
+                                    },
+                                    modifier = Modifier.testTag("toggle_feature_tip_${spec.id}")
+                                )
                             }
                         }
                     }
@@ -2765,9 +2979,9 @@ fun AppearanceInteractionSettingsScreen(
                         )
 
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("全局提示型底部横栏停留时间", style = MaterialTheme.typography.labelLarge)
+                            Text("全局提示横栏停留时间", style = MaterialTheme.typography.labelLarge)
                             Text(
-                                text = "控制保存、复制、同步等普通底部提示横栏的自动消失时长（当前：${appearance.globalSnackbarDuration.label}）",
+                                text = "当前：${appearance.globalSnackbarDuration.label}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2792,7 +3006,7 @@ fun AppearanceInteractionSettingsScreen(
                                 },
                                 modifier = Modifier.testTag("test_global_snackbar_button")
                             ) {
-                                Text("预览全局提示横栏")
+                                Text("预览提示横栏")
                             }
                         }
 
@@ -2804,9 +3018,9 @@ fun AppearanceInteractionSettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("删除后提示横栏「仅手动关闭」", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text("删除/移出撤回横栏「仅手动关闭」", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 Text(
-                                    text = "默认开启，删除账单后的撤销横栏不会自动消失；关闭后将自动跟随上方「全局提示型底部横栏停留时间」（当前全局：${appearance.globalSnackbarDuration.label}）",
+                                    text = "关闭后将跟随上方停留时长（${appearance.globalSnackbarDuration.label}）",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -2845,7 +3059,7 @@ fun AppearanceInteractionSettingsScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
 
-                        Text("主页点击 Tab 切换动画（支持左右横滑切换页面）", style = MaterialTheme.typography.labelLarge)
+                        Text("主页点击 Tab 切换动画", style = MaterialTheme.typography.labelLarge)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TabClickAnimationStyle.entries.forEach { style ->
                                 FilterChip(
@@ -2867,7 +3081,7 @@ fun AppearanceInteractionSettingsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("预测性返回与横滑返回上一级", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 Text(
-                                    text = "支持系统边缘预测性返回过渡动画，并可在多级菜单中向右横滑返回上一级",
+                                    text = "启用系统边缘预测性返回与多级菜单右滑返回",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -2882,7 +3096,7 @@ fun AppearanceInteractionSettingsScreen(
                         }
 
                         if (appearance.predictiveBackEnabled) {
-                            Text("预测性返回与横滑过渡样式", style = MaterialTheme.typography.labelLarge)
+                            Text("预测性返回过渡样式", style = MaterialTheme.typography.labelLarge)
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -2903,61 +3117,6 @@ fun AppearanceInteractionSettingsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                        }
-
-                        HorizontalDivider()
-
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            val clampedPullDp = appearance.analyticsPullCalendarDistanceDp.coerceIn(80, 560)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("收支分析下拉打开全屏日历距离", style = MaterialTheme.typography.labelLarge)
-                                Text(
-                                    text = "$clampedPullDp dp",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            Text(
-                                text = "增大触发距离可明显减少分析页面滚动回弹时误触打开全屏日历（默认 260 dp，支持 80 ~ 560 dp 调节）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Slider(
-                                value = clampedPullDp.toFloat(),
-                                onValueChange = { raw ->
-                                    viewModel.saveAppearanceSettings(
-                                        appearance.copy(analyticsPullCalendarDistanceDp = raw.roundToInt().coerceIn(80, 560))
-                                    )
-                                },
-                                valueRange = 80f..560f,
-                                modifier = Modifier.testTag("analytics_pull_distance_slider")
-                            )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                listOf(
-                                    160 to "160dp (灵敏)",
-                                    260 to "260dp (默认)",
-                                    380 to "380dp (防误触)",
-                                    500 to "500dp (超长)"
-                                ).forEach { (presetDp, label) ->
-                                    FilterChip(
-                                        selected = clampedPullDp == presetDp,
-                                        onClick = {
-                                            viewModel.saveAppearanceSettings(
-                                                appearance.copy(analyticsPullCalendarDistanceDp = presetDp)
-                                            )
-                                        },
-                                        label = { Text(label) },
-                                        modifier = Modifier.testTag("analytics_pull_preset_$presetDp")
-                                    )
-                                }
-                            }
                         }
                     }
                 }
