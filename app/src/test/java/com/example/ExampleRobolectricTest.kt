@@ -2210,16 +2210,18 @@ class ExampleRobolectricTest {
     vm.removeTransactionsFromBook(listOf(tx.id), book.id)
     drainUntil { vm.deleteUndoBanner.value != null }
     assertEquals(0, repo.getBookLinksForTransactionsOnce(listOf(tx.id)).size)
+    vm.clearActionMessage()
     vm.undoLastDelete()
-    drainUntil { kotlinx.coroutines.runBlocking { repo.getBookLinksForTransactionsOnce(listOf(tx.id)).size == 1 } }
+    drainUntil { vm.actionMessage.value != null }
     assertEquals(1, repo.getBookLinksForTransactionsOnce(listOf(tx.id)).size)
 
     // 2. Delete book -> undo restores book AND its links
     vm.deleteBook(book.id)
     drainUntil { vm.deleteUndoBanner.value != null }
     assertEquals(0, repo.getAllBooksOnce().count { it.id == book.id })
+    vm.clearActionMessage()
     vm.undoLastDelete()
-    drainUntil { kotlinx.coroutines.runBlocking { repo.getAllBooksOnce().any { it.id == book.id } && repo.getAllBookLinksOnce().any { it.bookId == book.id } } }
+    drainUntil { vm.actionMessage.value != null }
     org.junit.Assert.assertTrue(repo.getAllBooksOnce().any { it.id == book.id })
     org.junit.Assert.assertTrue(repo.getAllBookLinksOnce().any { it.bookId == book.id && it.transactionId == tx.id })
 
@@ -2227,8 +2229,9 @@ class ExampleRobolectricTest {
     vm.deleteCategory(com.example.model.TransactionType.EXPENSE, "宠物医疗", fallbackCategory = "其他", syncTransactions = true, syncRules = true, syncAiPrompt = false)
     drainUntil { vm.deleteUndoBanner.value != null }
     assertEquals("其他", repo.getTransactionsByIdsOnce(listOf(tx.id)).first().category)
+    vm.clearActionMessage()
     vm.undoLastDelete()
-    drainUntil { kotlinx.coroutines.runBlocking { repo.getTransactionsByIdsOnce(listOf(tx.id)).first().category == "宠物医疗" } }
+    drainUntil { vm.actionMessage.value != null }
     assertEquals("宠物医疗", repo.getTransactionsByIdsOnce(listOf(tx.id)).first().category)
     org.junit.Assert.assertTrue("宠物医疗" in repo.getSettingsOnce().expenseCategories)
 
@@ -2236,24 +2239,27 @@ class ExampleRobolectricTest {
     vm.deleteChannel("自定义渠道Alpha", fallbackChannel = "其他", syncTransactions = true, syncRules = true, syncAiPrompt = false)
     drainUntil { vm.deleteUndoBanner.value != null }
     assertEquals("其他", repo.getTransactionsByIdsOnce(listOf(tx.id)).first().channel)
+    vm.clearActionMessage()
     vm.undoLastDelete()
-    drainUntil { kotlinx.coroutines.runBlocking { repo.getTransactionsByIdsOnce(listOf(tx.id)).first().channel == "自定义渠道Alpha" } }
+    drainUntil { vm.actionMessage.value != null }
     assertEquals("自定义渠道Alpha", repo.getTransactionsByIdsOnce(listOf(tx.id)).first().channel)
     org.junit.Assert.assertTrue("自定义渠道Alpha" in repo.getSettingsOnce().customChannels)
 
     // 5. Dismiss inquiry -> undo restores inquiry
     vm.dismissInquiry(inquiry.id)
     drainUntil { vm.deleteUndoBanner.value != null }
+    vm.clearActionMessage()
     vm.undoLastDelete()
-    drainUntil { kotlinx.coroutines.runBlocking { repo.observeInquiries().first().any { it.id == inquiry.id } } }
+    drainUntil { vm.actionMessage.value != null }
     org.junit.Assert.assertTrue(repo.observeInquiries().first().any { it.id == inquiry.id })
 
     // 6. Remove enabled foreign currency -> undo restores it
     vm.removeEnabledCurrency("JPY")
     drainUntil { vm.deleteUndoBanner.value != null }
     org.junit.Assert.assertFalse("JPY" in repo.getSettingsOnce().enabledCurrencyCodes)
+    vm.clearActionMessage()
     vm.undoLastDelete()
-    drainUntil { kotlinx.coroutines.runBlocking { "JPY" in repo.getSettingsOnce().enabledCurrencyCodes } }
+    drainUntil { vm.actionMessage.value != null }
     org.junit.Assert.assertTrue("JPY" in repo.getSettingsOnce().enabledCurrencyCodes)
   }
 
