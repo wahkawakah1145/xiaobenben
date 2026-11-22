@@ -147,7 +147,9 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             referenceTimeMillis = occurredAt
         )
         val aiConfig = repository.getAiConfigOnce()
-        val shouldInvokeAi = aiConfig.providerMode != com.example.model.AiProviderMode.DISABLED && (
+        val hasExplicitUnitForAi = ChinaNotificationParser.hasExplicitAmountUnit("$title\n$content")
+        val shouldInvokeAi = hasExplicitUnitForAi &&
+            aiConfig.providerMode != com.example.model.AiProviderMode.DISABLED && (
             !aiConfig.useAiAsFallbackOnly ||
                 ruleParsed == null ||
                 !ruleParsed.isFinancialTransaction ||

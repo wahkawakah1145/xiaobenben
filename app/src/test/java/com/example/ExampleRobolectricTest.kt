@@ -1375,5 +1375,173 @@ class ExampleRobolectricTest {
       )
     )
   }
+
+  @Test
+  fun `smart deduplicator defaults to same amount and close time prioritizing richer record and optionally checks merchant similarity`() {
+    val baseTime = 1_763_710_000_000L
+    val sparseTx = com.example.model.LedgerTransaction(
+      id = "dedup-sparse-1",
+      amountCents = 3500L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "其他",
+      merchant = "消费",
+      channel = "其他",
+      occurredAtMillis = baseTime,
+      confirmed = false
+    )
+    val richTx = com.example.model.LedgerTransaction(
+      id = "dedup-rich-1",
+      amountCents = 3500L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "餐饮美食",
+      merchant = "星巴克(静安寺店)",
+      productName = "大杯冰美式",
+      channel = "支付宝·花呗",
+      transactionNo = "2026112122001488990011",
+      cardLastFour = "6688",
+      balanceAfterCents = 128000L,
+      note = "早餐咖啡",
+      rawNotification = "支付宝付款成功：向星巴克(静安寺店)支付35.00元",
+      occurredAtMillis = baseTime + 15_000L,
+      confirmed = true
+    )
+
+    // Default: requireMerchantSimilarity = false -> matches purely on amount + time, keeps richer tx
+    val defaultGroups = com.example.parser.SmartDeduplicator.findDuplicateGroups(
+      transactions = listOf(sparseTx, richTx),
+      maxWindowMillis = 60_000L
+    )
+    assertEquals(1, defaultGroups.size)
+    assertEquals("dedup-rich-1", defaultGroups.first().suggestedKeepId)
+    org.junit.Assert.assertTrue(
+      com.example.parser.SmartDeduplicator.informationRichnessScore(richTx) >
+        com.example.parser.SmartDeduplicator.informationRichnessScore(sparseTx)
+    )
+
+    // Optional toggle: requireMerchantSimilarity = true -> dissimilar merchant names are NOT grouped
+    val strictGroups = com.example.parser.SmartDeduplicator.findDuplicateGroups(
+      transactions = listOf(sparseTx, richTx),
+      maxWindowMillis = 60_000L,
+      requireMerchantSimilarity = true
+    )
+    assertEquals(0, strictGroups.size)
+  }
+
+  @Test
+  fun `ai understanding rejects unitless numbers like message count or 10086 and accepts explicit currency units`() = kotlinx.coroutines.runBlocking<Unit> {
+    // Unitless noise notifications MUST NOT pass explicit amount-unit gate
+    org.junit.Assert.assertFalse(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("微信\n[3条] 张三: 晚上一起吃饭")
+    )
+    org.junit.Assert.assertFalse(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("中国移动10086\n【中国移动】您的5G套餐已生效，查询请回复10086")
+    )
+    org.junit.Assert.assertFalse(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("中国移动 10086\n本月已用通用流量 12.5GB，剩余 37.5GB")
+    )
+    org.junit.Assert.assertFalse(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("信息\n验证码 482910，5分钟内有效，请勿泄露")
+    )
+
+    // Notifications with explicit currency/amount unit MUST pass
+    org.junit.Assert.assertTrue(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("微信支付\n星巴克消费 ¥35.00")
+    )
+    org.junit.Assert.assertTrue(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("支付宝\n美团外卖付款 18.5元")
+    )
+    org.junit.Assert.assertTrue(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("招商银行\nApple Store 境外消费 USD 9.99")
+    )
+    assertEquals(
+      3500L,
+      com.example.parser.ChinaNotificationParser.extractExplicitUnitAmountCents("星巴克消费 ¥35.00")
+    )
+    org.junit.Assert.assertNull(
+      com.example.parser.ChinaNotificationParser.extractExplicitUnitAmountCents("[5条] 中国移动10086")
+    )
+
+    // Default system prompt enforces strict amount-unit validation
+    val latestPrompt = com.example.data.AiUnderstandingManager.DEFAULT_SYSTEM_PROMPT
+    org.junit.Assert.assertTrue(latestPrompt.contains("严格金额单位校验"))
+    org.junit.Assert.assertTrue(latestPrompt.contains("10086"))
+
+    // Local & online AI understanding short-circuit immediately on unitless notifications
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val aiManager = com.example.data.AiUnderstandingManager()
+    val blockedLocal = aiManager.parseWithLocalModel(
+      context = context,
+      modelId = "bge-small-zh-v15",
+      packageName = "com.android.mms",
+      title = "中国移动10086",
+      content = "[2条] 您的套餐流量剩余 10086MB"
+    )
+    org.junit.Assert.assertTrue(blockedLocal.isFailure)
+    org.junit.Assert.assertTrue(
+      blockedLocal.exceptionOrNull()?.message?.contains("金额单位") == true
+    )
+
+    val blockedOnline = aiManager.parseWithOnlineApi(
+      config = com.example.model.AiConfig(
+        providerMode = com.example.model.AiProviderMode.ONLINE_API,
+        apiBaseUrl = "https://api.example.invalid/v1",
+        apiKey = "test-key",
+        apiModelName = "gpt-4o-mini"
+      ),
+      packageName = "com.tencent.mm",
+      title = "微信",
+      content = "[3条] 李四: 明天见"
+    )
+    org.junit.Assert.assertTrue(blockedOnline.isFailure)
+    org.junit.Assert.assertTrue(
+      blockedOnline.exceptionOrNull()?.message?.contains("金额单位") == true
+    )
+  }
+
+  @Test
+  fun `marking recognized transaction as non-bill deletes entry and creates ignore rule`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val rawTitle = "中国移动10086"
+    val rawContent = "您的5G尊享包已到账，免费赠送10元话费券待领取"
+    val pendingTx = com.example.model.LedgerTransaction(
+      id = "non-bill-test-1",
+      amountCents = 1000L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.INCOME.name,
+      category = "其他",
+      merchant = "中国移动",
+      channel = "短信通知",
+      rawNotification = "$rawTitle | $rawContent",
+      occurredAtMillis = 1_763_711_000_000L,
+      confirmed = false
+    )
+    repo.addTransaction(pendingTx).getOrThrow()
+
+    val createdRule = repo.markTransactionAsNonBill(pendingTx).getOrThrow()
+    org.junit.Assert.assertNotNull(createdRule)
+    org.junit.Assert.assertTrue(createdRule!!.isIgnoreRule)
+    org.junit.Assert.assertTrue(createdRule.enabled)
+
+    // Transaction is deleted from database
+    val remaining = repo.getTransactionsByIdsOnce(listOf("non-bill-test-1"))
+    assertEquals(0, remaining.size)
+
+    // Future identical notification matches the new IGNORE rule
+    val rules = repo.observeParsingRules().first()
+    val matchedIgnore = com.example.parser.ChinaNotificationParser.matchesIgnoreRule(
+      packageName = "",
+      title = rawTitle,
+      content = rawContent,
+      customRules = rules
+    )
+    org.junit.Assert.assertNotNull(matchedIgnore)
+
+    // Cleanup
+    repo.deleteParsingRule(createdRule.id)
+  }
 }
+
 

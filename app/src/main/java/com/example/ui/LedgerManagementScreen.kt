@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -91,7 +92,7 @@ fun BillToolsMenuScreen(
         append("预算 ${formatCurrency(settings.monthlyBudgetCents, settings.baseCurrencyCode)}")
     }
     val currencySummary = "主币种 ${baseCurrencyInfo.code} (${baseCurrencyInfo.chineseName}) · 自动更新：${rateFreq.label}"
-    val dedupSummary = "在 $txCount 笔账单中检索短时间重复支付与退款冲正"
+    val dedupSummary = "在 $txCount 笔账单中按同金额近时段检索重复项（优先清理信息较少条目）"
     val storageSummary = "当前占用 ${formatStorageBytes(storageFootprint.totalUserDataBytes)} · $txCount 笔账单 / ${storageFootprint.rawNotificationCount} 条原文"
 
     Box(
@@ -105,6 +106,68 @@ fun BillToolsMenuScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            item(key = "bill_tool_import_standalone") {
+                Card(
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.52f)
+                    ),
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("bill_tool_manual_import_card")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onOpenManualImport)
+                            .minimumInteractiveComponentSize()
+                            .padding(horizontal = 16.dp, vertical = 16.dp)
+                            .testTag("bill_tool_manual_import"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = AppIcons.FileOpen,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimary
+                                )
+                            }
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text(
+                                text = "从文档或文本导入",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = "支持 XLSX / CSV / JSON 账单文件与复制文本，可选规则匹配或 AI 理解",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f)
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+
             item(key = "bill_tools_list") {
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -126,14 +189,6 @@ fun BillToolsMenuScreen(
                             subtitle = "当前共 $totalCategoryCount 个分类 · 支持新增/改名并同步账单、规则与 AI 提示词",
                             testTag = "bill_tool_categories",
                             onClick = onOpenCategories
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        BillToolMenuRow(
-                            icon = AppIcons.FileOpen,
-                            title = "手动从文档或剪贴板导入",
-                            subtitle = "支持 XLSX / CSV / JSON 与剪贴板文本，可选规则匹配或 AI 理解",
-                            testTag = "bill_tool_manual_import",
-                            onClick = onOpenManualImport
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         BillToolMenuRow(

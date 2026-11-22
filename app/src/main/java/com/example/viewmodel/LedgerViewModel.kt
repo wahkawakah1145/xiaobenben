@@ -487,6 +487,20 @@ class LedgerViewModel(
         }
     }
 
+    fun markTransactionAsNonBill(tx: LedgerTransaction) {
+        viewModelScope.launch {
+            repository.markTransactionAsNonBill(tx)
+                .onSuccess { rule ->
+                    _actionMessage.value = if (rule != null) {
+                        "已将「${tx.merchant}」标记为非账单并记住忽略规则"
+                    } else {
+                        "已将「${tx.merchant}」标记为非账单并移除"
+                    }
+                }
+                .onFailure { _actionMessage.value = "标记失败：${it.localizedMessage ?: "请重试"}" }
+        }
+    }
+
     fun deleteTransaction(txId: String) {
         viewModelScope.launch {
             val snapshot = repository.getTransactionsByIdsOnce(listOf(txId))

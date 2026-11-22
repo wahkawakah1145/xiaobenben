@@ -71,10 +71,24 @@ object ChinaNotificationParser {
     private val amountNumberRegexToken =
         """([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{1,3}(?:\s[0-9]{3})+(?:[.,][0-9]{1,2})?|[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]{1,2}|[0-9]+(?:[.,][0-9]{1,2})?)"""
 
+    private val explicitUnitAmountPatterns = listOf(
+        Regex("""(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS|美元|美金|港币|港元|欧元|日元|日圆|英镑|新币|韩元|澳元|加元|澳门元|新台币|瑞郎|泰铢|林吉特|卢布|迪拉姆|HK\$|US\$|S\$|A\$|C\$|NT\$|MOP\$|[¥￥$€£₩₺₪])\s*[+\-]?\s*$amountNumberRegexToken""", RegexOption.IGNORE_CASE),
+        Regex("""$amountNumberRegexToken\s*(?:元|块钱|块(?![板模区])|圆|美元|美金|港币|港元|日元|日圆|欧元|英镑|新币|韩元|澳元|加元|澳门元|新台币|瑞郎|泰铢|林吉特|卢布|迪拉姆|円|CNY|RMB|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS)(?![a-zA-Z0-9])""", RegexOption.IGNORE_CASE)
+    )
+
+    private val nonAmountNoiseRegexes = listOf(
+        Regex("""[\[\【(（]\s*\d+\s*条[^\]\】)）]{0,12}[\]\】)）]"""),
+        Regex("""(?<!\d)\d+\s*(?:条新?消息|条未读|条通知|条短信|个联系人|人发来|条回复)"""),
+        Regex("""(?:中国移动|中国联通|中国电信|移动|联通|电信|客服热线|客服|热线)?\s*(?:10086|10010|10000|10001|106\d{4,}|123\d{2})\b"""),
+        Regex("""(?:验证码|校验码|动态码|确认码)[为是:：\s]*\d{4,8}"""),
+        Regex("""(?:尾号|账户|卡号)\s*[（(]?\d{4}[）)]?"""),
+        Regex("""(?<!\d)\d+(?:\.\d+)?\s*(?:分钟|小时|秒钟|秒|GB|MB|KB|TB|Mbps|Gbps|%|‰|分期|积分|分贝)(?![a-zA-Z0-9])""", RegexOption.IGNORE_CASE)
+    )
+
     private val amountPatterns = listOf(
-        Regex("""(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS|美元|港币|港元|欧元|日元|日圆|英镑|新币|韩元|澳元|加元|澳门元|新台币|瑞郎|泰铢|林吉特|卢布|迪拉姆|HK\$|US\$|S\$|A\$|C\$|NT\$|MOP\$|[¥￥$€£₩])\s*[+\-]?\s*$amountNumberRegexToken""", RegexOption.IGNORE_CASE),
+        explicitUnitAmountPatterns[0],
         Regex("""(?:金额|付款|消费|支出|扣款|扣费|支付|入账|到账|存入|收款|转入|转出|支取|转账|还款)[为:：]?\s*[+\-]?\s*$amountNumberRegexToken\s*(?:元|美元|港币|港元|日元|欧元|英镑|円)?"""),
-        Regex("""$amountNumberRegexToken\s*(?:元|美元|港币|港元|日元|欧元|英镑|円|USD|HKD|EUR|JPY|GBP)""", RegexOption.IGNORE_CASE)
+        explicitUnitAmountPatterns[1]
     )
 
     private val standaloneNumberRegex = Regex("""(?<![0-9a-zA-Z.:/])$amountNumberRegexToken(?![0-9a-zA-Z:/])""")
@@ -686,6 +700,34 @@ object ChinaNotificationParser {
         }
     }
 
+    fun hasExplicitAmountUnit(text: String): Boolean {
+        return extractExplicitUnitAmountCents(text) != null
+    }
+
+    fun extractExplicitUnitAmountCents(
+        text: String,
+        numberStyle: NumberFormatStyle = NumberFormatStyle.AUTO
+    ): Long? {
+        if (text.isBlank()) return null
+        val cleaned = stripNonAmountNoiseForUnitCheck(text)
+        if (cleaned.isBlank()) return null
+        for (pattern in explicitUnitAmountPatterns) {
+            pattern.findAll(cleaned).forEach { match ->
+                val cents = parseNormalizedAmountCents(match.groupValues[1], numberStyle)
+                if (cents != null) return cents
+            }
+        }
+        return null
+    }
+
+    private fun stripNonAmountNoiseForUnitCheck(text: String): String {
+        var result = stripBalanceAndDates(text)
+        for (regex in nonAmountNoiseRegexes) {
+            result = result.replace(regex, " ")
+        }
+        return result.trim()
+    }
+
     fun extractAmountCents(
         text: String,
         numberStyle: NumberFormatStyle = NumberFormatStyle.AUTO,
@@ -702,8 +744,7 @@ object ChinaNotificationParser {
         }
 
         if (allowLooseStandaloneNumber) {
-            val sanitizedForLoose = target
-                .replace(Regex("""(?:尾号|账户|卡号)\s*\d{4}"""), " ")
+            val sanitizedForLoose = stripNonAmountNoiseForUnitCheck(target)
                 .replace(Regex("""\d{4}\s*卡"""), " ")
             standaloneNumberRegex.findAll(sanitizedForLoose).forEach { match ->
                 val raw = match.groupValues[1]

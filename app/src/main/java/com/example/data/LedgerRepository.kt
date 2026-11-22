@@ -475,6 +475,49 @@ class LedgerRepository(
         }
     }
 
+    suspend fun markTransactionAsNonBill(tx: LedgerTransaction): Result<CustomParsingRule?> {
+        return try {
+            val raw = tx.rawNotification?.trim().orEmpty()
+            val lines = raw.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            val title = when {
+                lines.size >= 2 -> lines.first()
+                tx.merchant.isNotBlank() -> tx.merchant
+                else -> tx.channel
+            }
+            val content = when {
+                lines.size >= 2 -> lines.drop(1).joinToString(" ")
+                raw.isNotEmpty() -> raw
+                else -> listOfNotNull(
+                    tx.merchant.takeIf { it.isNotBlank() },
+                    tx.productName?.takeIf { it.isNotBlank() },
+                    tx.note?.takeIf { it.isNotBlank() }
+                ).joinToString(" ")
+            }
+            val packageHint = when (com.example.model.SourceApp.fromRaw(tx.sourceApp)) {
+                com.example.model.SourceApp.ALIPAY -> "com.eg.android.AlipayGphone"
+                com.example.model.SourceApp.WECHAT -> "com.tencent.mm"
+                com.example.model.SourceApp.UNIONPAY -> "com.unionpay"
+                else -> "*"
+            }
+            val learnedRule = if (title.isNotBlank() || content.isNotBlank()) {
+                recordIgnoredNotificationRule(
+                    packageName = packageHint,
+                    title = title,
+                    content = content
+                ).getOrNull()
+            } else {
+                null
+            }
+            dao.deleteRefsByTransactionId(tx.id)
+            dao.deleteTransactionById(tx.id)
+            Result.success(learnedRule)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     private suspend fun upsertTemplateFromEditedTransaction(
         rawNotification: String,
         sourceAppRaw: String,

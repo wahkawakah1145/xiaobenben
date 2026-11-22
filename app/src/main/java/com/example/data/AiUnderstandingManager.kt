@@ -465,6 +465,16 @@ class AiUnderstandingManager {
         selectedRules: List<CustomParsingRule> = emptyList(),
         customPrompt: String = ""
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.Default) {
+        val combined = "$title\n$content".trim()
+        if (combined.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("通知内容为空"))
+        }
+        if (!ChinaNotificationParser.hasExplicitAmountUnit(combined)) {
+            return@withContext Result.failure(
+                IllegalStateException("通知中未检测到前后带金额单位的数字，已跳过 AI 理解")
+            )
+        }
+
         val isCustom = LocalModelCatalog.isCustomModelId(modelId)
         val resolvedId = if (isCustom) modelId else LocalModelCatalog.resolve(modelId).id
         val status = getInstallStatus(context, resolvedId)
@@ -475,16 +485,9 @@ class AiUnderstandingManager {
             )
         }
 
-        val combined = "$title\n$content".trim()
-        if (combined.isBlank()) {
-            return@withContext Result.failure(IllegalArgumentException("通知内容为空"))
-        }
-
         val dir = modelDirectory(context, resolvedId)
-        val amountCents = ChinaNotificationParser.extractAmountCents(
-            text = combined,
-            allowLooseStandaloneNumber = true
-        ) ?: return@withContext Result.failure(IllegalStateException("本地小模型未能在文本中检测到有效金额"))
+        val amountCents = ChinaNotificationParser.extractExplicitUnitAmountCents(combined)
+            ?: return@withContext Result.failure(IllegalStateException("本地小模型未能在文本中检测到带金额单位的有效金额"))
 
         val (matchedVocabHits, totalVocabCount) = scanVocabMatchesStreaming(dir, combined)
         val matchedPromptRule = matchPromptReferenceRule(selectedRules, packageName, title, content)
@@ -568,6 +571,12 @@ class AiUnderstandingManager {
         val modelName = config.apiModelName.trim()
         if (rawEndpoint.isEmpty() || apiKey.isEmpty() || modelName.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("请完整填写在线 API 地址、API Key 与模型名称"))
+        }
+        val combined = "$title\n$content".trim()
+        if (!ChinaNotificationParser.hasExplicitAmountUnit(combined)) {
+            return@withContext Result.failure(
+                IllegalStateException("通知中未检测到前后带金额单位的数字，已跳过在线 AI 理解")
+            )
         }
 
         val chatUrl = normalizeChatCompletionsUrl(rawEndpoint)
@@ -893,9 +902,10 @@ class AiUnderstandingManager {
                 {"isFinancial":boolean,"amount":number,"currency":"ISO4217三位币种代码(如CNY/USD/HKD/EUR/JPY/GBP/CHF/SGD/KRW/AUD/CAD/THB/MYR等)","type":"EXPENSE|INCOME|TRANSFER","category":"$categoryUnion","merchant":"交易对方或商户名","channel":"支付渠道或银行名称","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm:ss或MM-dd HH:mm:ss或HH:mm:ss或null","confidence":0.0到1.0之间数字}
                 严格遵守以下判定规则：
                 1. 验证码、快递物流、登录提醒、营销广告、免息分期邀约等非动账消息必须返回 isFinancial=false，不可编造未出现的金额。
-                2. 【不计收支规则】微信/支付宝零钱提现、余额提现、提现到银行卡、银行卡收到提现到账、零钱充值、转入/转出零钱通或余额宝、本人名下账户互转、本人转账/同名转账、信用卡还款均属于内部资金划转，不计入日常支出与收入，必须返回 "type":"TRANSFER"，且 category 设为 "不计收支" 或 "账户互转"。
-                3. 消费退款、退货返现、冲正退回的 type 应为 INCOME（category 设为 "退款返现"）；他人向我转账收款 type 为 INCOME，向他人消费付款或发红包 type 为 EXPENSE。
-                4. occurredTime 尽量保留到秒（yyyy-MM-dd HH:mm:ss）；未出现时间则返回 null。
+                2. 【严格金额单位校验】仅当通知中存在前后紧邻明确金额单位或货币符号的数字（如 ¥/￥/$/€/£/元/块/RMB/CNY/USD/HKD/JPY 等）时才视为有效金额；任何前后无金额单位的孤立数字（如 [3条]、中国移动10086、10010、955xx、订单号、流量GB、人数、验证码、时间等）一律返回 isFinancial=false。
+                3. 【不计收支规则】微信/支付宝零钱提现、余额提现、提现到银行卡、银行卡收到提现到账、零钱充值、转入/转出零钱通或余额宝、本人名下账户互转、本人转账/同名转账、信用卡还款均属于内部资金划转，不计入日常支出与收入，必须返回 "type":"TRANSFER"，且 category 设为 "不计收支" 或 "账户互转"。
+                4. 消费退款、退货返现、冲正退回的 type 应为 INCOME（category 设为 "退款返现"）；他人向我转账收款 type 为 INCOME，向他人消费付款或发红包 type 为 EXPENSE。
+                5. occurredTime 尽量保留到秒（yyyy-MM-dd HH:mm:ss）；未出现时间则返回 null。
             """.trimIndent()
         }
 
@@ -920,8 +930,13 @@ class AiUnderstandingManager {
             ) {
                 return true
             }
-            return LEGACY_DEFAULT_PROMPT_MARKERS.all { trimmed.contains(it) } &&
+            val isVeryOldDefault = LEGACY_DEFAULT_PROMPT_MARKERS.all { trimmed.contains(it) } &&
                 !trimmed.contains("零钱提现")
+            val isPreviousDefaultWithoutUnitRule =
+                trimmed.contains("你是一个精准的中国大陆账单与支付通知结构化解析引擎。") &&
+                    trimmed.contains("【不计收支规则】") &&
+                    !trimmed.contains("【严格金额单位校验】")
+            return isVeryOldDefault || isPreviousDefaultWithoutUnitRule
         }
 
         fun sanitizeStoredCustomPrompt(

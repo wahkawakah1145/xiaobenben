@@ -124,25 +124,40 @@ class ImportAndDeduplicationTest {
             confirmed = true
         )
 
-        val shortThirtyMinutes = SmartDeduplicator.findDuplicateGroups(
+        // Default (requireMerchantSimilarity = false): groups purely by amount + close time, keeping richest item
+        val defaultThirtyMinutes = SmartDeduplicator.findDuplicateGroups(
             transactions = listOf(txAlipay, txCmb, txSameChannelOld, txDifferentMerchant),
             timeWindow = DeduplicationTimeWindow.THIRTY_MINUTES,
             channelFilter = DeduplicationChannelFilter.CROSS_CHANNEL
         )
+        assertEquals(1, defaultThirtyMinutes.size)
+        val defaultGroup = defaultThirtyMinutes.first()
+        assertEquals(3, defaultGroup.items.size)
+        assertTrue(defaultGroup.isCrossChannel)
+        assertEquals("tx-alipay", defaultGroup.suggestedKeepId)
+        assertTrue(defaultGroup.items.none { it.id == "tx-old" })
 
-        assertEquals(1, shortThirtyMinutes.size)
-        val group = shortThirtyMinutes.first()
+        // Optional toggle (requireMerchantSimilarity = true): excludes dissimilar merchant "滴滴出行"
+        val strictThirtyMinutes = SmartDeduplicator.findDuplicateGroups(
+            transactions = listOf(txAlipay, txCmb, txSameChannelOld, txDifferentMerchant),
+            timeWindow = DeduplicationTimeWindow.THIRTY_MINUTES,
+            channelFilter = DeduplicationChannelFilter.CROSS_CHANNEL,
+            requireMerchantSimilarity = true
+        )
+        assertEquals(1, strictThirtyMinutes.size)
+        val group = strictThirtyMinutes.first()
         assertEquals(2, group.items.size)
         assertTrue(group.isCrossChannel)
         assertEquals("tx-alipay", group.suggestedKeepId)
         assertTrue(group.items.none { it.id == "tx-other" })
         assertTrue(group.items.none { it.id == "tx-old" })
 
-        // Even with maximum 7-day window, 3-day-old long-term repeated item in ALL filter should NOT merge with 2-minute window if custom window is 15 minutes
+        // Even with 15-minute window and requireMerchantSimilarity = true, 3-day-old item and dissimilar merchant are excluded
         val customFifteenMin = SmartDeduplicator.findDuplicateGroups(
             transactions = listOf(txAlipay, txCmb, txSameChannelOld, txDifferentMerchant),
             maxWindowMillis = 15L * 60_000L,
-            channelFilter = DeduplicationChannelFilter.ALL
+            channelFilter = DeduplicationChannelFilter.ALL,
+            requireMerchantSimilarity = true
         )
         assertEquals(1, customFifteenMin.size)
         assertEquals(2, customFifteenMin.first().items.size)

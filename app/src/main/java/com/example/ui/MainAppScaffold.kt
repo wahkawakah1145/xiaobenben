@@ -449,7 +449,7 @@ fun AppNavigation(
                     val bName = selectedAnalyticsBookId?.let { id -> books.firstOrNull { it.id == id }?.name }
                     if (bName != null) "账本分析 · $bName" else "账本分析"
                 }
-                ROUTE_SETTINGS_MANUAL_IMPORT -> "手动导入账单"
+                ROUTE_SETTINGS_MANUAL_IMPORT -> "从文档或文本导入"
                 ROUTE_SETTINGS_CATEGORIES -> "分类管理"
                 ROUTE_SETTINGS_BILL_BEHAVIOR -> "记账与预算"
                 ROUTE_SETTINGS_CURRENCY -> "币种与汇率"

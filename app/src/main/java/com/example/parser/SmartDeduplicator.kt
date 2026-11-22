@@ -108,19 +108,22 @@ object SmartDeduplicator {
         transactions: List<LedgerTransaction>,
         timeWindow: DeduplicationTimeWindow = DeduplicationTimeWindow.ONE_MINUTE,
         channelFilter: DeduplicationChannelFilter = DeduplicationChannelFilter.ALL,
-        minSimilarity: Double = 0.58
+        minSimilarity: Double = 0.58,
+        requireMerchantSimilarity: Boolean = false
     ): List<DuplicateGroup> = findDuplicateGroups(
         transactions = transactions,
         maxWindowMillis = timeWindow.maxDiffMillis,
         channelFilter = channelFilter,
-        minSimilarity = minSimilarity
+        minSimilarity = minSimilarity,
+        requireMerchantSimilarity = requireMerchantSimilarity
     )
 
     fun findDuplicateGroups(
         transactions: List<LedgerTransaction>,
         maxWindowMillis: Long,
         channelFilter: DeduplicationChannelFilter = DeduplicationChannelFilter.ALL,
-        minSimilarity: Double = 0.58
+        minSimilarity: Double = 0.58,
+        requireMerchantSimilarity: Boolean = false
     ): List<DuplicateGroup> {
         if (transactions.size < 2) return emptyList()
 
@@ -154,9 +157,9 @@ object SmartDeduplicator {
                         // Enforce both pairwise and anchor span <= boundedWindow so long-term repeats are never chained
                         val withinPairWindow = abs(t1.occurredAtMillis - t2.occurredAtMillis) <= boundedWindow
                         val withinSpanWindow = abs(anchorTime - t2.occurredAtMillis) <= boundedWindow
-                        if (withinPairWindow && withinSpanWindow &&
+                        val merchantMatches = !requireMerchantSimilarity ||
                             areMerchantsSimilar(t1.merchant, t2.merchant, minSimilarity)
-                        ) {
+                        if (withinPairWindow && withinSpanWindow && merchantMatches) {
                             visited[j] = true
                             componentIndices.add(j)
                             queue.add(j)
@@ -186,12 +189,17 @@ object SmartDeduplicator {
                     val span = (items.first().occurredAtMillis - items.last().occurredAtMillis).coerceAtLeast(0L)
                     val reason = buildString {
                         append("短时同金额")
-                        if (minSim >= 0.99) append(" · 对象一致") else append(" · 对象相似度 ${(minSim * 100).toInt()}%")
+                        when {
+                            minSim >= 0.99 -> append(" · 对象一致")
+                            requireMerchantSimilarity || minSim >= minSimilarity -> append(" · 对象相似 ${(minSim * 100).toInt()}%")
+                            else -> append(" · 仅按金额与时间匹配")
+                        }
                         if (isCrossChannel) {
                             append(" · 跨渠道 (${distinctChannels.joinToString("/")})")
                         } else if (distinctChannels.isNotEmpty()) {
                             append(" · ${distinctChannels.first()}")
                         }
+                        append(" · 优先清理信息较少条目")
                     }
                     val repMerchant = bestKeep.merchant.ifBlank { items.first().merchant }
                     val groupId = items.joinToString("_") { it.id }.hashCode().toString()
@@ -221,11 +229,48 @@ object SmartDeduplicator {
         )
     }
 
+    fun informationRichnessScore(tx: LedgerTransaction): Int {
+        var score = 0
+        val merchant = tx.merchant.trim()
+        val isGenericMerchant = merchant.isEmpty() ||
+            merchant == "未知商户" ||
+            merchant == "未知渠道消费" ||
+            merchant.endsWith("消费") ||
+            merchant.endsWith("收款") ||
+            merchant.endsWith("转账")
+        if (merchant.isNotEmpty()) {
+            score += if (isGenericMerchant) 6 else 24
+            score += merchant.length.coerceAtMost(24)
+        }
+        val product = tx.productName?.trim().orEmpty()
+        if (product.isNotEmpty()) score += 20 + (product.length / 4).coerceAtMost(8)
+        if (!tx.transactionNo.isNullOrBlank()) score += 18
+        if (!tx.merchantOrderNo.isNullOrBlank()) score += 14
+        val note = tx.note?.trim().orEmpty()
+        if (note.isNotEmpty()) score += 16 + (note.length / 6).coerceAtMost(8)
+        val raw = tx.rawNotification?.trim().orEmpty()
+        if (raw.isNotEmpty()) score += 14 + (raw.length / 16).coerceAtMost(10)
+        if (!tx.tradeType.isNullOrBlank()) score += 10
+        if (!tx.tradeStatus.isNullOrBlank()) score += 8
+        if (!tx.cardLastFour.isNullOrBlank()) score += 10
+        if (tx.balanceAfterCents != null) score += 10
+        val category = tx.category.trim()
+        if (category.isNotEmpty() && category != "其他" && category != "未分类") score += 12
+        val channel = tx.channel.trim()
+        if (channel.isNotEmpty() && channel != "未知渠道" && channel != "手动记账") {
+            score += 10
+            if (channel.contains('&') || channel.contains('+')) score += 4
+        }
+        if (tx.confirmed) score += 6
+        return score
+    }
+
     private fun pickSuggestedKeep(items: List<LedgerTransaction>): LedgerTransaction {
         return items.maxWithOrNull(
-            compareBy<LedgerTransaction> { it.confirmed }
-                .thenBy { !it.note.isNullOrBlank() }
+            compareBy<LedgerTransaction> { informationRichnessScore(it) }
+                .thenBy { it.confirmed }
                 .thenBy { !it.rawNotification.isNullOrBlank() }
+                .thenBy { !it.note.isNullOrBlank() }
                 .thenBy { it.merchant.length }
                 .thenByDescending { it.occurredAtMillis }
         ) ?: items.first()

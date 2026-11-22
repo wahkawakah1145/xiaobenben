@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material3.AlertDialog
@@ -270,6 +271,7 @@ fun TransactionDetailSheet(
     recordedConvertedBaseCents: Long,
     onDismiss: () -> Unit,
     onConfirmPending: (() -> Unit)? = null,
+    onMarkNonBill: (() -> Unit)? = null,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -523,15 +525,45 @@ fun TransactionDetailSheet(
             }
 
             if (!transaction.confirmed && onConfirmPending != null) {
-                Button(
-                    onClick = onConfirmPending,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (onMarkNonBill != null) {
+                        OutlinedButton(
+                            onClick = onMarkNonBill,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = ExpenseCoral),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("sheet_mark_non_bill_button")
+                        ) {
+                            Icon(Icons.Rounded.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("非账单")
+                        }
+                    }
+                    Button(
+                        onClick = onConfirmPending,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("sheet_confirm_pending_button")
+                    ) {
+                        Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("确认入账")
+                    }
+                }
+            } else if (onMarkNonBill != null && !transaction.rawNotification.isNullOrBlank()) {
+                OutlinedButton(
+                    onClick = onMarkNonBill,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ExpenseCoral),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("sheet_confirm_pending_button")
+                        .testTag("sheet_mark_non_bill_confirmed_button")
                 ) {
-                    Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.Close, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("确认入账")
+                    Text("标记为非账单（不再识别此类通知）")
                 }
             }
 
@@ -602,7 +634,8 @@ fun TransactionEditorDialog(
         tradeStatus: String?,
         transactionNo: String?,
         merchantOrderNo: String?
-    ) -> Unit)? = null
+    ) -> Unit)? = null,
+    onMarkAsNonBill: (() -> Unit)? = null
 ) {
     var selectedType by remember {
         mutableStateOf(initialTransaction?.txType ?: TransactionType.EXPENSE)
@@ -1331,8 +1364,19 @@ fun TransactionEditorDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (initialTransaction != null && onMarkAsNonBill != null) {
+                    TextButton(
+                        onClick = onMarkAsNonBill,
+                        colors = ButtonDefaults.textButtonColors(contentColor = ExpenseCoral),
+                        modifier = Modifier.testTag("editor_mark_non_bill_button")
+                    ) {
+                        Text("非账单")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
             }
         }
     )

@@ -450,7 +450,9 @@ fun LedgerHomeScreen(
                 item(key = "pending_confirm_section") {
                     PendingConfirmationCard(
                         pendingList = pendingTransactions,
+                        onInspectOne = { selectedTransaction = it },
                         onConfirmOne = { viewModel.confirmTransaction(it.id) },
+                        onMarkNonBillOne = { viewModel.markTransactionAsNonBill(it) },
                         onEditOne = { editingTransaction = it },
                         onDiscardOne = { viewModel.deleteTransaction(it.id) },
                         onConfirmAll = { viewModel.confirmAllPendingTransactions() }
@@ -988,6 +990,12 @@ fun LedgerHomeScreen(
                     selectedTransaction = null
                 }
             } else null,
+            onMarkNonBill = if (!tx.confirmed || !tx.rawNotification.isNullOrBlank()) {
+                {
+                    viewModel.markTransactionAsNonBill(tx)
+                    selectedTransaction = null
+                }
+            } else null,
             onEdit = {
                 editingTransaction = tx
                 selectedTransaction = null
@@ -1068,6 +1076,12 @@ fun LedgerHomeScreen(
                 )
             },
             onDismiss = { editingTransaction = null },
+            onMarkAsNonBill = if (!tx.confirmed || !tx.rawNotification.isNullOrBlank()) {
+                {
+                    viewModel.markTransactionAsNonBill(tx)
+                    editingTransaction = null
+                }
+            } else null,
             onSaveExtended = { tt, pn, ts, tno, mno ->
                 extTradeType = tt
                 extProductName = pn
@@ -1852,7 +1866,9 @@ private fun ResolveInquiryDialog(
 @Composable
 private fun PendingConfirmationCard(
     pendingList: List<LedgerTransaction>,
+    onInspectOne: (LedgerTransaction) -> Unit,
     onConfirmOne: (LedgerTransaction) -> Unit,
+    onMarkNonBillOne: (LedgerTransaction) -> Unit,
     onEditOne: (LedgerTransaction) -> Unit,
     onDiscardOne: (LedgerTransaction) -> Unit,
     onConfirmAll: () -> Unit
@@ -1905,54 +1921,85 @@ private fun PendingConfirmationCard(
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
                     shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onInspectOne(tx) }
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = tx.merchant,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${tx.channel} · ${tx.category}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Text(
-                                text = tx.merchant,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
+                                text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
+                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
+                                color = transactionTypeColor(tx.txType),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        if (!tx.rawNotification.isNullOrBlank()) {
+                            Text(
+                                text = tx.rawNotification.replace('\n', ' '),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Text(
-                                text = "${tx.channel} · ${tx.category}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
-                        Text(
-                            text = formatCurrency(tx.amountCents, tx.currencyCode, showSign = true, type = tx.txType),
-                            style = MaterialTheme.typography.titleSmall.copy(fontFamily = numberFont),
-                            color = transactionTypeColor(tx.txType),
-                            fontWeight = FontWeight.Bold
-                        )
-                        IconButton(
-                            onClick = { onEditOne(tx) },
-                            modifier = Modifier.size(36.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(AppIcons.Tune, contentDescription = "编辑", modifier = Modifier.size(18.dp))
-                        }
-                        IconButton(
-                            onClick = { onDiscardOne(tx) },
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(Icons.Rounded.Close, contentDescription = "删除", tint = ExpenseCoral, modifier = Modifier.size(18.dp))
-                        }
-                        IconButton(
-                            onClick = { onConfirmOne(tx) },
-                            modifier = Modifier
-                                .size(36.dp)
-                                .testTag("confirm_pending_item_${tx.id}")
-                        ) {
-                            Icon(Icons.Rounded.Check, contentDescription = "确认", tint = IncomeJade, modifier = Modifier.size(20.dp))
+                            TextButton(
+                                onClick = { onMarkNonBillOne(tx) },
+                                colors = ButtonDefaults.textButtonColors(contentColor = ExpenseCoral),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("pending_mark_non_bill_${tx.id}")
+                            ) {
+                                Text("非账单", style = MaterialTheme.typography.labelMedium)
+                            }
+                            IconButton(
+                                onClick = { onEditOne(tx) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(AppIcons.Tune, contentDescription = "编辑", modifier = Modifier.size(18.dp))
+                            }
+                            IconButton(
+                                onClick = { onDiscardOne(tx) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(Icons.Rounded.Close, contentDescription = "删除", tint = ExpenseCoral, modifier = Modifier.size(18.dp))
+                            }
+                            IconButton(
+                                onClick = { onConfirmOne(tx) },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .testTag("confirm_pending_item_${tx.id}")
+                            ) {
+                                Icon(Icons.Rounded.Check, contentDescription = "确认", tint = IncomeJade, modifier = Modifier.size(20.dp))
+                            }
                         }
                     }
                 }

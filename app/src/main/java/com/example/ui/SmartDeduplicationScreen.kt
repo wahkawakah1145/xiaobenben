@@ -96,17 +96,19 @@ fun SmartDeduplicationScreen(
     var customUnitMode by rememberSaveable { mutableIntStateOf(0) }
     var customErrorText by remember { mutableStateOf<String?>(null) }
     var channelFilter by remember { mutableStateOf(DeduplicationChannelFilter.ALL) }
+    var requireMerchantSimilarity by rememberSaveable { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
     var inspectingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
     var editingTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
 
-    val candidateGroups by remember(allTransactions, customWindowSeconds, channelFilter) {
+    val candidateGroups by remember(allTransactions, customWindowSeconds, channelFilter, requireMerchantSimilarity) {
         derivedStateOf {
             SmartDeduplicator.findDuplicateGroups(
                 transactions = allTransactions,
                 maxWindowMillis = customWindowSeconds * 1_000L,
-                channelFilter = channelFilter
+                channelFilter = channelFilter,
+                requireMerchantSimilarity = requireMerchantSimilarity
             )
         }
     }
@@ -185,7 +187,7 @@ fun SmartDeduplicationScreen(
                                 Text("短时智能去重筛选", style = MaterialTheme.typography.titleMedium)
                             }
                             Text(
-                                text = "仅识别短时间窗口内金额相同且交易对象相似的重复入账，自动排除跨周期的长期重复消费（当前窗口：${SmartDeduplicator.formatWindowLabelSeconds(customWindowSeconds)}；点击勾选，长按条目可弹窗查看详情）。",
+                                text = "默认仅判断「金额相同 + 时间相近」的条目，并优先勾选删除信息量较少的条目；可按需开启「交易对象相似」缩小范围（当前窗口：${SmartDeduplicator.formatWindowLabelSeconds(customWindowSeconds)}；点击勾选，长按条目弹窗查看详情）。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -315,6 +317,12 @@ fun SmartDeduplicationScreen(
                                     .horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                                FilterChip(
+                                    selected = requireMerchantSimilarity,
+                                    onClick = { requireMerchantSimilarity = !requireMerchantSimilarity },
+                                    label = { Text("交易对象相似") },
+                                    modifier = Modifier.testTag("dedup_require_merchant_similarity_chip")
+                                )
                                 DeduplicationChannelFilter.entries.forEach { cf ->
                                     FilterChip(
                                         selected = channelFilter == cf,
@@ -390,7 +398,11 @@ fun SmartDeduplicationScreen(
                                 )
                                 Text("未发现匹配的疑似重复账单", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    text = "当前筛选条件下没有相同金额且交易对象相似的冲突记录。",
+                                    text = if (requireMerchantSimilarity) {
+                                        "当前筛选条件下没有金额相同、时间相近且交易对象相似的冲突记录。"
+                                    } else {
+                                        "当前时间窗口内没有金额相同的疑似重复记录。"
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -679,8 +691,14 @@ private fun DuplicateGroupCard(
                                     color = if (markedForDelete) ExpenseCoral.copy(alpha = 0.16f) else IncomeJade.copy(alpha = 0.16f),
                                     shape = RoundedCornerShape(6.dp)
                                 ) {
+                                    val badgeText = when {
+                                        markedForDelete && tx.id != group.suggestedKeepId -> "待删除 · 信息较少"
+                                        markedForDelete -> "待删除"
+                                        tx.id == group.suggestedKeepId -> "保留 · 信息较全"
+                                        else -> "保留"
+                                    }
                                     Text(
-                                        text = if (markedForDelete) "待删除" else "保留",
+                                        text = badgeText,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = if (markedForDelete) ExpenseCoral else IncomeJade,
                                         fontWeight = FontWeight.Bold,
