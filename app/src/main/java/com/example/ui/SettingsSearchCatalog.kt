@@ -141,6 +141,15 @@ object SettingsSearchCatalog {
             sectionKey = "custom_rules_header",
             keywords = listOf("规则", "关键词", "忽略规则", "非账单", "模版", "正则")
         ),
+        SettingsSearchItem(
+            id = "monitored_apps",
+            title = "自定义监听应用（图形化选择）",
+            subtitle = "勾选需要监听通知的微信、支付宝、短信、银行或其他已安装应用，并引导开启权限",
+            categoryLabel = "权限管理",
+            route = ROUTE_SETTINGS_MONITORED_APPS,
+            sectionKey = "monitored_apps_card",
+            keywords = listOf("监听应用", "选择应用", "应用通知", "微信", "支付宝", "短信", "银行app", "包名", "通知监听")
+        ),
 
         // AI理解
         SettingsSearchItem(

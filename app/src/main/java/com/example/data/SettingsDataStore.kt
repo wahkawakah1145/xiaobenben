@@ -116,6 +116,9 @@ class SettingsDataStore(private val context: Context) {
         val CATEGORY_ICONS_JSON = stringPreferencesKey("custom_category_icons_json")
         val CUSTOM_CHANNELS_JSON = stringPreferencesKey("custom_channels_json")
         val DEDUP_EXCLUDED_TX_IDS_JSON = stringPreferencesKey("dedup_excluded_tx_ids_json")
+        val MONITORED_APPS_CUSTOMIZED = booleanPreferencesKey("monitored_apps_customized")
+        val MONITORED_APP_PACKAGES_JSON = stringPreferencesKey("monitored_app_packages_json")
+        val ALLOW_OTHER_FINANCIAL_APPS_FALLBACK = booleanPreferencesKey("allow_other_financial_apps_fallback")
 
         val AI_PROVIDER_MODE = stringPreferencesKey("ai_provider_mode")
         val AI_LOCAL_MODEL_ID = stringPreferencesKey("ai_local_model_id")
@@ -170,7 +173,10 @@ class SettingsDataStore(private val context: Context) {
             customChannels = prefs[Keys.CUSTOM_CHANNELS_JSON]?.let { rawJson ->
                 ChannelCatalog.normalizeChannelList(decodeStringListJson(rawJson), ChannelCatalog.defaultChannels)
             } ?: ChannelCatalog.defaultChannels,
-            dedupExcludedTransactionIds = decodeStringListJson(prefs[Keys.DEDUP_EXCLUDED_TX_IDS_JSON])
+            dedupExcludedTransactionIds = decodeStringListJson(prefs[Keys.DEDUP_EXCLUDED_TX_IDS_JSON]),
+            monitoredAppsCustomized = prefs[Keys.MONITORED_APPS_CUSTOMIZED] ?: false,
+            monitoredAppPackages = decodeStringListJson(prefs[Keys.MONITORED_APP_PACKAGES_JSON]),
+            allowOtherFinancialAppsFallback = prefs[Keys.ALLOW_OTHER_FINANCIAL_APPS_FALLBACK] ?: true
         )
     }
 
@@ -332,6 +338,11 @@ class SettingsDataStore(private val context: Context) {
                     .distinct()
                     .forEach { put(it) }
             }.toString()
+            prefs[Keys.MONITORED_APPS_CUSTOMIZED] = settings.monitoredAppsCustomized
+            prefs[Keys.MONITORED_APP_PACKAGES_JSON] = encodeStringListJson(
+                settings.monitoredAppPackages.map { it.trim().take(128) }.filter { it.isNotEmpty() }
+            )
+            prefs[Keys.ALLOW_OTHER_FINANCIAL_APPS_FALLBACK] = settings.allowOtherFinancialAppsFallback
         }
     }
 

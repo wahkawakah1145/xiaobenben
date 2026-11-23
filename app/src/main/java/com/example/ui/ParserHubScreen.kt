@@ -83,6 +83,7 @@ import com.example.viewmodel.UiState
 fun ParserHubScreen(
     viewModel: LedgerViewModel,
     isListenerEnabled: Boolean,
+    onOpenMonitoredApps: () -> Unit = {},
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -137,6 +138,51 @@ fun ParserHubScreen(
                 )
             }
 
+            item(key = "monitored_apps_shortcut") {
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenMonitoredApps)
+                        .testTag("parser_open_monitored_apps_card")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .minimumInteractiveComponentSize()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "自定义监听手机应用",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (settings.monitoredAppsCustomized) {
+                                    "已勾选 ${settings.monitoredAppPackages.size} 款应用（点击图形化修改）"
+                                } else {
+                                    "默认监听微信、支付宝、短信与各大银行，点击自定义应用"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = onOpenMonitoredApps,
+                            modifier = Modifier.testTag("parser_open_monitored_apps_button")
+                        ) {
+                            Text("去选择")
+                        }
+                    }
+                }
+            }
+
             // 1. Streamlined Notification Test Bench
             item(key = "test_bench") {
                 Card(
@@ -178,7 +224,10 @@ fun ParserHubScreen(
 
                         OutlinedTextField(
                             value = titleInput,
-                            onValueChange = { titleInput = it },
+                            onValueChange = {
+                                titleInput = it
+                                selectedPackage = ""
+                            },
                             label = { Text("通知标题 / 银行号码") },
                             placeholder = { Text("例如：95555 招商银行（或点击上方渠道芯片填入）") },
                             singleLine = true,
@@ -189,7 +238,10 @@ fun ParserHubScreen(
 
                         OutlinedTextField(
                             value = bodyInput,
-                            onValueChange = { bodyInput = it },
+                            onValueChange = {
+                                bodyInput = it
+                                selectedPackage = ""
+                            },
                             label = { Text("通知正文") },
                             placeholder = { Text("粘贴需要测试的银行短信或支付通知内容") },
                             minLines = 2,

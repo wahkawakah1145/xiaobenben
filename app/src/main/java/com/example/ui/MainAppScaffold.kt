@@ -162,6 +162,7 @@ const val ROUTE_SETTINGS_APPEARANCE_HOME_NAV = "settings/appearance/home_nav"
 const val ROUTE_SETTINGS_APPEARANCE_INTERACTION = "settings/appearance/interaction"
 const val ROUTE_SETTINGS_APPEARANCE_ICON = "settings/appearance/icon"
 const val ROUTE_SETTINGS_PERMISSIONS = "settings/permissions"
+const val ROUTE_SETTINGS_MONITORED_APPS = "settings/monitored_apps"
 const val ROUTE_SETTINGS_ABOUT = "settings/about"
 
 private data class TopDestination(
@@ -501,6 +502,7 @@ fun AppNavigation(
                 ROUTE_SETTINGS_APPEARANCE_INTERACTION -> "动画、手势与提示横栏"
                 ROUTE_SETTINGS_APPEARANCE_ICON -> "图标风格与桌面快捷方式"
                 ROUTE_SETTINGS_PERMISSIONS -> "权限管理"
+                ROUTE_SETTINGS_MONITORED_APPS -> "自定义监听应用"
                 ROUTE_SETTINGS_ABOUT -> "关于"
                 else -> stringResource(R.string.app_name)
             }
@@ -691,6 +693,7 @@ fun AppNavigation(
                     ROUTE_SETTINGS_PARSER -> ParserHubScreen(
                         viewModel = viewModel,
                         isListenerEnabled = isListenerEnabled,
+                        onOpenMonitoredApps = { navController.navigate(ROUTE_SETTINGS_MONITORED_APPS) },
                         onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_AI -> AiSettingsScreen(
@@ -746,6 +749,14 @@ fun AppNavigation(
                         settings = settings,
                         isListenerEnabled = isListenerEnabled,
                         isAccessibilityEnabled = isAccessibilityEnabled,
+                        isIgnoringBattery = isIgnoringBattery,
+                        viewModel = viewModel,
+                        onOpenMonitoredApps = { navController.navigate(ROUTE_SETTINGS_MONITORED_APPS) },
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
+                    )
+                    ROUTE_SETTINGS_MONITORED_APPS -> MonitoredAppsScreen(
+                        settings = settings,
+                        isListenerEnabled = isListenerEnabled,
                         isIgnoringBattery = isIgnoringBattery,
                         viewModel = viewModel,
                         onShowMessage = { msg -> showGlobalSnackbar(msg) }
@@ -1115,6 +1126,7 @@ fun AppNavigation(
                                 ROUTE_SETTINGS_APPEARANCE_INTERACTION,
                                 ROUTE_SETTINGS_APPEARANCE_ICON,
                                 ROUTE_SETTINGS_PERMISSIONS,
+                                ROUTE_SETTINGS_MONITORED_APPS,
                                 ROUTE_SETTINGS_ABOUT
                             ).forEach { subRoute ->
                                 composable(subRoute) {

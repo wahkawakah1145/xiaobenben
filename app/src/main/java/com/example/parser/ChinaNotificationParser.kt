@@ -18,10 +18,14 @@ object ChinaNotificationParser {
     )
 
     private val financialTriggerKeywords = listOf(
-        "付款", "消费", "支出", "扣款", "支付", "刷卡", "支取", "转出", "缴费", "代扣",
+        "付款", "消费", "支出", "扣款", "扣费", "支付", "刷卡", "支取", "转出", "缴费", "代扣",
         "收款", "入账", "到账", "转入", "存入", "工资", "退款", "返现", "收益", "红包",
-        "转账", "还款", "提现", "动账", "交易", "人民币", "RMB", "USD", "HKD", "EUR",
-        "JPY", "GBP", "美元", "港币", "日元", "欧元", "英镑", "¥", "￥", "$", "€", "£", "元"
+        "转账", "还款", "提现", "动账", "交易", "金额", "人民币", "RMB", "CNY", "USD", "HKD", "EUR",
+        "JPY", "GBP", "SGD", "AUD", "CAD", "KRW", "THB", "MYR", "TWD", "MOP", "CHF", "NZD",
+        "美元", "美金", "港币", "港元", "日元", "日圆", "欧元", "英镑", "新加坡元", "新币",
+        "澳元", "澳币", "加元", "加币", "韩元", "泰铢", "新台币", "台币", "澳门元", "澳门币",
+        "瑞士法郎", "瑞郎", "林吉特", "马币", "新西兰元", "纽元", "卢布", "迪拉姆",
+        "¥", "￥", "$", "€", "£", "₩", "元"
     )
 
     private val refundKeywords = listOf(
@@ -72,9 +76,31 @@ object ChinaNotificationParser {
     private val amountNumberRegexToken =
         """([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{1,3}(?:\s[0-9]{3})+(?:[.,][0-9]{1,2})?|[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]{1,2}|[0-9]+(?:[.,][0-9]{1,2})?)"""
 
+    // Ordered longest-first so multi-char Chinese currency names (e.g. 新加坡元, 人民币, 新台币) match before generic 元
+    private val prefixCurrencyUnitToken =
+        """(?:人民币|新加坡元|新西兰元|瑞士法郎|菲律宾比索|墨西哥比索|阿根廷比索|沙特里亚尔|卡塔尔里亚尔|土耳其里拉|印度卢比|南非兰特|瑞典克朗|挪威克朗|丹麦克朗|捷克克朗|新台币|澳门元|澳门币|林吉特|迪拉姆|印尼盾|越南盾|兹罗提|雷亚尔|美元|美金|港币|港元|欧元|日元|日圆|英镑|新币|韩元|澳元|澳币|加元|加币|纽元|台币|瑞郎|泰铢|马币|越盾|卢布|福林|谢克尔|MOP\$|HK\$|US\$|NZ\$|MX\$|NT\$|S\$|A\$|C\$|(?<![a-zA-Z])(?:RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS|RM)(?![a-zA-Z])|[¥￥$€£₩฿₫₱₹₽₺₪]|zł|Kč)"""
+
+    private val suffixCurrencyUnitToken =
+        """(?:新加坡元|新西兰元|瑞士法郎|菲律宾比索|墨西哥比索|阿根廷比索|沙特里亚尔|卡塔尔里亚尔|土耳其里拉|印度卢比|南非兰特|瑞典克朗|挪威克朗|丹麦克朗|捷克克朗|人民币|新台币|澳门元|澳门币|林吉特|迪拉姆|印尼盾|越南盾|兹罗提|雷亚尔|块钱|美元|美金|港币|港元|欧元|日元|日圆|英镑|新币|韩元|澳元|澳币|加元|加币|纽元|台币|瑞郎|泰铢|马币|越盾|卢布|福林|谢克尔|元|块(?![板模区])|圆|円|(?<![a-zA-Z])(?:CNY|RMB|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS)(?![a-zA-Z0-9]))"""
+
+    private val prefixUnitAmountRegex = Regex(
+        """($prefixCurrencyUnitToken)\s*[+\-]?\s*$amountNumberRegexToken(?:\s*(?:元|圆))?""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val suffixUnitAmountRegex = Regex(
+        """(?<![0-9a-zA-Z.:/])$amountNumberRegexToken\s*($suffixCurrencyUnitToken)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val cueAmountRegex = Regex(
+        """(?:交易金额|消费金额|支出金额|付款金额|实付金额|实扣金额|扣款金额|入账金额|收款金额|转账金额|金额|实付|实扣|付款|消费|支出|扣款|扣费|支付|入账|到账|存入|收款|转入|转出|支取|转账|还款)[为是:：\s]*[+\-]?\s*$amountNumberRegexToken(?:\s*($suffixCurrencyUnitToken))?""",
+        RegexOption.IGNORE_CASE
+    )
+
     private val explicitUnitAmountPatterns = listOf(
-        Regex("""(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS|美元|美金|港币|港元|欧元|日元|日圆|英镑|新币|韩元|澳元|加元|澳门元|新台币|瑞郎|泰铢|林吉特|卢布|迪拉姆|HK\$|US\$|S\$|A\$|C\$|NT\$|MOP\$|[¥￥$€£₩₺₪])\s*[+\-]?\s*$amountNumberRegexToken""", RegexOption.IGNORE_CASE),
-        Regex("""$amountNumberRegexToken\s*(?:元|块钱|块(?![板模区])|圆|美元|美金|港币|港元|日元|日圆|欧元|英镑|新币|韩元|澳元|加元|澳门元|新台币|瑞郎|泰铢|林吉特|卢布|迪拉姆|円|CNY|RMB|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS)(?![a-zA-Z0-9])""", RegexOption.IGNORE_CASE)
+        prefixUnitAmountRegex,
+        suffixUnitAmountRegex
     )
 
     private val nonAmountNoiseRegexes = listOf(
@@ -86,13 +112,41 @@ object ChinaNotificationParser {
         Regex("""(?<!\d)\d+(?:\.\d+)?\s*(?:分钟|小时|秒钟|秒|GB|MB|KB|TB|Mbps|Gbps|%|‰|分期|积分|分贝)(?![a-zA-Z0-9])""", RegexOption.IGNORE_CASE)
     )
 
-    private val amountPatterns = listOf(
-        explicitUnitAmountPatterns[0],
-        Regex("""(?:金额|付款|消费|支出|扣款|扣费|支付|入账|到账|存入|收款|转入|转出|支取|转账|还款)[为:：]?\s*[+\-]?\s*$amountNumberRegexToken\s*(?:元|美元|港币|港元|日元|欧元|英镑|円)?"""),
-        explicitUnitAmountPatterns[1]
+    private val standaloneNumberRegex = Regex("""(?<![0-9a-zA-Z.:/])$amountNumberRegexToken(?![0-9a-zA-Z:/])""")
+
+    data class ExtractedAmountMention(
+        val amountCents: Long,
+        val currencyCode: String,
+        val hasExplicitUnit: Boolean,
+        val hasSpecificCurrency: Boolean,
+        val startIndex: Int,
+        val endIndex: Int,
+        val score: Int
     )
 
-    private val standaloneNumberRegex = Regex("""(?<![0-9a-zA-Z.:/])$amountNumberRegexToken(?![0-9a-zA-Z:/])""")
+    private val secondaryAmountCues = listOf(
+        "已冻结", "预授权冻结", "预冻结", "冻结金额", "冻结",
+        "可用余额", "当前余额", "账户余额", "交易后余额", "卡内余额", "活期余额", "余额",
+        "可用额度", "剩余额度", "信用额度", "当前额度", "额度",
+        "折合人民币", "约合人民币", "合人民币", "折合", "约合", "参考汇率", "汇率",
+        "手续费", "服务费", "运费险",
+        "优惠立减", "立减", "满减", "优惠", "抵扣", "红包抵扣", "积分抵扣", "减免",
+        "原价", "应付", "限额", "最低还款", "本期应还", "账单总额", "总计应还"
+    )
+
+    private val strongPrimaryAmountCues = listOf(
+        "实际支出", "实际支付", "实际扣款", "实付", "实扣", "净支出", "最终支付"
+    )
+
+    private val primaryTransactionCues = listOf(
+        "无卡消费", "刷卡消费", "快捷支付", "扫码支付", "消费交易", "消费支出", "消费",
+        "支出", "扣款", "扣费", "代扣", "付款", "已支付", "成功支付", "支付", "刷卡", "支取", "转出", "缴费",
+        "入账", "到账", "收入", "存入", "收款", "转入", "工资", "退款", "退回", "返现", "提现", "转账", "还款"
+    )
+
+    private val amountLabelCues = listOf(
+        "交易金额", "消费金额", "支出金额", "付款金额", "入账金额", "收款金额", "金额"
+    )
 
     private val cardTailPatterns = listOf(
         Regex("""尾号\s*(\d{4})"""),
@@ -117,19 +171,23 @@ object ChinaNotificationParser {
         val hasAmount = extractAmountCents(combined) != null
 
         return if (ChinaPaymentCatalog.isWatchedPackage(packageName)) {
-            hasAmount && (hasFinancialCue || combined.contains("元") || combined.contains("¥") ||
-                combined.contains("￥") || combined.contains("$") || combined.contains("€") || combined.contains("£"))
+            hasAmount && (hasFinancialCue || hasExplicitAmountUnit(combined))
         } else {
             hasAmount && hasFinancialCue
         }
     }
 
-    fun hasUncertainFinancialCue(packageName: String, title: String, content: String): Boolean {
+    fun hasUncertainFinancialCue(
+        packageName: String,
+        title: String,
+        content: String,
+        treatAsWatched: Boolean = false
+    ): Boolean {
         val combined = "$title $content"
         if (combined.isBlank()) return false
         if (noiseKeywords.any { combined.contains(it) }) return false
         val cueCount = financialTriggerKeywords.count { combined.contains(it, ignoreCase = true) }
-        return if (ChinaPaymentCatalog.isWatchedPackage(packageName)) {
+        return if (treatAsWatched || ChinaPaymentCatalog.isWatchedPackage(packageName)) {
             cueCount >= 1
         } else {
             cueCount >= 2
@@ -185,17 +243,44 @@ object ChinaNotificationParser {
         return matched
     }
 
-    fun findMatchingCustomRule(
+    fun isConcreteChannelName(name: String?): Boolean {
+        val trimmed = name?.trim().orEmpty()
+        return trimmed.isNotEmpty() &&
+            trimmed != "自动" &&
+            trimmed != "未知渠道" &&
+            trimmed != "忽略规则"
+    }
+
+    fun matchesRuleKeyword(rawPattern: String, text: String): Boolean {
+        val normalized = rawPattern.trim()
+            .replace('｜', '|')
+            .trim('|')
+            .trim()
+        if (normalized.isEmpty() || text.isBlank()) return false
+
+        val regexMatched = runCatching {
+            Regex(normalized, RegexOption.IGNORE_CASE).containsMatchIn(text)
+        }.getOrElse { false }
+        if (regexMatched) return true
+
+        val tokens = normalized
+            .split(Regex("""[|,，、;；]+"""))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        return tokens.any { text.contains(it, ignoreCase = true) }
+    }
+
+    fun resolveChannelFromRules(
         packageName: String,
         combined: String,
         rules: List<CustomParsingRule>,
         contentOnly: String = ""
-    ): CustomParsingRule? {
-        val eligible = rules.filter { rule ->
-            rule.enabled &&
-                (rule.packageFilter == "*" || rule.packageFilter.isBlank() || rule.packageFilter == packageName)
+    ): String? {
+        if (rules.isEmpty() || combined.isBlank()) return null
+        val enabledConcreteRules = rules.filter { rule ->
+            rule.enabled && !rule.isIgnoreRule && isConcreteChannelName(rule.channelName)
         }
-        if (eligible.isEmpty()) return null
+        if (enabledConcreteRules.isEmpty()) return null
 
         val candidateTexts = listOfNotNull(
             combined.takeIf { it.isNotBlank() },
@@ -208,37 +293,109 @@ object ChinaNotificationParser {
             )
         }.filter { it.isNotBlank() }.distinct()
 
-        // 1) Exact / suffix-aligned template signature match has highest precedence; latest updated template wins!
-        val templateMatch = eligible
-            .filter { rule ->
-                val sig = rule.templateSignature.trim()
-                sig.isNotEmpty() && incomingSigs.any { inc ->
-                    sig.equals(inc, ignoreCase = true) ||
-                        (minOf(sig.length, inc.length) >= 12 &&
-                            (sig.endsWith(inc, ignoreCase = true) || inc.endsWith(sig, ignoreCase = true)))
-                }
+        fun matchesRule(rule: CustomParsingRule): Boolean {
+            val sig = rule.templateSignature.trim()
+            val sigMatch = sig.isNotEmpty() && incomingSigs.any { inc ->
+                sig.equals(inc, ignoreCase = true) ||
+                    (minOf(sig.length, inc.length) >= 12 &&
+                        (sig.endsWith(inc, ignoreCase = true) || inc.endsWith(sig, ignoreCase = true)))
             }
-            .sortedWith(
-                compareByDescending<CustomParsingRule> { it.isIgnoreRule }
-                    .thenByDescending { it.updatedAtMillis }
-                    .thenByDescending { it.priority }
-            )
-            .firstOrNull()
-        if (templateMatch != null) return templateMatch
+            if (sigMatch) return true
+            return rule.keywordPattern.isNotBlank() && matchesRuleKeyword(rule.keywordPattern, combined)
+        }
 
-        // 2) Keyword / regex rules sorted by IGNORE first (if matched), priority DESC, updatedAtMillis DESC, keyword length DESC
-        return eligible
-            .filter { it.keywordPattern.isNotBlank() }
-            .sortedWith(
-                compareByDescending<CustomParsingRule> { it.isIgnoreRule }
-                    .thenByDescending { it.priority }
-                    .thenByDescending { it.updatedAtMillis }
-                    .thenByDescending { it.keywordPattern.length }
-            )
-            .firstOrNull { rule ->
-                runCatching { Regex(rule.keywordPattern, RegexOption.IGNORE_CASE).containsMatchIn(combined) }
-                    .getOrElse { combined.contains(rule.keywordPattern, ignoreCase = true) }
+        val sorted = enabledConcreteRules.sortedWith(
+            compareByDescending<CustomParsingRule> {
+                it.packageFilter == packageName && packageName.isNotBlank()
             }
+                .thenByDescending { it.packageFilter == "*" || it.packageFilter.isBlank() }
+                .thenByDescending { it.priority }
+                .thenByDescending { it.updatedAtMillis }
+                .thenByDescending { it.keywordPattern.length }
+        )
+
+        // Prefer rules matching current package or wildcard; then allow explicit keyword match even across SMS/test bench
+        val exactPackageHit = sorted.firstOrNull { rule ->
+            (rule.packageFilter == "*" || rule.packageFilter.isBlank() || rule.packageFilter == packageName) &&
+                matchesRule(rule)
+        }
+        if (exactPackageHit != null) return exactPackageHit.channelName.trim()
+
+        val crossPackageKeywordHit = sorted.firstOrNull { rule ->
+            rule.keywordPattern.trim().length >= 2 && matchesRuleKeyword(rule.keywordPattern, combined)
+        }
+        return crossPackageKeywordHit?.channelName?.trim()
+    }
+
+    fun findMatchingCustomRule(
+        packageName: String,
+        combined: String,
+        rules: List<CustomParsingRule>,
+        contentOnly: String = ""
+    ): CustomParsingRule? {
+        val exactEligible = rules.filter { rule ->
+            rule.enabled &&
+                (rule.packageFilter == "*" || rule.packageFilter.isBlank() || rule.packageFilter == packageName)
+        }
+        val allowCrossPackageKeywordFallback = packageName.isBlank() || ChinaPaymentCatalog.isSmsPackage(packageName)
+
+        val candidateTexts = listOfNotNull(
+            combined.takeIf { it.isNotBlank() },
+            contentOnly.takeIf { it.isNotBlank() && it != combined }
+        )
+        val incomingSigs = candidateTexts.flatMap { text ->
+            listOf(
+                buildNotificationTemplateSignature(text, keepMerchantSlotExact = false),
+                buildNotificationTemplateSignature(text, keepMerchantSlotExact = true)
+            )
+        }.filter { it.isNotBlank() }.distinct()
+
+        fun findInPool(pool: List<CustomParsingRule>, allowTemplates: Boolean): CustomParsingRule? {
+            if (pool.isEmpty()) return null
+            if (allowTemplates) {
+                val templateMatch = pool
+                    .filter { rule ->
+                        val sig = rule.templateSignature.trim()
+                        sig.isNotEmpty() && incomingSigs.any { inc ->
+                            sig.equals(inc, ignoreCase = true) ||
+                                (minOf(sig.length, inc.length) >= 12 &&
+                                    (sig.endsWith(inc, ignoreCase = true) || inc.endsWith(sig, ignoreCase = true)))
+                        }
+                    }
+                    .sortedWith(
+                        compareByDescending<CustomParsingRule> { it.isIgnoreRule }
+                            .thenByDescending { it.updatedAtMillis }
+                            .thenByDescending { it.priority }
+                    )
+                    .firstOrNull()
+                if (templateMatch != null) return templateMatch
+            }
+
+            return pool
+                .filter { it.keywordPattern.isNotBlank() }
+                .sortedWith(
+                    compareByDescending<CustomParsingRule> { it.isIgnoreRule }
+                        .thenByDescending { it.priority }
+                        .thenByDescending { it.updatedAtMillis }
+                        .thenByDescending { it.keywordPattern.length }
+                )
+                .firstOrNull { rule -> matchesRuleKeyword(rule.keywordPattern, combined) }
+        }
+
+        findInPool(exactEligible, allowTemplates = true)?.let { return it }
+
+        if (allowCrossPackageKeywordFallback) {
+            val crossPool = rules.filter { rule ->
+                rule.enabled &&
+                    rule.packageFilter != "*" &&
+                    rule.packageFilter.isNotBlank() &&
+                    rule.packageFilter != packageName &&
+                    rule.keywordPattern.trim().length >= 2
+            }
+            findInPool(crossPool, allowTemplates = false)?.let { return it }
+        }
+
+        return null
     }
 
     fun parse(
@@ -282,15 +439,22 @@ object ChinaNotificationParser {
 
         val ruleNumberStyle = NumberFormatStyle.fromRaw(matchedCustomRule?.numberFormatPattern)
         val allowLoose = matchedCustomRule != null && matchedCustomRule.priority > 0
-        val amountCents = extractAmountCents(
+        val primaryMention = extractPrimaryAmountAndCurrency(
             text = combined,
             numberStyle = ruleNumberStyle,
-            allowLooseStandaloneNumber = allowLoose
+            allowLooseStandaloneNumber = allowLoose,
+            requireExplicitUnit = false
         ) ?: return null
-        val currencyCode = detectCurrencyCode(combined)
+        val amountCents = primaryMention.amountCents
+        val currencyCode = if (primaryMention.hasSpecificCurrency) {
+            primaryMention.currencyCode
+        } else {
+            detectCurrencyCode(combined)
+        }
 
         val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
-        val rawChannel = matchedCustomRule?.channelName?.takeIf { it.isNotBlank() && it != "自动" }
+        val rawChannel = matchedCustomRule?.channelName?.trim()?.takeIf { isConcreteChannelName(it) }
+            ?: resolveChannelFromRules(packageName, combined, customRules, content.trim())
             ?: detectChannel(packageName, combined, customChannels)
         val channel = ChannelCatalog.normalizeRecognizedChannel(rawChannel)
         val type = if (matchedCustomRule != null &&
@@ -306,15 +470,12 @@ object ChinaNotificationParser {
         val merchant = matchedCustomRule?.merchantOverride?.trim()?.takeIf { it.isNotBlank() }
             ?: extractedMerchant
 
-        val hasExplicitRuleCategory = matchedCustomRule != null &&
-            matchedCustomRule.defaultCategory.isNotBlank() &&
-            matchedCustomRule.defaultCategory != "自动" &&
-            matchedCustomRule.defaultCategory != "其他"
-        val category = if (hasExplicitRuleCategory) {
-            matchedCustomRule!!.defaultCategory
-        } else {
-            inferCategory(merchant, combined, type)
-        }
+        val explicitRuleCategory = matchedCustomRule
+            ?.defaultCategory
+            ?.trim()
+            ?.takeIf { it.isNotBlank() && it != "自动" && it != "其他" }
+        val hasExplicitRuleCategory = explicitRuleCategory != null
+        val category = explicitRuleCategory ?: inferCategory(merchant, combined, type)
 
         val isHighPriorityCustomMatch = matchedCustomRule != null &&
             (matchedCustomRule.priority > 0 || matchedCustomRule.isTemplateRule || hasExplicitRuleCategory)
@@ -635,9 +796,63 @@ object ChinaNotificationParser {
         return (value * 100.0).roundToLong()
     }
 
-    fun detectCurrencyCode(text: String): String {
-        val target = stripBalanceAndDates(text).ifBlank { text }
+    fun mapCurrencyUnitToken(rawUnit: String?): Pair<String, Boolean> {
+        val unit = rawUnit?.trim().orEmpty()
+        if (unit.isEmpty()) return "CNY" to false
+        val upper = unit.uppercase()
+        return when {
+            upper in setOf("CNY", "RMB") || unit == "人民币" -> "CNY" to true
+            unit in setOf("元", "块钱", "块", "圆") -> "CNY" to false
+            unit in setOf("¥", "￥") -> "CNY" to false
+            upper == "HKD" || upper == "HK$" || unit in setOf("港币", "港元") -> "HKD" to true
+            upper == "MOP" || upper == "MOP$" || unit in setOf("澳门元", "澳门币") -> "MOP" to true
+            upper == "TWD" || upper == "NT$" || unit in setOf("新台币", "台币") -> "TWD" to true
+            upper == "SGD" || upper == "S$" || unit in setOf("新加坡元", "新币") -> "SGD" to true
+            upper == "NZD" || upper == "NZ$" || unit in setOf("新西兰元", "纽元") -> "NZD" to true
+            upper == "AUD" || upper == "A$" || unit in setOf("澳元", "澳币") -> "AUD" to true
+            upper == "CAD" || upper == "C$" || unit in setOf("加元", "加币") -> "CAD" to true
+            upper == "CHF" || unit in setOf("瑞士法郎", "瑞郎") -> "CHF" to true
+            upper == "THB" || unit in setOf("泰铢", "฿") -> "THB" to true
+            upper in setOf("MYR", "RM") || unit in setOf("林吉特", "马币") -> "MYR" to true
+            upper == "IDR" || unit == "印尼盾" -> "IDR" to true
+            upper == "VND" || unit in setOf("越南盾", "越盾", "₫") -> "VND" to true
+            upper == "PHP" || unit in setOf("菲律宾比索", "₱") -> "PHP" to true
+            upper == "INR" || unit in setOf("印度卢比", "₹") -> "INR" to true
+            upper == "RUB" || unit in setOf("卢布", "₽") -> "RUB" to true
+            upper == "BRL" || unit == "雷亚尔" -> "BRL" to true
+            upper == "MXN" || upper == "MX$" || unit == "墨西哥比索" -> "MXN" to true
+            upper == "ZAR" || unit == "南非兰特" -> "ZAR" to true
+            upper == "TRY" || unit in setOf("土耳其里拉", "₺") -> "TRY" to true
+            upper == "SEK" || unit == "瑞典克朗" -> "SEK" to true
+            upper == "NOK" || unit == "挪威克朗" -> "NOK" to true
+            upper == "DKK" || unit == "丹麦克朗" -> "DKK" to true
+            upper == "PLN" || unit in setOf("兹罗提", "zł") -> "PLN" to true
+            upper == "CZK" || unit in setOf("捷克克朗", "Kč") -> "CZK" to true
+            upper == "HUF" || unit == "福林" -> "HUF" to true
+            upper == "AED" || unit == "迪拉姆" -> "AED" to true
+            upper == "SAR" || unit == "沙特里亚尔" -> "SAR" to true
+            upper == "QAR" || unit == "卡塔尔里亚尔" -> "QAR" to true
+            upper == "ILS" || unit in setOf("谢克尔", "₪") -> "ILS" to true
+            upper == "ARS" || unit == "阿根廷比索" -> "ARS" to true
+            upper in setOf("USD", "US$", "$") || unit in setOf("美元", "美金") -> "USD" to true
+            upper == "EUR" || unit in setOf("欧元", "€") -> "EUR" to true
+            upper == "GBP" || unit in setOf("英镑", "£") -> "GBP" to true
+            upper == "JPY" || unit in setOf("日元", "日圆", "円") -> "JPY" to true
+            upper == "KRW" || unit in setOf("韩元", "₩") -> "KRW" to true
+            else -> "CNY" to false
+        }
+    }
 
+    fun detectCurrencyCode(text: String): String {
+        val primary = extractPrimaryAmountAndCurrency(text = text, requireExplicitUnit = true)
+        if (primary != null && primary.hasSpecificCurrency) {
+            return primary.currencyCode
+        }
+        val target = stripBalanceAndDates(text).ifBlank { text }
+        return detectCurrencyCodeFromRawText(target)
+    }
+
+    private fun detectCurrencyCodeFromRawText(target: String): String {
         return when {
             target.contains("HKD", ignoreCase = true) || target.contains("HK$") ||
                 target.contains("港币") || target.contains("港元") -> "HKD"
@@ -711,24 +926,247 @@ object ChinaNotificationParser {
         text: String,
         numberStyle: NumberFormatStyle = NumberFormatStyle.AUTO
     ): Long? {
+        return extractPrimaryAmountAndCurrency(
+            text = text,
+            numberStyle = numberStyle,
+            allowLooseStandaloneNumber = false,
+            requireExplicitUnit = true
+        )?.amountCents
+    }
+
+    fun extractPrimaryAmountAndCurrency(
+        text: String,
+        numberStyle: NumberFormatStyle = NumberFormatStyle.AUTO,
+        allowLooseStandaloneNumber: Boolean = false,
+        requireExplicitUnit: Boolean = false
+    ): ExtractedAmountMention? {
         if (text.isBlank()) return null
-        val cleaned = stripNonAmountNoiseForUnitCheck(text)
-        if (cleaned.isBlank()) return null
-        for (pattern in explicitUnitAmountPatterns) {
-            pattern.findAll(cleaned).forEach { match ->
-                val cents = parseNormalizedAmountCents(match.groupValues[1], numberStyle)
-                if (cents != null) return cents
+        val masked = maskNonAmountNoisePreserveLength(text)
+        if (masked.isBlank()) return null
+
+        val rawCandidates = mutableListOf<ExtractedAmountMention>()
+
+        fun addCandidate(
+            rawNum: String,
+            unitToken: String?,
+            hasExplicitUnit: Boolean,
+            start: Int,
+            end: Int
+        ) {
+            val cents = parseNormalizedAmountCents(rawNum, numberStyle) ?: return
+            val (code, isSpecific) = mapCurrencyUnitToken(unitToken)
+            val contextScore = scoreAmountMentionInContext(
+                maskedText = masked,
+                startIndex = start,
+                hasExplicitUnit = hasExplicitUnit
+            )
+            rawCandidates.add(
+                ExtractedAmountMention(
+                    amountCents = cents,
+                    currencyCode = code,
+                    hasExplicitUnit = hasExplicitUnit,
+                    hasSpecificCurrency = isSpecific,
+                    startIndex = start,
+                    endIndex = end,
+                    score = contextScore
+                )
+            )
+        }
+
+        // 1) Prefix currency unit + amount (e.g. 人民币55.50元, ¥35.00, SGD 10.49, 新加坡元10.49)
+        prefixUnitAmountRegex.findAll(masked).forEach { m ->
+            addCandidate(
+                rawNum = m.groupValues[2],
+                unitToken = m.groupValues[1],
+                hasExplicitUnit = true,
+                start = m.range.first,
+                end = m.range.last + 1
+            )
+        }
+
+        // 2) Amount + suffix currency unit (e.g. 10.49新加坡元, 55.50人民币, 38.60元, 200日元)
+        suffixUnitAmountRegex.findAll(masked).forEach { m ->
+            addCandidate(
+                rawNum = m.groupValues[1],
+                unitToken = m.groupValues[2],
+                hasExplicitUnit = true,
+                start = m.range.first,
+                end = m.range.last + 1
+            )
+        }
+
+        // 3) Cue-prefixed amounts (e.g. 消费38.60, 金额10.49) when explicit unit is not strictly required
+        if (!requireExplicitUnit) {
+            cueAmountRegex.findAll(masked).forEach { m ->
+                val suffixUnit = m.groupValues.getOrNull(2)?.takeIf { it.isNotBlank() }
+                addCandidate(
+                    rawNum = m.groupValues[1],
+                    unitToken = suffixUnit,
+                    hasExplicitUnit = suffixUnit != null,
+                    start = m.range.first,
+                    end = m.range.last + 1
+                )
+            }
+        }
+
+        // Deduplicate overlapping mentions on the exact same numeric span (prefer explicit unit / specific currency / higher score)
+        val deduped = mutableListOf<ExtractedAmountMention>()
+        val sortedByPriority = rawCandidates.sortedWith(
+            compareByDescending<ExtractedAmountMention> { it.hasExplicitUnit }
+                .thenByDescending { it.hasSpecificCurrency }
+                .thenByDescending { it.score }
+                .thenBy { it.startIndex }
+        )
+        for (candidate in sortedByPriority) {
+            val overlaps = deduped.any { existing ->
+                candidate.startIndex < existing.endIndex && existing.startIndex < candidate.endIndex
+            }
+            if (!overlaps) {
+                deduped.add(candidate)
+            }
+        }
+
+        if (deduped.isNotEmpty()) {
+            // If all candidates are heavily penalized secondary amounts (e.g., ONLY a balance sentence),
+            // still skip pure-balance mentions when caller is checking standard notification parsing unless it's the only explicit transaction.
+            val nonSecondary = deduped.filter { it.score > -50 }
+            val pool = nonSecondary.ifEmpty { deduped }
+            val winner = pool.sortedWith(
+                compareByDescending<ExtractedAmountMention> { it.score }
+                    .thenByDescending { it.hasExplicitUnit }
+                    .thenBy { it.startIndex }
+            ).first()
+            // Avoid returning a pure balance-only number when no primary cue exists and score <= -80
+            if (winner.score <= -80 && !hasAnyPrimaryCue(masked)) {
+                return null
+            }
+            return winner
+        }
+
+        if (allowLooseStandaloneNumber && !requireExplicitUnit) {
+            val sanitizedForLoose = masked.replace(Regex("""\d{4}\s*卡"""), " ")
+            standaloneNumberRegex.findAll(sanitizedForLoose).forEach { match ->
+                val raw = match.groupValues[1]
+                val hasFormatting = raw.contains('.') || raw.contains(',') || raw.contains(' ')
+                if (hasFormatting || raw.length != 4) {
+                    val cents = parseNormalizedAmountCents(raw, numberStyle)
+                    if (cents != null) {
+                        val score = scoreAmountMentionInContext(sanitizedForLoose, match.range.first, false)
+                        if (score > -80) {
+                            return ExtractedAmountMention(
+                                amountCents = cents,
+                                currencyCode = detectCurrencyCodeFromRawText(masked),
+                                hasExplicitUnit = false,
+                                hasSpecificCurrency = false,
+                                startIndex = match.range.first,
+                                endIndex = match.range.last + 1,
+                                score = score
+                            )
+                        }
+                    }
+                }
             }
         }
         return null
     }
 
-    private fun stripNonAmountNoiseForUnitCheck(text: String): String {
-        var result = stripBalanceAndDates(text)
-        for (regex in nonAmountNoiseRegexes) {
-            result = result.replace(regex, " ")
+    private fun hasAnyPrimaryCue(text: String): Boolean =
+        primaryTransactionCues.any { text.contains(it) } || strongPrimaryAmountCues.any { text.contains(it) }
+
+    private fun scoreAmountMentionInContext(
+        maskedText: String,
+        startIndex: Int,
+        hasExplicitUnit: Boolean
+    ): Int {
+        val clauseDelimiters = charArrayOf('，', ',', '。', ';', '；', '\n', '！', '!', '？', '?')
+        val clauseStart = maskedText.lastIndexOfAny(clauseDelimiters, (startIndex - 1).coerceAtLeast(0))
+            .let { if (it < 0) 0 else it + 1 }
+        val clausePrefix = maskedText.substring(clauseStart, startIndex).trim()
+
+        val prevClausePrefix = if (clauseStart > 1) {
+            val prevDelim = maskedText.lastIndexOfAny(clauseDelimiters, (clauseStart - 2).coerceAtLeast(0))
+            val prevStart = if (prevDelim < 0) 0 else prevDelim + 1
+            maskedText.substring(prevStart, (clauseStart - 1).coerceAtLeast(prevStart)).trim()
+        } else {
+            ""
         }
-        return result.trim()
+
+        var score = if (hasExplicitUnit) 15 else 0
+
+        // Check nearest cue in the same clause before the amount
+        val latestSecondaryPos = secondaryAmountCues
+            .mapNotNull { kw -> clausePrefix.lastIndexOf(kw).takeIf { it >= 0 }?.let { it + kw.length } }
+            .maxOrNull() ?: -1
+        val latestStrongPrimaryPos = strongPrimaryAmountCues
+            .mapNotNull { kw -> clausePrefix.lastIndexOf(kw).takeIf { it >= 0 }?.let { it + kw.length } }
+            .maxOrNull() ?: -1
+        val latestPrimaryPos = primaryTransactionCues
+            .mapNotNull { kw -> clausePrefix.lastIndexOf(kw).takeIf { it >= 0 }?.let { it + kw.length } }
+            .maxOrNull() ?: -1
+        val latestAmountLabelPos = amountLabelCues
+            .mapNotNull { kw -> clausePrefix.lastIndexOf(kw).takeIf { it >= 0 }?.let { it + kw.length } }
+            .maxOrNull() ?: -1
+
+        val nearestPrimaryPos = maxOf(latestStrongPrimaryPos, latestPrimaryPos)
+
+        when {
+            latestSecondaryPos > nearestPrimaryPos && latestSecondaryPos > latestAmountLabelPos -> {
+                // Directly preceded by secondary/auxiliary cue such as 已冻结 / 余额 / 折合 / 优惠立减 / 原价 / 手续费
+                score -= 100
+            }
+            latestStrongPrimaryPos >= 0 && latestStrongPrimaryPos >= latestSecondaryPos -> {
+                score += 75
+            }
+            latestPrimaryPos >= 0 && latestPrimaryPos >= latestSecondaryPos -> {
+                score += 55
+            }
+            latestAmountLabelPos >= 0 -> {
+                // Clause says "金额10.49新加坡元" -> check whether the preceding clause is a primary transaction or secondary cue
+                val prevHasPrimary = primaryTransactionCues.any { prevClausePrefix.contains(it) } ||
+                    strongPrimaryAmountCues.any { prevClausePrefix.contains(it) }
+                val prevHasSecondary = secondaryAmountCues.any { prevClausePrefix.contains(it) }
+                score += when {
+                    prevHasPrimary -> 40
+                    prevHasSecondary -> -60
+                    else -> 20
+                }
+            }
+            else -> {
+                // No explicit cue in the same clause; lightly consider preceding clause
+                if (primaryTransactionCues.any { prevClausePrefix.contains(it) }) {
+                    score += 10
+                }
+            }
+        }
+        return score
+    }
+
+    private fun maskRegexPreserveLength(input: String, regex: Regex): String {
+        val chars = input.toCharArray()
+        regex.findAll(input).forEach { match ->
+            for (i in match.range.first..match.range.last) {
+                if (i in chars.indices && chars[i] != '\n') {
+                    chars[i] = ' '
+                }
+            }
+        }
+        return String(chars)
+    }
+
+    private fun maskNonAmountNoisePreserveLength(text: String): String {
+        var result = text
+        val dateAndTimeRegexes = listOf(
+            Regex("""\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?"""),
+            Regex("""\d{1,2}月\d{1,2}日"""),
+            Regex("""\d{1,2}:\d{2}(?::\d{2})?""")
+        )
+        for (regex in dateAndTimeRegexes) {
+            result = maskRegexPreserveLength(result, regex)
+        }
+        for (regex in nonAmountNoiseRegexes) {
+            result = maskRegexPreserveLength(result, regex)
+        }
+        return result
     }
 
     fun extractAmountCents(
@@ -736,39 +1174,67 @@ object ChinaNotificationParser {
         numberStyle: NumberFormatStyle = NumberFormatStyle.AUTO,
         allowLooseStandaloneNumber: Boolean = false
     ): Long? {
-        val target = stripBalanceAndDates(text).ifBlank { text }
-
-        for (pattern in amountPatterns) {
-            val match = pattern.find(target)
-            if (match != null) {
-                val cents = parseNormalizedAmountCents(match.groupValues[1], numberStyle)
-                if (cents != null) return cents
-            }
-        }
-
-        if (allowLooseStandaloneNumber) {
-            val sanitizedForLoose = stripNonAmountNoiseForUnitCheck(target)
-                .replace(Regex("""\d{4}\s*卡"""), " ")
-            standaloneNumberRegex.findAll(sanitizedForLoose).forEach { match ->
-                val raw = match.groupValues[1]
-                // Avoid matching bare 4-digit year/card-tail unless it has decimal or grouping separator
-                val hasFormatting = raw.contains('.') || raw.contains(',') || raw.contains(' ')
-                if (hasFormatting || raw.length != 4) {
-                    val cents = parseNormalizedAmountCents(raw, numberStyle)
-                    if (cents != null) return cents
-                }
-            }
-        }
-        return null
+        return extractPrimaryAmountAndCurrency(
+            text = text,
+            numberStyle = numberStyle,
+            allowLooseStandaloneNumber = allowLooseStandaloneNumber,
+            requireExplicitUnit = false
+        )?.amountCents
     }
 
     private fun stripBalanceAndDates(text: String): String {
         return text
-            .replace(Regex("""(?:可用余额|当前余额|账户余额|交易后余额|余额|可用额度)[为:：]?\s*(?:人民币|RMB|CNY|USD|HKD|EUR|JPY|GBP|[¥￥$€£])?\s*[0-9,.\s]+(?:元|美元|港币|日元|欧元|英镑)?"""), " ")
+            .replace(Regex("""(?:可用余额|当前余额|账户余额|交易后余额|余额|可用额度|剩余额度|已冻结|冻结)[为是:：\s]*$prefixCurrencyUnitToken?\s*[0-9,.\s]+$suffixCurrencyUnitToken?""", RegexOption.IGNORE_CASE), " ")
             .replace(Regex("""\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?"""), " ")
             .replace(Regex("""\d{1,2}月\d{1,2}日"""), " ")
             .replace(Regex("""\d{1,2}:\d{2}(?::\d{2})?"""), " ")
     }
+
+    private val bankAbbreviationMap: List<Pair<String, String>> = listOf(
+        "中国工商银行" to "工商银行",
+        "中国建设银行" to "建设银行",
+        "中国农业银行" to "农业银行",
+        "中国邮政储蓄银行" to "邮储银行",
+        "邮政储蓄银行" to "邮储银行",
+        "中国银行" to "中国银行",
+        "交通银行" to "交通银行",
+        "招商银行" to "招商银行",
+        "平安银行" to "平安银行",
+        "浦发银行" to "浦发银行",
+        "上海浦东发展银行" to "浦发银行",
+        "兴业银行" to "兴业银行",
+        "中信银行" to "中信银行",
+        "光大银行" to "光大银行",
+        "中国光大银行" to "光大银行",
+        "民生银行" to "民生银行",
+        "中国民生银行" to "民生银行",
+        "广发银行" to "广发银行",
+        "华夏银行" to "华夏银行",
+        "北京银行" to "北京银行",
+        "上海银行" to "上海银行",
+        "宁波银行" to "宁波银行",
+        "江苏银行" to "江苏银行",
+        "南京银行" to "南京银行",
+        "杭州银行" to "杭州银行",
+        "浙商银行" to "浙商银行",
+        "渤海银行" to "渤海银行",
+        "恒丰银行" to "恒丰银行",
+        "网商银行" to "网商银行",
+        "微众银行" to "微众银行",
+        "【中行】" to "中国银行",
+        "【工行】" to "工商银行",
+        "【建行】" to "建设银行",
+        "【农行】" to "农业银行",
+        "【招行】" to "招商银行",
+        "【交行】" to "交通银行",
+        "【邮储】" to "邮储银行",
+        "【浦发】" to "浦发银行",
+        "【兴业】" to "兴业银行",
+        "【中信】" to "中信银行",
+        "【光大】" to "光大银行",
+        "【民生】" to "民生银行",
+        "【广发】" to "广发银行"
+    )
 
     fun detectChannel(
         packageName: String,
@@ -796,6 +1262,21 @@ object ChinaNotificationParser {
             }
         }
 
+        // Explicit 【xxx银行】 / 【xxx支付】 sender tags in SMS or notification text take precedence over generic SMS package
+        val bracketTag = Regex("""[【\[]([^】\]]{2,14})[】\]]""").findAll(text)
+            .map { it.groupValues[1].trim() }
+            .firstOrNull { tag ->
+                tag.contains("银行") || tag.contains("支付") || tag.contains("农信") || tag.contains("信用社")
+            }
+        if (bracketTag != null) {
+            bankAbbreviationMap.firstOrNull { bracketTag.contains(it.first) }?.let { return it.second }
+            if (bracketTag.endsWith("银行") || bracketTag.endsWith("农信") || bracketTag.endsWith("信用社")) {
+                return bracketTag.removePrefix("中国").let { short ->
+                    if (bracketTag == "中国银行") "中国银行" else short.ifBlank { bracketTag }
+                }
+            }
+        }
+
         ChinaPaymentCatalog.watchedPackageMap[packageName]?.let { return it.name }
 
         for (item in ChinaPaymentCatalog.channels) {
@@ -804,15 +1285,14 @@ object ChinaNotificationParser {
             }
         }
 
+        for ((alias, canonical) in bankAbbreviationMap) {
+            if (text.contains(alias)) return canonical
+        }
+
         return when {
             text.contains("花呗") || text.contains("余额宝") || text.contains("支付宝") -> "支付宝"
             text.contains("零钱通") || text.contains("零钱") || text.contains("微信") -> "微信支付"
             text.contains("银联") || text.contains("云闪付") -> "云闪付"
-            text.contains("网商银行") -> "网商银行"
-            text.contains("微众银行") -> "微众银行"
-            text.contains("北京银行") -> "北京银行"
-            text.contains("上海银行") -> "上海银行"
-            text.contains("华夏银行") -> "华夏银行"
             text.contains("信用卡") || text.contains("借记卡") -> "银行卡"
             else -> "未知渠道"
         }

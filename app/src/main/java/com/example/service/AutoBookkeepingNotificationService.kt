@@ -21,12 +21,41 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val recentFingerprints = ConcurrentHashMap<String, Long>()
+    private val appLabelCache = ConcurrentHashMap<String, String>()
     private val repository by lazy(LazyThreadSafetyMode.NONE) { LedgerRepository(applicationContext) }
     private val aiManager by lazy(LazyThreadSafetyMode.NONE) { com.example.data.AiUnderstandingManager() }
+
+    @Volatile
+    private var monitoredPolicy: MonitoredAppPolicy = MonitoredAppPolicy()
+
+    override fun onCreate() {
+        super.onCreate()
+        serviceScope.launch {
+            runCatching {
+                repository.observeSettings().collect { settings ->
+                    monitoredPolicy = MonitoredAppPolicy(
+                        customized = settings.monitoredAppsCustomized,
+                        packages = settings.monitoredAppPackages.toSet(),
+                        allowOtherFinancialAppsFallback = settings.allowOtherFinancialAppsFallback
+                    )
+                }
+            }
+        }
+    }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
         NotificationBridge.setServiceConnected(true)
+        serviceScope.launch {
+            runCatching {
+                val settings = repository.getSettingsOnce()
+                monitoredPolicy = MonitoredAppPolicy(
+                    customized = settings.monitoredAppsCustomized,
+                    packages = settings.monitoredAppPackages.toSet(),
+                    allowOtherFinancialAppsFallback = settings.allowOtherFinancialAppsFallback
+                )
+            }
+        }
         Log.d(TAG, "AutoBookkeepingNotificationService connected.")
     }
 
@@ -41,12 +70,14 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         if (level >= TRIM_MEMORY_UI_HIDDEN || level >= TRIM_MEMORY_BACKGROUND) {
             val now = System.currentTimeMillis()
             recentFingerprints.entries.removeIf { now - it.value > DEDUP_WINDOW_MS * 2 }
+            appLabelCache.clear()
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         recentFingerprints.clear()
+        appLabelCache.clear()
         serviceScope.cancel()
     }
 
@@ -68,8 +99,9 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
 
         if (title.isBlank() && content.isBlank()) return
 
-        val isWatched = ChinaPaymentCatalog.isWatchedPackage(sbn.packageName) || isSelfTestNotification
-        if (!isWatched && !ChinaNotificationParser.isLikelyFinancialNotification(sbn.packageName, title, content)) {
+        val policy = monitoredPolicy
+        val isLikelyFinancial = ChinaNotificationParser.isLikelyFinancialNotification(sbn.packageName, title, content)
+        if (!shouldProcessNotificationPackage(sbn.packageName, isSelfTestNotification, policy, isLikelyFinancial)) {
             return
         }
 
@@ -84,8 +116,11 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             recentFingerprints.entries.removeIf { now - it.value > DEDUP_WINDOW_MS * 4 }
         }
 
-        val appLabel = ChinaPaymentCatalog.watchedPackageMap[sbn.packageName]?.name
-            ?: if (isSelfTestNotification) "系统通知测试" else sbn.packageName
+        val appLabel = if (isSelfTestNotification) {
+            "系统通知测试"
+        } else {
+            resolveCachedAppLabel(sbn.packageName)
+        }
 
         serviceScope.launch {
             processIncomingNotification(
@@ -96,6 +131,16 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 occurredAt = sbn.postTime.takeIf { it > 0L } ?: now
             )
         }
+    }
+
+    private fun resolveCachedAppLabel(pkg: String): String {
+        appLabelCache[pkg]?.let { return it }
+        val resolved = InstalledAppsCatalog.resolveAppLabel(applicationContext, pkg)
+        if (appLabelCache.size >= 24) {
+            appLabelCache.clear()
+        }
+        appLabelCache[pkg] = resolved
+        return resolved
     }
 
     private suspend fun processIncomingNotification(
@@ -180,7 +225,12 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             ?: occurredAt
 
         if (parsed == null || !parsed.isFinancialTransaction || parsed.amountCents <= 0L) {
-            if (ChinaNotificationParser.hasUncertainFinancialCue(packageName, title, content)) {
+            val isExplicitlyWatched = if (settings.monitoredAppsCustomized) {
+                packageName in settings.monitoredAppPackages
+            } else {
+                ChinaPaymentCatalog.isWatchedPackage(packageName)
+            }
+            if (ChinaNotificationParser.hasUncertainFinancialCue(packageName, title, content, treatAsWatched = isExplicitlyWatched)) {
                 val inquiry = com.example.model.NotificationInquiry(
                     packageName = packageName,
                     appLabel = appLabel,
@@ -321,8 +371,30 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         }
     }
 
-    private companion object {
-        const val TAG = "AutoBookkeepingSvc"
-        const val DEDUP_WINDOW_MS = 15_000L
+    data class MonitoredAppPolicy(
+        val customized: Boolean = false,
+        val packages: Set<String> = emptySet(),
+        val allowOtherFinancialAppsFallback: Boolean = true
+    )
+
+    companion object {
+        private const val TAG = "AutoBookkeepingSvc"
+        private const val DEDUP_WINDOW_MS = 15_000L
+
+        fun shouldProcessNotificationPackage(
+            packageName: String,
+            isSelfTest: Boolean,
+            policy: MonitoredAppPolicy,
+            isLikelyFinancial: Boolean
+        ): Boolean {
+            if (isSelfTest) return true
+            val isWatched = if (policy.customized) {
+                packageName in policy.packages
+            } else {
+                ChinaPaymentCatalog.isWatchedPackage(packageName)
+            }
+            if (isWatched) return true
+            return policy.allowOtherFinancialAppsFallback && isLikelyFinancial
+        }
     }
 }

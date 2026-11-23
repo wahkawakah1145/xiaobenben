@@ -194,8 +194,21 @@ object ChinaPaymentCatalog {
         }
     }
 
+    fun isSmsPackage(packageName: String): Boolean {
+        if (packageName.isBlank()) return false
+        if (smsPackageNames.contains(packageName)) return true
+        val lower = packageName.lowercase()
+        return lower.endsWith(".mms") ||
+            lower.endsWith(".messaging") ||
+            lower.contains(".mms.") ||
+            lower == "com.android.messaging" ||
+            lower == "com.hihonor.mms" ||
+            lower == "com.oneplus.mms" ||
+            lower == "com.meizu.mms"
+    }
+
     fun isWatchedPackage(packageName: String): Boolean {
-        return watchedPackageMap.containsKey(packageName) || smsPackageNames.contains(packageName)
+        return watchedPackageMap.containsKey(packageName) || isSmsPackage(packageName)
     }
 
     fun resolveSourceApp(packageName: String, text: String): SourceApp {
@@ -203,7 +216,7 @@ object ChinaPaymentCatalog {
             packageName == "com.eg.android.AlipayGphone" || text.contains("支付宝") || text.contains("花呗") -> SourceApp.ALIPAY
             packageName == "com.tencent.mm" || text.contains("微信支付") || text.contains("微信转账") -> SourceApp.WECHAT
             packageName == "com.unionpay" || text.contains("云闪付") -> SourceApp.UNIONPAY
-            smsPackageNames.contains(packageName) -> SourceApp.BANK_SMS
+            isSmsPackage(packageName) -> SourceApp.BANK_SMS
             watchedPackageMap.containsKey(packageName) -> SourceApp.BANK_APP
             text.contains("银行") || Regex("955\\d{2}").containsMatchIn(text) -> SourceApp.BANK_SMS
             else -> SourceApp.LOCAL_BENCH

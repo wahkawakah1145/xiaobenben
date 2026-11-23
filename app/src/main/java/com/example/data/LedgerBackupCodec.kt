@@ -74,6 +74,13 @@ object LedgerBackupCodec {
                         settings.dedupExcludedTransactionIds.distinct().forEach { put(it) }
                     })
                 }
+                put("monitoredAppsCustomized", settings.monitoredAppsCustomized)
+                if (settings.monitoredAppPackages.isNotEmpty()) {
+                    put("monitoredAppPackages", JSONArray().apply {
+                        settings.monitoredAppPackages.distinct().forEach { put(it) }
+                    })
+                }
+                put("allowOtherFinancialAppsFallback", settings.allowOtherFinancialAppsFallback)
             })
             put("transactions", JSONArray().apply {
                 transactions.forEach { tx ->
@@ -349,7 +356,23 @@ object LedgerBackupCodec {
                             if (id.isNotEmpty()) add(id)
                         }
                     }.distinct()
-                } ?: currentSettings.dedupExcludedTransactionIds
+                } ?: currentSettings.dedupExcludedTransactionIds,
+                monitoredAppsCustomized = s.optBoolean(
+                    "monitoredAppsCustomized",
+                    currentSettings.monitoredAppsCustomized
+                ),
+                monitoredAppPackages = s.optJSONArray("monitoredAppPackages")?.let { arr ->
+                    buildList(arr.length()) {
+                        for (i in 0 until arr.length()) {
+                            val pkg = arr.optString(i).trim()
+                            if (pkg.isNotEmpty()) add(pkg)
+                        }
+                    }.distinct()
+                } ?: currentSettings.monitoredAppPackages,
+                allowOtherFinancialAppsFallback = s.optBoolean(
+                    "allowOtherFinancialAppsFallback",
+                    currentSettings.allowOtherFinancialAppsFallback
+                )
             )
         }
 

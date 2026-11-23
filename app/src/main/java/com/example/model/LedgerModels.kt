@@ -1044,7 +1044,10 @@ data class BudgetSettings(
     val transferCategories: List<String> = CategoryCatalog.transferCategories,
     val categoryIcons: Map<String, String> = emptyMap(),
     val customChannels: List<String> = ChannelCatalog.defaultChannels,
-    val dedupExcludedTransactionIds: List<String> = emptyList()
+    val dedupExcludedTransactionIds: List<String> = emptyList(),
+    val monitoredAppsCustomized: Boolean = false,
+    val monitoredAppPackages: List<String> = emptyList(),
+    val allowOtherFinancialAppsFallback: Boolean = true
 )
 
 data class WebDavConfig(

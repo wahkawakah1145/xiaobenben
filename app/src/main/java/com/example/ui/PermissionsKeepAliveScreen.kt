@@ -56,6 +56,7 @@ fun PermissionsKeepAliveScreen(
     isAccessibilityEnabled: Boolean,
     isIgnoringBattery: Boolean,
     viewModel: LedgerViewModel,
+    onOpenMonitoredApps: () -> Unit = {},
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -181,6 +182,40 @@ fun PermissionsKeepAliveScreen(
                             Icon(AppIcons.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(if (isListenerEnabled) "管理通知使用权" else "开启通知读取权限")
+                        }
+
+                        HorizontalDivider()
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "自定义监听应用",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = if (settings.monitoredAppsCustomized) {
+                                        "已选 ${settings.monitoredAppPackages.size} 款应用" +
+                                            if (settings.allowOtherFinancialAppsFallback) " · 含强动账兜底" else " · 仅监听已选"
+                                    } else {
+                                        "默认监听微信、支付宝、短信及主流银行，点击图形化自选"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = onOpenMonitoredApps,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("settings_open_monitored_apps_button")
+                            ) {
+                                Text("选择应用")
+                            }
                         }
 
                         HorizontalDivider()

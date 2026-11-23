@@ -490,8 +490,11 @@ class AiUnderstandingManager {
         }
 
         val dir = modelDirectory(context, resolvedId)
-        val amountCents = ChinaNotificationParser.extractExplicitUnitAmountCents(combined)
-            ?: return@withContext Result.failure(IllegalStateException("本地小模型未能在文本中检测到带金额单位的有效金额"))
+        val primaryMention = ChinaNotificationParser.extractPrimaryAmountAndCurrency(
+            text = combined,
+            requireExplicitUnit = true
+        ) ?: return@withContext Result.failure(IllegalStateException("本地小模型未能在文本中检测到带金额单位的有效金额"))
+        val amountCents = primaryMention.amountCents
 
         val (matchedVocabHits, totalVocabCount) = scanVocabMatchesStreaming(dir, combined)
         val matchedPromptRule = matchPromptReferenceRule(selectedRules, packageName, title, content)
@@ -500,16 +503,21 @@ class AiUnderstandingManager {
                 IllegalStateException("参考规则「${matchedPromptRule.name}」将其判定为非账单忽略通知")
             )
         }
-        val currencyCode = ChinaNotificationParser.detectCurrencyCode(combined)
+        val currencyCode = if (primaryMention.hasSpecificCurrency) {
+            primaryMention.currencyCode
+        } else {
+            ChinaNotificationParser.detectCurrencyCode(combined)
+        }
         val type = when {
             matchedPromptRule != null && !matchedPromptRule.defaultType.equals("AUTO", ignoreCase = true) ->
                 TransactionType.fromRaw(matchedPromptRule.defaultType)
             else -> inferTypeWithVocab(combined)
         }
         val sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, combined)
-        val rawChannel = matchedPromptRule?.channelName?.takeIf { it.isNotBlank() }
+        val rawChannel = matchedPromptRule?.channelName?.trim()?.takeIf { ChinaNotificationParser.isConcreteChannelName(it) }
+            ?: ChinaNotificationParser.resolveChannelFromRules(packageName, combined, selectedRules, content.trim())
             ?: ChinaNotificationParser.detectChannel(packageName, combined, activeChannels)
-                .takeIf { it != "未知渠道" }
+                .takeIf { ChinaNotificationParser.isConcreteChannelName(it) }
             ?: ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
             ?: ChinaPaymentCatalog.channels.firstOrNull { ch ->
                 combined.contains(ch.name) || ch.smsCodes.any { combined.contains(it) }
@@ -517,7 +525,7 @@ class AiUnderstandingManager {
             ?: "未知渠道"
         val channel = com.example.model.ChannelCatalog.normalizeRecognizedChannel(rawChannel)
 
-        val baseParsed = ChinaNotificationParser.parse(packageName, title, content, emptyList(), true, customChannels = activeChannels)
+        val baseParsed = ChinaNotificationParser.parse(packageName, title, content, selectedRules, true, customChannels = activeChannels)
         val merchant = matchedPromptRule?.merchantOverride?.takeIf { it.isNotBlank() }
             ?: baseParsed?.merchant
                 ?.takeIf { !it.endsWith("消费") && !it.endsWith("收款") && it != "未知渠道消费" }
@@ -660,10 +668,11 @@ class AiUnderstandingManager {
                 .take(40)
             val rawAiChannel = parsedJson.optString("channel")
                 .trim()
-                .takeIf { it.isNotBlank() && it != "null" }
+                .takeIf { it.isNotBlank() && it != "null" && ChinaNotificationParser.isConcreteChannelName(it) }
                 ?.take(40)
+                ?: ChinaNotificationParser.resolveChannelFromRules(packageName, "$title\n$content", selectedRules, content.trim())
                 ?: ChinaNotificationParser.detectChannel(packageName, "$title $content", activeChannels)
-                    .takeIf { it != "未知渠道" }
+                    .takeIf { ChinaNotificationParser.isConcreteChannelName(it) }
                 ?: ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
                 ?: "未知渠道"
             val channel = com.example.model.ChannelCatalog.normalizeRecognizedChannel(rawAiChannel)
@@ -919,11 +928,12 @@ class AiUnderstandingManager {
                 {"isFinancial":boolean,"amount":number,"currency":"ISO4217三位币种代码(如CNY/USD/HKD/EUR/JPY/GBP/CHF/SGD/KRW/AUD/CAD/THB/MYR等)","type":"EXPENSE|INCOME|TRANSFER","category":"$categoryUnion","merchant":"交易对方或商户名","channel":"$channelUnion","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm:ss或MM-dd HH:mm:ss或HH:mm:ss或null","confidence":0.0到1.0之间数字}
                 严格遵守以下判定规则：
                 1. 验证码、快递物流、登录提醒、营销广告、免息分期邀约等非动账消息必须返回 isFinancial=false，不可编造未出现的金额。
-                2. 【严格金额单位校验】仅当通知中存在前后紧邻明确金额单位或货币符号的数字（如 ¥/￥/$/€/£/元/块/RMB/CNY/USD/HKD/JPY 等）时才视为有效金额；任何前后无金额单位的孤立数字（如 [3条]、中国移动10086、10010、955xx、订单号、流量GB、人数、验证码、时间等）一律返回 isFinancial=false。
-                3. 【不计收支规则】微信/支付宝零钱提现、余额提现、提现到银行卡、银行卡收到提现到账、零钱充值、转入/转出零钱通或余额宝、本人名下账户互转、本人转账/同名转账、信用卡还款均属于内部资金划转，不计入日常支出与收入，必须返回 "type":"TRANSFER"，且 category 设为 "不计收支" 或 "账户互转"。
-                4. 【渠道归属规则】识别到“花呗”“余额宝”时 channel 统一归属为“支付宝”；识别到“零钱”“零钱通”时 channel 统一归属为“微信支付”。
-                5. 消费退款、退货返现、冲正退回的 type 应为 INCOME（category 设为 "退款返现"）；他人向我转账收款 type 为 INCOME，向他人消费付款或发红包 type 为 EXPENSE。
-                6. occurredTime 尽量保留到秒（yyyy-MM-dd HH:mm:ss）；未出现时间则返回 null。
+                2. 【严格金额单位校验】仅当通知中存在前后紧邻明确金额单位或中文/外币货币单位的数字（如 ¥/￥/$/€/£/元/块/人民币/新加坡元/美元/港元/日元/RMB/CNY/USD/SGD 等）时才视为有效金额；任何前后无金额单位的孤立数字（如 [3条]、中国移动10086、10010、955xx、订单号、流量GB、人数、验证码、时间等）一律返回 isFinancial=false。
+                3. 【多金额精准提取】同一通知出现多个金额时（如同时出现消费/支出金额与已冻结金额、可用余额、折合人民币、手续费、原价或优惠立减），仅提取“支出/消费/付款/扣款/入账/收款”等核心交易字眼对应的金额及其配对币种（如“消费交易，金额10.49新加坡元，已冻结55.50人民币”应提取 amount=10.49, currency="SGD"）。
+                4. 【不计收支规则】微信/支付宝零钱提现、余额提现、提现到银行卡、银行卡收到提现到账、零钱充值、转入/转出零钱通或余额宝、本人名下账户互转、本人转账/同名转账、信用卡还款均属于内部资金划转，不计入日常支出与收入，必须返回 "type":"TRANSFER"，且 category 设为 "不计收支" 或 "账户互转"。
+                5. 【渠道归属规则】识别到“花呗”“余额宝”时 channel 统一归属为“支付宝”；识别到“零钱”“零钱通”时 channel 统一归属为“微信支付”。
+                6. 消费退款、退货返现、冲正退回的 type 应为 INCOME（category 设为 "退款返现"）；他人向我转账收款 type 为 INCOME，向他人消费付款或发红包 type 为 EXPENSE。
+                7. occurredTime 尽量保留到秒（yyyy-MM-dd HH:mm:ss）；未出现时间则返回 null。
             """.trimIndent()
         }
 
@@ -964,7 +974,14 @@ class AiUnderstandingManager {
                 trimmed.contains("你是一个精准的中国大陆账单与支付通知结构化解析引擎。") &&
                     trimmed.contains("【严格金额单位校验】") &&
                     !trimmed.contains("【渠道归属规则】")
-            return isVeryOldDefault || isPreviousDefaultWithoutUnitRule || isPreviousDefaultWithoutChannelRule
+            val isPreviousDefaultWithoutMultiAmountRule =
+                trimmed.contains("你是一个精准的中国大陆账单与支付通知结构化解析引擎。") &&
+                    trimmed.contains("【渠道归属规则】") &&
+                    !trimmed.contains("【多金额精准提取】")
+            return isVeryOldDefault ||
+                isPreviousDefaultWithoutUnitRule ||
+                isPreviousDefaultWithoutChannelRule ||
+                isPreviousDefaultWithoutMultiAmountRule
         }
 
         fun sanitizeStoredCustomPrompt(

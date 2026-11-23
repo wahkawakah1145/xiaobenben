@@ -2374,7 +2374,235 @@ class ExampleRobolectricTest {
     org.junit.Assert.assertTrue(com.example.model.FeatureTipsCatalog.ANALYTICS_PIE_PINCH in tipIds)
     org.junit.Assert.assertTrue(com.example.model.FeatureTipsCatalog.CALENDAR_GESTURES in tipIds)
   }
+
+  @Test
+  fun `chinese currency units and multi-amount notification extract only primary transaction amount and currency`() {
+    val bocDualCurrency =
+      "您的借记卡****(尾号)于1123发生双信息无卡消费交易，金额10.49新加坡元，已冻结55.50人民币。【中国银行】"
+    org.junit.Assert.assertTrue(com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit(bocDualCurrency))
+    assertEquals(1049L, com.example.parser.ChinaNotificationParser.extractExplicitUnitAmountCents(bocDualCurrency))
+
+    val parsedBoc = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "com.android.mms",
+      title = "95566",
+      content = bocDualCurrency
+    )
+    org.junit.Assert.assertNotNull(parsedBoc)
+    assertEquals(1049L, parsedBoc!!.amountCents)
+    assertEquals("SGD", parsedBoc.currencyCode)
+    assertEquals(com.example.model.TransactionType.EXPENSE, parsedBoc.type)
+    assertEquals("中国银行", parsedBoc.channel)
+
+    // Reverse clause order: frozen amount first, actual expense second
+    val reverseOrder = "已冻结55.50人民币，您的借记卡于今日消费支出10.49新加坡元。【中国银行】"
+    val parsedReverse = com.example.parser.ChinaNotificationParser.parse("", "", reverseOrder)
+    org.junit.Assert.assertNotNull(parsedReverse)
+    assertEquals(1049L, parsedReverse!!.amountCents)
+    assertEquals("SGD", parsedReverse.currencyCode)
+
+    // Original price + discount + actual expense
+    val discountText = "支付宝付款：原价100.00元，优惠立减15.00元，实际支出85.00元。"
+    val parsedDiscount = com.example.parser.ChinaNotificationParser.parse("com.eg.android.AlipayGphone", "支付宝", discountText)
+    org.junit.Assert.assertNotNull(parsedDiscount)
+    assertEquals(8500L, parsedDiscount!!.amountCents)
+    assertEquals("CNY", parsedDiscount.currencyCode)
+
+    // Foreign consumption + converted RMB equivalent
+    val convertedText = "【中国银行】您尾号3048信用卡消费10.49新加坡元，折合人民币55.50元。"
+    val parsedConverted = com.example.parser.ChinaNotificationParser.parse("", "", convertedText)
+    org.junit.Assert.assertNotNull(parsedConverted)
+    assertEquals(1049L, parsedConverted!!.amountCents)
+    assertEquals("SGD", parsedConverted.currencyCode)
+
+    // Suffix Chinese currency unit "55.50人民币" is recognized with explicit unit
+    org.junit.Assert.assertTrue(com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("本次消费55.50人民币"))
+    assertEquals(5550L, com.example.parser.ChinaNotificationParser.extractExplicitUnitAmountCents("本次消费55.50人民币"))
+
+    // Unitless noise remains rejected
+    org.junit.Assert.assertFalse(com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("[3条] 中国移动10086 流量剩余12.5GB"))
+    org.junit.Assert.assertNull(com.example.parser.ChinaNotificationParser.extractExplicitUnitAmountCents("[3条] 中国移动10086 流量剩余12.5GB"))
+  }
+
+  @Test
+  fun `rule keyword channel mapping never falls back to unknown channel even with shadowing fullwidth pipes or sms package`() {
+    val rules = listOf(
+      // Higher-priority rule with empty channel (simulating generic transfer/expense rule)
+      com.example.model.CustomParsingRule(
+        id = "r-high-blank",
+        name = "通用消费",
+        packageFilter = "*",
+        keywordPattern = "消费",
+        channelName = "",
+        defaultCategory = "自动",
+        defaultType = "AUTO",
+        priority = 60,
+        enabled = true
+      ),
+      // Higher-priority rule accidentally saved with "未知渠道"
+      com.example.model.CustomParsingRule(
+        id = "r-high-unknown",
+        name = "错误默认渠道",
+        packageFilter = "*",
+        keywordPattern = "交易",
+        channelName = "未知渠道",
+        defaultCategory = "自动",
+        defaultType = "AUTO",
+        priority = 70,
+        enabled = true
+      ),
+      // Target bank rule with keyword "中国银行" -> channel "中国银行"
+      com.example.model.CustomParsingRule(
+        id = "r-boc",
+        name = "中国银行规则",
+        packageFilter = "*",
+        keywordPattern = "中国银行",
+        channelName = "中国银行",
+        defaultCategory = "其他",
+        defaultType = "AUTO",
+        priority = 10,
+        enabled = true
+      ),
+      // Custom regional bank with full-width pipe and specific app packageFilter
+      com.example.model.CustomParsingRule(
+        id = "r-starbank",
+        name = "星河银行",
+        packageFilter = "com.custom.starbank",
+        keywordPattern = "星河村镇银行｜96001",
+        channelName = "星河村镇银行",
+        defaultCategory = "购物消费",
+        defaultType = "EXPENSE",
+        priority = 15,
+        enabled = true
+      )
+    )
+
+    val parsedBoc = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "",
+      title = "",
+      content = "您的借记卡于1123发生消费交易，金额10.49新加坡元，已冻结55.50人民币。【中国银行】",
+      customRules = rules
+    )
+    org.junit.Assert.assertNotNull(parsedBoc)
+    assertEquals("中国银行", parsedBoc!!.channel)
+
+    // Specific-package rule with full-width pipe still resolves channel for SMS & test bench
+    val parsedStarSms = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "com.android.mms",
+      title = "96001",
+      content = "您尾号2211账户消费支出68.00元。",
+      customRules = rules
+    )
+    org.junit.Assert.assertNotNull(parsedStarSms)
+    assertEquals("星河村镇银行", parsedStarSms!!.channel)
+
+    val parsedStarBench = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "",
+      title = "",
+      content = "【星河村镇银行】您消费32.50元。",
+      customRules = rules
+    )
+    org.junit.Assert.assertNotNull(parsedStarBench)
+    assertEquals("星河村镇银行", parsedStarBench!!.channel)
+  }
+
+  @Test
+  fun `custom monitored apps policy filters notifications accurately and round-trips through datastore and backup`() = kotlinx.coroutines.runBlocking<Unit> {
+    // 1. Default policy: built-in watched apps always processed; unknown apps rely on fallback + likely financial
+    val defaultPolicy = com.example.service.AutoBookkeepingNotificationService.MonitoredAppPolicy(
+      customized = false,
+      packages = emptySet(),
+      allowOtherFinancialAppsFallback = true
+    )
+    org.junit.Assert.assertTrue(
+      com.example.service.AutoBookkeepingNotificationService.shouldProcessNotificationPackage(
+        packageName = "com.tencent.mm",
+        isSelfTest = false,
+        policy = defaultPolicy,
+        isLikelyFinancial = false
+      )
+    )
+    org.junit.Assert.assertTrue(
+      com.example.service.AutoBookkeepingNotificationService.shouldProcessNotificationPackage(
+        packageName = "com.unknown.app",
+        isSelfTest = false,
+        policy = defaultPolicy,
+        isLikelyFinancial = true
+      )
+    )
+    org.junit.Assert.assertFalse(
+      com.example.service.AutoBookkeepingNotificationService.shouldProcessNotificationPackage(
+        packageName = "com.unknown.app",
+        isSelfTest = false,
+        policy = defaultPolicy,
+        isLikelyFinancial = false
+      )
+    )
+
+    // 2. Strict custom policy (fallback disabled): only selected packages + self-test pass
+    val strictCustomPolicy = com.example.service.AutoBookkeepingNotificationService.MonitoredAppPolicy(
+      customized = true,
+      packages = setOf("com.custom.bank", "com.android.mms"),
+      allowOtherFinancialAppsFallback = false
+    )
+    org.junit.Assert.assertTrue(
+      com.example.service.AutoBookkeepingNotificationService.shouldProcessNotificationPackage(
+        packageName = "com.custom.bank",
+        isSelfTest = false,
+        policy = strictCustomPolicy,
+        isLikelyFinancial = false
+      )
+    )
+    org.junit.Assert.assertFalse(
+      com.example.service.AutoBookkeepingNotificationService.shouldProcessNotificationPackage(
+        packageName = "com.tencent.mm",
+        isSelfTest = false,
+        policy = strictCustomPolicy,
+        isLikelyFinancial = true
+      )
+    )
+    org.junit.Assert.assertTrue(
+      com.example.service.AutoBookkeepingNotificationService.shouldProcessNotificationPackage(
+        packageName = "com.live150yo.lvshuiqingshan",
+        isSelfTest = true,
+        policy = strictCustomPolicy,
+        isLikelyFinancial = false
+      )
+    )
+
+    // 3. SettingsDataStore + LedgerBackupCodec round-trip
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val store = com.example.data.SettingsDataStore(context)
+    val original = store.getBudgetSettingsOnce()
+    val updated = original.copy(
+      monitoredAppsCustomized = true,
+      monitoredAppPackages = listOf("com.tencent.mm", "com.eg.android.AlipayGphone", "com.custom.bank"),
+      allowOtherFinancialAppsFallback = false
+    )
+    store.saveBudgetSettings(updated)
+    val loaded = store.getBudgetSettingsOnce()
+    org.junit.Assert.assertTrue(loaded.monitoredAppsCustomized)
+    assertEquals(listOf("com.tencent.mm", "com.eg.android.AlipayGphone", "com.custom.bank"), loaded.monitoredAppPackages)
+    org.junit.Assert.assertFalse(loaded.allowOtherFinancialAppsFallback)
+
+    val backupJson = com.example.data.LedgerBackupCodec.encodeBackupJson(
+      transactions = emptyList(),
+      rules = emptyList(),
+      settings = loaded
+    )
+    val decoded = com.example.data.LedgerBackupCodec.decodeBackupJson(backupJson)
+    org.junit.Assert.assertTrue(decoded.settings!!.monitoredAppsCustomized)
+    assertEquals(loaded.monitoredAppPackages, decoded.settings!!.monitoredAppPackages)
+    org.junit.Assert.assertFalse(decoded.settings!!.allowOtherFinancialAppsFallback)
+
+    // 4. Settings search catalog covers monitored apps
+    val searchHits = com.example.ui.SettingsSearchCatalog.search("监听应用")
+    org.junit.Assert.assertTrue(searchHits.any { it.route == com.example.ui.ROUTE_SETTINGS_MONITORED_APPS })
+
+    // Restore original settings
+    store.saveBudgetSettings(original)
+  }
 }
+
 
 
 
