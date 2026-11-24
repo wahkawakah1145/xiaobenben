@@ -73,6 +73,10 @@ object NotificationBridge {
         }
     }
 
+    fun clearLogs() {
+        _capturedLogs.value = emptyList()
+    }
+
     fun isNotificationListenerEnabled(context: Context): Boolean {
         return NotificationManagerCompat.getEnabledListenerPackages(context)
             .contains(context.packageName)

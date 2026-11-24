@@ -44,7 +44,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.BudgetSettings
+import com.example.model.FeatureTipsCatalog
 import com.example.service.NotificationBridge
+import com.example.ui.components.FeatureTipBanner
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
 import com.example.viewmodel.LedgerViewModel
@@ -62,6 +64,7 @@ fun PermissionsKeepAliveScreen(
 ) {
     val context = LocalContext.current
     val rootStatus by viewModel.rootStatusState.collectAsStateWithLifecycle()
+    val appearance by viewModel.appearanceState.collectAsStateWithLifecycle()
     var hasPostNotifPermission by remember {
         mutableStateOf(NotificationBridge.hasPostNotificationPermission(context))
     }
@@ -86,6 +89,19 @@ fun PermissionsKeepAliveScreen(
                     SettingsSearchArrivalBanner(
                         route = ROUTE_SETTINGS_PERMISSIONS,
                         onDismiss = { viewModel.clearSettingsHighlight() }
+                    )
+                    FeatureTipBanner(
+                        tipId = FeatureTipsCatalog.APP_LIST_PERMISSION,
+                        text = "读取应用列表权限提示：若无法看到完整已安装应用，点击此处前往系统权限管理页开启。",
+                        appearance = appearance,
+                        onDismiss = { viewModel.dismissFeatureTip(it) },
+                        actionLabel = "去开启",
+                        onClick = {
+                            val opened = NotificationBridge.openAppSystemPermissionSettings(context)
+                            if (!opened) {
+                                NotificationBridge.openAppDetailsSettings(context)
+                            }
+                        }
                     )
                     Card(
                         shape = RoundedCornerShape(20.dp),
@@ -182,40 +198,6 @@ fun PermissionsKeepAliveScreen(
                             Icon(AppIcons.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(if (isListenerEnabled) "管理通知使用权" else "开启通知读取权限")
-                        }
-
-                        HorizontalDivider()
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "自定义监听应用",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = if (settings.monitoredAppsCustomized) {
-                                        "已选 ${settings.monitoredAppPackages.size} 款应用" +
-                                            if (settings.allowOtherFinancialAppsFallback) " · 含强动账兜底" else " · 仅监听已选"
-                                    } else {
-                                        "默认监听微信、支付宝、短信及主流银行，点击图形化自选"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            OutlinedButton(
-                                onClick = onOpenMonitoredApps,
-                                modifier = Modifier
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("settings_open_monitored_apps_button")
-                            ) {
-                                Text("选择应用")
-                            }
                         }
 
                         HorizontalDivider()

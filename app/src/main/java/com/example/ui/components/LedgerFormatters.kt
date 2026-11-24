@@ -63,6 +63,7 @@ import com.example.ui.theme.AppIcons
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -92,7 +93,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.model.AppIconStyle
+import com.example.model.BillFieldCatalog
+import com.example.model.BillFieldConfig
 import com.example.model.CategoryCatalog
+import com.example.model.ChannelCatalog
 import com.example.model.CurrencyCatalog
 import com.example.model.IconVisualStyle
 import com.example.model.LedgerTransaction
@@ -250,6 +254,16 @@ object CategoryIconCatalog {
 
 val LocalCategoryIcons = compositionLocalOf<Map<String, String>> { emptyMap() }
 
+data class HierarchyDisplayConfig(
+    val categoryParentMap: Map<String, String> = emptyMap(),
+    val categoryShowChildren: Boolean = true,
+    val channelParentMap: Map<String, String> = ChannelCatalog.defaultChannelParentMap,
+    val channelShowChildren: Boolean = true
+)
+
+val LocalHierarchyDisplay = compositionLocalOf { HierarchyDisplayConfig() }
+val LocalBillFieldsConfig = compositionLocalOf<List<BillFieldConfig>> { BillFieldCatalog.defaultFields }
+
 fun defaultCategoryIcon(category: String): ImageVector {
     return when {
         category == "餐饮美食" || category.contains("餐") || category.contains("食") || category.contains("奶茶") || category.contains("咖啡") -> AppIcons.Restaurant
@@ -287,14 +301,20 @@ fun transactionTypeColor(type: TransactionType): Color {
 
 @Composable
 fun ChannelBadge(channel: String, modifier: Modifier = Modifier) {
-    val color = channelBrandColor(channel)
+    val hierarchy = LocalHierarchyDisplay.current
+    val displayChannel = ChannelCatalog.resolveDisplayChannel(
+        rawChannel = channel,
+        parentMap = hierarchy.channelParentMap,
+        showChildren = hierarchy.channelShowChildren
+    )
+    val color = channelBrandColor(displayChannel)
     Surface(
         modifier = modifier,
         color = color.copy(alpha = 0.12f),
         shape = RoundedCornerShape(8.dp)
     ) {
         Text(
-            text = channel,
+            text = displayChannel,
             style = MaterialTheme.typography.labelSmall,
             color = color,
             fontWeight = FontWeight.SemiBold,
@@ -361,11 +381,46 @@ fun TransactionDetailSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val numberFont = LocalNumberFontFamily.current
     val customIcons = LocalCategoryIcons.current
+    val hierarchy = LocalHierarchyDisplay.current
+    val billFields = BillFieldCatalog.normalizeFields(LocalBillFieldsConfig.current)
+    val displayCategory = CategoryCatalog.resolveDisplayCategory(
+        rawCategory = transaction.category,
+        parentMap = hierarchy.categoryParentMap,
+        showChildren = hierarchy.categoryShowChildren
+    )
     val isForeignFromCurrentBase = !transaction.currencyCode.equals(baseCurrencyCode, ignoreCase = true)
     val isForeignFromRecordedBase = !transaction.currencyCode.equals(recordedBaseCurrencyCode, ignoreCase = true)
     var showBookPickerDialog by remember(transaction.id) { mutableStateOf(false) }
+    var showFoldedMoreFields by remember(transaction.id) { mutableStateOf(false) }
     val assignedBooks = remember(books, assignedBookIds) {
         books.filter { it.id in assignedBookIds }
+    }
+
+    fun resolveOptionalFieldValue(field: BillFieldConfig): String? = when (field.id) {
+        BillFieldCatalog.ID_CARD_TAIL -> transaction.cardLastFour?.takeIf { it.isNotBlank() }?.let { "尾号 $it" }
+        BillFieldCatalog.ID_NOTE -> transaction.note?.takeIf { it.isNotBlank() }
+        BillFieldCatalog.ID_PRODUCT_NAME -> transaction.productName?.takeIf { it.isNotBlank() }
+        BillFieldCatalog.ID_TRADE_TYPE -> transaction.tradeType?.takeIf { it.isNotBlank() }
+        BillFieldCatalog.ID_TRADE_STATUS -> transaction.tradeStatus?.takeIf { it.isNotBlank() }
+        BillFieldCatalog.ID_BALANCE_AFTER -> transaction.balanceAfterCents?.let { bal ->
+            val prefix = if (bal < 0L) "-" else ""
+            "$prefix${formatCurrency(kotlin.math.abs(bal), transaction.currencyCode)}"
+        }
+        BillFieldCatalog.ID_TRANSACTION_NO -> transaction.transactionNo?.takeIf { it.isNotBlank() }
+        BillFieldCatalog.ID_MERCHANT_ORDER_NO -> transaction.merchantOrderNo?.takeIf { it.isNotBlank() }
+        else -> (transaction.customFields[field.id] ?: transaction.customFields[field.label])?.takeIf { it.isNotBlank() }
+    }
+
+    val foldedInfoEntries = remember(transaction, billFields) {
+        val entries = billFields
+            .filter { it.enabled && it.foldedInMore && !it.isMajorItem && it.id != BillFieldCatalog.ID_RAW_NOTIFICATION }
+            .mapNotNull { f -> resolveOptionalFieldValue(f)?.let { f.label to it } }
+        // Also surface any orphaned customFields not currently in billFields so no user data is ever hidden
+        val knownKeys = billFields.mapTo(HashSet()) { it.id } + billFields.mapTo(HashSet()) { it.label }
+        val orphans = transaction.customFields.entries
+            .filter { (k, v) -> v.isNotBlank() && k !in knownKeys }
+            .map { (k, v) -> k to v }
+        entries + orphans
     }
 
     ModalBottomSheet(
@@ -392,8 +447,8 @@ fun TransactionDetailSheet(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = categoryIcon(transaction.category, customIcons),
-                        contentDescription = transaction.category,
+                        imageVector = categoryIcon(displayCategory, customIcons),
+                        contentDescription = displayCategory,
                         tint = transactionTypeColor(transaction.txType)
                     )
                 }
@@ -403,7 +458,7 @@ fun TransactionDetailSheet(
                         style = MaterialTheme.typography.titleLarge
                     )
                     Text(
-                        text = "${transaction.category} · ${formatDateTimeFull(transaction.occurredAtMillis)}",
+                        text = "$displayCategory · ${formatDateTimeFull(transaction.occurredAtMillis)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -448,7 +503,8 @@ fun TransactionDetailSheet(
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                     )
                 }
-                if (!transaction.cardLastFour.isNullOrBlank()) {
+                val cardTailField = billFields.firstOrNull { it.id == BillFieldCatalog.ID_CARD_TAIL }
+                if (!transaction.cardLastFour.isNullOrBlank() && (cardTailField?.enabled != false) && (cardTailField?.foldedInMore != true)) {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(8.dp)
@@ -461,104 +517,6 @@ fun TransactionDetailSheet(
                     }
                 }
                 ParseMethodBadge(method = transaction.txParseMethod)
-            }
-
-            if (assignedBooks.isNotEmpty() || onUpdateTransactionBooks != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("detail_books_membership_section")
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    imageVector = AppIcons.MenuBook,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = if (assignedBooks.isNotEmpty()) {
-                                        "所属账本 (${assignedBooks.size})"
-                                    } else {
-                                        "所属账本"
-                                    },
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (onUpdateTransactionBooks != null) {
-                                TextButton(
-                                    onClick = { showBookPickerDialog = true },
-                                    modifier = Modifier.testTag("detail_manage_books_button")
-                                ) {
-                                    Icon(
-                                        imageVector = if (assignedBooks.isEmpty()) Icons.Rounded.Add else AppIcons.LibraryAdd,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(if (assignedBooks.isEmpty()) "添加到账本" else "管理账本")
-                                }
-                            }
-                        }
-                        if (assignedBooks.isEmpty()) {
-                            Text(
-                                text = "未加入账本",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                assignedBooks.forEach { book ->
-                                    val accent = Color(book.colorArgb.toInt())
-                                    Surface(
-                                        shape = RoundedCornerShape(999.dp),
-                                        color = accent.copy(alpha = 0.14f),
-                                        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
-                                        modifier = Modifier.testTag("detail_book_badge_${book.id}")
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(8.dp)
-                                                    .clip(CircleShape)
-                                                    .background(accent)
-                                            )
-                                            Text(
-                                                text = book.name,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             if (isForeignFromCurrentBase || isForeignFromRecordedBase) {
@@ -617,18 +575,167 @@ fun TransactionDetailSheet(
                 }
             }
 
-            val extraFields = listOfNotNull(
-                transaction.tradeType?.takeIf { it.isNotBlank() }?.let { "交易类型" to it },
-                transaction.productName?.takeIf { it.isNotBlank() }?.let { "商品" to it },
-                transaction.tradeStatus?.takeIf { it.isNotBlank() }?.let { "当前状态" to it },
-                transaction.balanceAfterCents?.let { bal ->
-                    val prefix = if (bal < 0L) "-" else ""
-                    "本次余额" to "$prefix${formatCurrency(kotlin.math.abs(bal), transaction.currencyCode)}"
-                },
-                transaction.transactionNo?.takeIf { it.isNotBlank() }?.let { "交易单号" to it },
-                transaction.merchantOrderNo?.takeIf { it.isNotBlank() }?.let { "商户单号" to it }
-            )
-            if (extraFields.isNotEmpty()) {
+            // Render non-folded enabled bill sections dynamically in user-configured order
+            billFields.filter { it.enabled && !it.foldedInMore }.forEach { field ->
+                when (field.id) {
+                    BillFieldCatalog.ID_BOOKS -> {
+                        if (assignedBooks.isNotEmpty() || onUpdateTransactionBooks != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("detail_books_membership_section")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = AppIcons.MenuBook,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                text = if (assignedBooks.isNotEmpty()) {
+                                                    "${field.label} (${assignedBooks.size})"
+                                                } else {
+                                                    field.label
+                                                },
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        if (onUpdateTransactionBooks != null) {
+                                            TextButton(
+                                                onClick = { showBookPickerDialog = true },
+                                                modifier = Modifier.testTag("detail_manage_books_button")
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (assignedBooks.isEmpty()) Icons.Rounded.Add else AppIcons.LibraryAdd,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(if (assignedBooks.isEmpty()) "添加到账本" else "管理账本")
+                                            }
+                                        }
+                                    }
+                                    if (assignedBooks.isEmpty()) {
+                                        Text(
+                                            text = "未加入账本",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    } else {
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            assignedBooks.forEach { book ->
+                                                val accent = Color(book.colorArgb.toInt())
+                                                Surface(
+                                                    shape = RoundedCornerShape(999.dp),
+                                                    color = accent.copy(alpha = 0.14f),
+                                                    border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+                                                    modifier = Modifier.testTag("detail_book_badge_${book.id}")
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(8.dp)
+                                                                .clip(CircleShape)
+                                                                .background(accent)
+                                                        )
+                                                        Text(
+                                                            text = book.name,
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = MaterialTheme.colorScheme.onSurface
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    BillFieldCatalog.ID_RAW_NOTIFICATION -> {
+                        if (!transaction.rawNotification.isNullOrBlank()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = field.label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = transaction.rawNotification,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    BillFieldCatalog.ID_AMOUNT,
+                    BillFieldCatalog.ID_MERCHANT,
+                    BillFieldCatalog.ID_CHANNEL,
+                    BillFieldCatalog.ID_CATEGORY,
+                    BillFieldCatalog.ID_OCCURRED_AT,
+                    BillFieldCatalog.ID_CARD_TAIL -> Unit // already presented in header & badge strip
+
+                    else -> {
+                        val value = resolveOptionalFieldValue(field)
+                        if (value != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = field.label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = value,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (foldedInfoEntries.isNotEmpty()) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                     shape = RoundedCornerShape(12.dp),
@@ -638,75 +745,49 @@ fun TransactionDetailSheet(
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "账单明细信息",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        extraFields.forEach { (label, value) ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(
-                                    text = value,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showFoldedMoreFields = !showFoldedMoreFields }
+                                .testTag("detail_toggle_more_bill_fields"),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "更多账单信息 (${foldedInfoEntries.size})",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = if (showFoldedMoreFields) "收起 ▲" else "展开 ▼",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        if (showFoldedMoreFields) {
+                            foldedInfoEntries.forEach { (label, value) ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = value,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                             }
                         }
-                    }
-                }
-            }
-
-            if (!transaction.note.isNullOrBlank()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            text = "备注",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = transaction.note,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-            }
-
-            if (!transaction.rawNotification.isNullOrBlank()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            text = "原始记录",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = transaction.rawNotification,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
                     }
                 }
             }
@@ -842,8 +923,11 @@ fun TransactionEditorDialog(
         transactionNo: String?,
         merchantOrderNo: String?
     ) -> Unit)? = null,
+    onSaveCustomFields: ((Map<String, String>) -> Unit)? = null,
     onMarkAsNonBill: (() -> Unit)? = null
 ) {
+    val billFields = BillFieldCatalog.normalizeFields(LocalBillFieldsConfig.current)
+    val hierarchy = LocalHierarchyDisplay.current
     var selectedType by remember {
         mutableStateOf(initialTransaction?.txType ?: TransactionType.EXPENSE)
     }
@@ -868,13 +952,26 @@ fun TransactionEditorDialog(
     var tradeStatus by remember { mutableStateOf(initialTransaction?.tradeStatus ?: "") }
     var transactionNo by remember { mutableStateOf(initialTransaction?.transactionNo ?: "") }
     var merchantOrderNo by remember { mutableStateOf(initialTransaction?.merchantOrderNo ?: "") }
+    val customFieldValues = remember(initialTransaction?.id) {
+        mutableStateMapOf<String, String>().apply {
+            initialTransaction?.customFields?.forEach { (k, v) -> put(k, v) }
+        }
+    }
+    val foldedEditableFields = remember(billFields) {
+        billFields.filter {
+            it.enabled && it.foldedInMore && !it.isMajorItem &&
+                it.id != BillFieldCatalog.ID_RAW_NOTIFICATION &&
+                it.id != BillFieldCatalog.ID_BALANCE_AFTER
+        }
+    }
     var showMoreFields by remember {
         mutableStateOf(
             !initialTransaction?.tradeType.isNullOrBlank() ||
                 !initialTransaction?.productName.isNullOrBlank() ||
                 !initialTransaction?.tradeStatus.isNullOrBlank() ||
                 !initialTransaction?.transactionNo.isNullOrBlank() ||
-                !initialTransaction?.merchantOrderNo.isNullOrBlank()
+                !initialTransaction?.merchantOrderNo.isNullOrBlank() ||
+                !initialTransaction?.customFields.isNullOrEmpty()
         )
     }
     var currencyQuery by remember { mutableStateOf("") }
@@ -905,11 +1002,23 @@ fun TransactionEditorDialog(
     var showDatePicker by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf<String?>(null) }
 
-    val availableCategories = remember(selectedType, expenseCategories, incomeCategories, transferCategories, category) {
-        val base = when (selectedType) {
+    val availableCategories = remember(
+        selectedType,
+        expenseCategories,
+        incomeCategories,
+        transferCategories,
+        category,
+        hierarchy
+    ) {
+        val raw = when (selectedType) {
             TransactionType.INCOME -> incomeCategories
             TransactionType.EXPENSE -> expenseCategories
             TransactionType.TRANSFER -> transferCategories
+        }
+        val base = if (hierarchy.categoryShowChildren) {
+            raw
+        } else {
+            CategoryCatalog.topLevelCategories(raw, hierarchy.categoryParentMap)
         }
         if (category.isNotBlank() && category !in base) base + category else base
     }
@@ -952,11 +1061,24 @@ fun TransactionEditorDialog(
     var syncCurrencyToSimilar by remember(initialTransaction?.id) { mutableStateOf(false) }
     var syncNoteToSimilar by remember(initialTransaction?.id) { mutableStateOf(false) }
 
-    val quickChannels = remember(channelOptions, channel) {
-        val base = channelOptions.ifEmpty { com.example.model.ChannelCatalog.defaultChannels }
+    val quickChannels = remember(channelOptions, channel, hierarchy) {
+        val raw = channelOptions.ifEmpty { ChannelCatalog.defaultChannels }
+        val base = if (hierarchy.channelShowChildren) {
+            raw
+        } else {
+            ChannelCatalog.topLevelChannels(raw, hierarchy.channelParentMap)
+        }
         if (channel.isNotBlank() && channel !in base && !channel.contains('&')) base + channel else base
     }
     val currencyInfo = CurrencyCatalog.resolve(selectedCurrency)
+    val buildCleanedCustomFields: () -> Map<String, String> = {
+        customFieldValues.entries
+            .mapNotNull { (k, v) ->
+                val clean = v.trim()
+                if (clean.isEmpty()) null else k to clean
+            }
+            .toMap()
+    }
 
     val clipboardManager = LocalClipboardManager.current
     var rawCopied by remember(initialTransaction?.id) { mutableStateOf(false) }
@@ -1025,236 +1147,297 @@ fun TransactionEditorDialog(
                     }
                 }
 
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    TransactionType.entries.forEachIndexed { index, txType ->
-                        SegmentedButton(
-                            shape = SegmentedButtonDefaults.itemShape(
-                                index = index,
-                                count = TransactionType.entries.size
-                            ),
-                            onClick = {
-                                selectedType = txType
-                                if (txType == TransactionType.INCOME && category !in incomeCategories) {
-                                    category = incomeCategories.firstOrNull() ?: "工资奖金"
-                                } else if (txType == TransactionType.EXPENSE && category !in expenseCategories) {
-                                    category = expenseCategories.firstOrNull() ?: "餐饮美食"
-                                } else if (txType == TransactionType.TRANSFER && category !in transferCategories) {
-                                    category = transferCategories.firstOrNull() ?: "不计收支"
-                                }
-                            },
-                            selected = selectedType == txType
-                        ) {
-                            Text(txType.label)
+                @Composable
+                fun RenderOptionalEditorField(field: BillFieldConfig) {
+                    when (field.id) {
+                        BillFieldCatalog.ID_CARD_TAIL -> {
+                            OutlinedTextField(
+                                value = cardTail,
+                                onValueChange = { cardTail = it.filter { ch -> ch.isDigit() }.take(4) },
+                                label = { Text("${field.label} (可选)") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        BillFieldCatalog.ID_NOTE -> {
+                            OutlinedTextField(
+                                value = note,
+                                onValueChange = { note = it.take(120) },
+                                label = { Text("${field.label} (可选)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        BillFieldCatalog.ID_PRODUCT_NAME -> {
+                            OutlinedTextField(
+                                value = productName,
+                                onValueChange = { productName = it.take(120) },
+                                label = { Text("${field.label} (可选)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        BillFieldCatalog.ID_TRADE_TYPE -> {
+                            OutlinedTextField(
+                                value = tradeType,
+                                onValueChange = { tradeType = it.take(60) },
+                                label = { Text("${field.label} (可选)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        BillFieldCatalog.ID_TRADE_STATUS -> {
+                            OutlinedTextField(
+                                value = tradeStatus,
+                                onValueChange = { tradeStatus = it.take(40) },
+                                label = { Text("${field.label} (可选)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        BillFieldCatalog.ID_TRANSACTION_NO -> {
+                            OutlinedTextField(
+                                value = transactionNo,
+                                onValueChange = { transactionNo = it.take(80) },
+                                label = { Text("${field.label} (可选)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        BillFieldCatalog.ID_MERCHANT_ORDER_NO -> {
+                            OutlinedTextField(
+                                value = merchantOrderNo,
+                                onValueChange = { merchantOrderNo = it.take(80) },
+                                label = { Text("${field.label} (可选)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        BillFieldCatalog.ID_BALANCE_AFTER,
+                        BillFieldCatalog.ID_RAW_NOTIFICATION,
+                        BillFieldCatalog.ID_BOOKS -> Unit
+                        else -> {
+                            val currentVal = customFieldValues[field.id] ?: customFieldValues[field.label].orEmpty()
+                            OutlinedTextField(
+                                value = currentVal,
+                                onValueChange = { next ->
+                                    customFieldValues[field.id] = next.take(120)
+                                    if (field.label != field.id) customFieldValues.remove(field.label)
+                                },
+                                label = { Text("${field.label} (可选)") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("editor_custom_field_${field.id}")
+                            )
                         }
                     }
                 }
 
-                Text("币种", style = MaterialTheme.typography.labelMedium)
-                OutlinedTextField(
-                    value = currencyQuery,
-                    onValueChange = { currencyQuery = it },
-                    placeholder = { Text("搜索币种") },
-                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("editor_currency_search")
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    filteredCurrencies.forEach { c ->
-                        FilterChip(
-                            selected = selectedCurrency.equals(c.code, ignoreCase = true),
-                            onClick = { selectedCurrency = c.code },
-                            label = { Text("${c.code} ${c.chineseName}") }
-                        )
+                // Render major & non-folded fields dynamically in user-configured order
+                billFields.filter { it.enabled && !it.foldedInMore }.forEach { field ->
+                    when (field.id) {
+                        BillFieldCatalog.ID_AMOUNT -> {
+                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                TransactionType.entries.forEachIndexed { index, txType ->
+                                    SegmentedButton(
+                                        shape = SegmentedButtonDefaults.itemShape(
+                                            index = index,
+                                            count = TransactionType.entries.size
+                                        ),
+                                        onClick = {
+                                            selectedType = txType
+                                            if (txType == TransactionType.INCOME && category !in incomeCategories) {
+                                                category = incomeCategories.firstOrNull() ?: "工资奖金"
+                                            } else if (txType == TransactionType.EXPENSE && category !in expenseCategories) {
+                                                category = expenseCategories.firstOrNull() ?: "餐饮美食"
+                                            } else if (txType == TransactionType.TRANSFER && category !in transferCategories) {
+                                                category = transferCategories.firstOrNull() ?: "不计收支"
+                                            }
+                                        },
+                                        selected = selectedType == txType
+                                    ) {
+                                        Text(txType.label)
+                                    }
+                                }
+                            }
+
+                            Text("币种", style = MaterialTheme.typography.labelMedium)
+                            OutlinedTextField(
+                                value = currencyQuery,
+                                onValueChange = { currencyQuery = it },
+                                placeholder = { Text("搜索币种") },
+                                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("editor_currency_search")
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                filteredCurrencies.forEach { c ->
+                                    FilterChip(
+                                        selected = selectedCurrency.equals(c.code, ignoreCase = true),
+                                        onClick = { selectedCurrency = c.code },
+                                        label = { Text("${c.code} ${c.chineseName}") }
+                                    )
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = amountText,
+                                onValueChange = { amountText = it; validationError = null },
+                                label = { Text("金额 (${currencyInfo.chineseName})") },
+                                prefix = { Text(currencyInfo.symbol) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("editor_amount_input")
+                            )
+                        }
+
+                        BillFieldCatalog.ID_MERCHANT -> {
+                            OutlinedTextField(
+                                value = merchant,
+                                onValueChange = { merchant = it; validationError = null },
+                                label = { Text(field.label) },
+                                placeholder = { Text("例如：星巴克、美团外卖") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("editor_merchant_input")
+                            )
+                        }
+
+                        BillFieldCatalog.ID_CHANNEL -> {
+                            Text(field.label, style = MaterialTheme.typography.labelMedium)
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                quickChannels.forEach { item ->
+                                    FilterChip(
+                                        selected = channel == item,
+                                        onClick = { channel = item },
+                                        label = { Text(item) }
+                                    )
+                                }
+                            }
+                            OutlinedTextField(
+                                value = channel,
+                                onValueChange = { channel = it },
+                                label = { Text("自定义渠道或银行名") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        BillFieldCatalog.ID_CATEGORY -> {
+                            Text(field.label, style = MaterialTheme.typography.labelMedium)
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                availableCategories.forEach { cat ->
+                                    FilterChip(
+                                        selected = category == cat,
+                                        onClick = { category = cat },
+                                        label = { Text(cat) }
+                                    )
+                                }
+                            }
+                        }
+
+                        BillFieldCatalog.ID_OCCURRED_AT -> {
+                            Text("${field.label}（精确到秒）", style = MaterialTheme.typography.labelMedium)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = dateText,
+                                    onValueChange = { dateText = it.take(10); validationError = null },
+                                    label = { Text("日期 (yyyy-MM-dd)") },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .weight(1.25f)
+                                        .testTag("editor_date_input")
+                                )
+                                OutlinedTextField(
+                                    value = timeText,
+                                    onValueChange = { timeText = it.take(8); validationError = null },
+                                    label = { Text("时间 (HH:mm:ss)") },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .weight(0.95f)
+                                        .testTag("editor_time_input")
+                                )
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                AssistChip(
+                                    onClick = { showDatePicker = true },
+                                    label = { Text("日历选日期") }
+                                )
+                                AssistChip(
+                                    onClick = {
+                                        val now = Date(System.currentTimeMillis())
+                                        dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now)
+                                        timeText = SimpleDateFormat("HH:mm:ss", Locale.US).format(now)
+                                    },
+                                    label = { Text("此刻") }
+                                )
+                                AssistChip(
+                                    onClick = {
+                                        val millis = (parseDateTimeInputMillis(dateText, timeText) ?: System.currentTimeMillis()) - 3_600_000L
+                                        val d = Date(millis)
+                                        dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
+                                        timeText = SimpleDateFormat("HH:mm:ss", Locale.US).format(d)
+                                    },
+                                    label = { Text("-1小时") }
+                                )
+                                AssistChip(
+                                    onClick = {
+                                        val millis = System.currentTimeMillis() - 86_400_000L
+                                        val d = Date(millis)
+                                        dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
+                                        timeText = SimpleDateFormat("HH:mm:ss", Locale.US).format(d)
+                                    },
+                                    label = { Text("昨天此时") }
+                                )
+                            }
+                        }
+
+                        else -> RenderOptionalEditorField(field)
                     }
                 }
 
-                OutlinedTextField(
-                    value = amountText,
-                    onValueChange = { amountText = it; validationError = null },
-                    label = { Text("金额 (${currencyInfo.chineseName})") },
-                    prefix = { Text(currencyInfo.symbol) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("editor_amount_input")
-                )
-
-                OutlinedTextField(
-                    value = merchant,
-                    onValueChange = { merchant = it; validationError = null },
-                    label = { Text("商户 / 交易对象") },
-                    placeholder = { Text("例如：星巴克、美团外卖") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("editor_merchant_input")
-                )
-
-                Text("支付渠道 / 银行", style = MaterialTheme.typography.labelMedium)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    quickChannels.forEach { item ->
-                        FilterChip(
-                            selected = channel == item,
-                            onClick = { channel = item },
-                            label = { Text(item) }
+                if (foldedEditableFields.isNotEmpty()) {
+                    val foldedPreview = foldedEditableFields.take(4).joinToString("/") { it.label }
+                    TextButton(
+                        onClick = { showMoreFields = !showMoreFields },
+                        modifier = Modifier.testTag("editor_toggle_extended_fields")
+                    ) {
+                        Text(
+                            if (showMoreFields) {
+                                "收起更多账单信息 ▲"
+                            } else {
+                                "展开更多账单信息（$foldedPreview）▼"
+                            }
                         )
                     }
-                }
-
-                OutlinedTextField(
-                    value = channel,
-                    onValueChange = { channel = it },
-                    label = { Text("自定义渠道或银行名") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text("分类", style = MaterialTheme.typography.labelMedium)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    availableCategories.forEach { cat ->
-                        FilterChip(
-                            selected = category == cat,
-                            onClick = { category = cat },
-                            label = { Text(cat) }
-                        )
+                    if (showMoreFields) {
+                        foldedEditableFields.forEach { field ->
+                            RenderOptionalEditorField(field)
+                        }
                     }
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = cardTail,
-                        onValueChange = { cardTail = it.filter { ch -> ch.isDigit() }.take(4) },
-                        label = { Text("卡尾号 (可选)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = note,
-                        onValueChange = { note = it.take(120) },
-                        label = { Text("备注 (可选)") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1.4f)
-                    )
-                }
-
-                TextButton(
-                    onClick = { showMoreFields = !showMoreFields },
-                    modifier = Modifier.testTag("editor_toggle_extended_fields")
-                ) {
-                    Text(if (showMoreFields) "收起更多账单信息 ▲" else "展开更多账单信息（商品/类型/状态/单号）▼")
-                }
-                if (showMoreFields) {
-                    OutlinedTextField(
-                        value = productName,
-                        onValueChange = { productName = it.take(120) },
-                        label = { Text("商品 / 说明 (可选)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = tradeType,
-                            onValueChange = { tradeType = it.take(60) },
-                            label = { Text("交易类型 (可选)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedTextField(
-                            value = tradeStatus,
-                            onValueChange = { tradeStatus = it.take(40) },
-                            label = { Text("当前状态 (可选)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    OutlinedTextField(
-                        value = transactionNo,
-                        onValueChange = { transactionNo = it.take(80) },
-                        label = { Text("交易单号 (可选)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = merchantOrderNo,
-                        onValueChange = { merchantOrderNo = it.take(80) },
-                        label = { Text("商户单号 (可选)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                Text("记账时间（精确到秒，可修正通知延迟/导入偏差）", style = MaterialTheme.typography.labelMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = dateText,
-                        onValueChange = { dateText = it.take(10); validationError = null },
-                        label = { Text("日期 (yyyy-MM-dd)") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .weight(1.25f)
-                            .testTag("editor_date_input")
-                    )
-                    OutlinedTextField(
-                        value = timeText,
-                        onValueChange = { timeText = it.take(8); validationError = null },
-                        label = { Text("时间 (HH:mm:ss)") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .weight(0.95f)
-                            .testTag("editor_time_input")
-                    )
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    AssistChip(
-                        onClick = { showDatePicker = true },
-                        label = { Text("日历选日期") }
-                    )
-                    AssistChip(
-                        onClick = {
-                            val now = Date(System.currentTimeMillis())
-                            dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now)
-                            timeText = SimpleDateFormat("HH:mm:ss", Locale.US).format(now)
-                        },
-                        label = { Text("此刻") }
-                    )
-                    AssistChip(
-                        onClick = {
-                            val millis = (parseDateTimeInputMillis(dateText, timeText) ?: System.currentTimeMillis()) - 3_600_000L
-                            val d = Date(millis)
-                            dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
-                            timeText = SimpleDateFormat("HH:mm:ss", Locale.US).format(d)
-                        },
-                        label = { Text("-1小时") }
-                    )
-                    AssistChip(
-                        onClick = {
-                            val millis = System.currentTimeMillis() - 86_400_000L
-                            val d = Date(millis)
-                            dateText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d)
-                            timeText = SimpleDateFormat("HH:mm:ss", Locale.US).format(d)
-                        },
-                        label = { Text("昨天此时") }
-                    )
                 }
 
                 if (canFindSimilar && initialTransaction != null) {
@@ -1501,6 +1684,7 @@ fun TransactionEditorDialog(
                                                 transactionNo.trim().ifBlank { null },
                                                 merchantOrderNo.trim().ifBlank { null }
                                             )
+                                            onSaveCustomFields?.invoke(buildCleanedCustomFields())
                                             onSave(
                                                 cents,
                                                 selectedCurrency,
@@ -1564,6 +1748,7 @@ fun TransactionEditorDialog(
                         transactionNo.trim().ifBlank { null },
                         merchantOrderNo.trim().ifBlank { null }
                     )
+                    onSaveCustomFields?.invoke(buildCleanedCustomFields())
                     onSave(
                         cents,
                         selectedCurrency,
@@ -1863,7 +2048,13 @@ fun CategoryIconAvatar(
     modifier: Modifier = Modifier
 ) {
     val customIcons = LocalCategoryIcons.current
-    val iconVec = categoryIcon(category, customIcons)
+    val hierarchy = LocalHierarchyDisplay.current
+    val displayCategory = CategoryCatalog.resolveDisplayCategory(
+        rawCategory = category,
+        parentMap = hierarchy.categoryParentMap,
+        showChildren = hierarchy.categoryShowChildren
+    )
+    val iconVec = categoryIcon(displayCategory, customIcons)
     val iconSize = size * 0.5f
     when (visualStyle) {
         IconVisualStyle.FILLED -> {

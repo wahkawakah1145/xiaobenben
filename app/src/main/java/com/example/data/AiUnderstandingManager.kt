@@ -425,7 +425,11 @@ class AiUnderstandingManager {
         fallbackParsed: ParsedNotificationResult?,
         availableRules: List<CustomParsingRule> = emptyList(),
         activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
-        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
+        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
+        billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
+        categoryParentMap: Map<String, String> = emptyMap(),
+        channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap,
+        collapseChannelToParent: Boolean = true
     ): Result<ParsedNotificationResult> {
         val selectedRules = resolveSelectedRules(config, availableRules)
         return when (config.providerMode) {
@@ -441,7 +445,11 @@ class AiUnderstandingManager {
                     content = content,
                     selectedRules = selectedRules,
                     activeCategories = activeCategories,
-                    activeChannels = activeChannels
+                    activeChannels = activeChannels,
+                    billFieldsConfig = billFieldsConfig,
+                    categoryParentMap = categoryParentMap,
+                    channelParentMap = channelParentMap,
+                    collapseChannelToParent = collapseChannelToParent
                 )
             }
             AiProviderMode.LOCAL_SMALL_MODEL -> {
@@ -453,7 +461,9 @@ class AiUnderstandingManager {
                     content = content,
                     selectedRules = selectedRules,
                     customPrompt = config.customSystemPrompt,
-                    activeChannels = activeChannels
+                    activeChannels = activeChannels,
+                    channelParentMap = channelParentMap,
+                    collapseChannelToParent = collapseChannelToParent
                 )
             }
         }
@@ -467,7 +477,9 @@ class AiUnderstandingManager {
         content: String,
         selectedRules: List<CustomParsingRule> = emptyList(),
         customPrompt: String = "",
-        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
+        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
+        channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap,
+        collapseChannelToParent: Boolean = true
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.Default) {
         val combined = "$title\n$content".trim()
         if (combined.isBlank()) {
@@ -523,9 +535,22 @@ class AiUnderstandingManager {
                 combined.contains(ch.name) || ch.smsCodes.any { combined.contains(it) }
             }?.name
             ?: "未知渠道"
-        val channel = com.example.model.ChannelCatalog.normalizeRecognizedChannel(rawChannel)
+        val channel = com.example.model.ChannelCatalog.normalizeRecognizedChannel(
+            rawChannel = rawChannel,
+            parentMap = channelParentMap,
+            collapseToParent = collapseChannelToParent
+        )
 
-        val baseParsed = ChinaNotificationParser.parse(packageName, title, content, selectedRules, true, customChannels = activeChannels)
+        val baseParsed = ChinaNotificationParser.parse(
+            packageName = packageName,
+            title = title,
+            content = content,
+            customRules = selectedRules,
+            enableLocalSemanticPass = true,
+            customChannels = activeChannels,
+            channelParentMap = channelParentMap,
+            collapseChannelToParent = collapseChannelToParent
+        )
         val merchant = matchedPromptRule?.merchantOverride?.takeIf { it.isNotBlank() }
             ?: baseParsed?.merchant
                 ?.takeIf { !it.endsWith("消费") && !it.endsWith("收款") && it != "未知渠道消费" }
@@ -579,7 +604,11 @@ class AiUnderstandingManager {
         content: String,
         selectedRules: List<CustomParsingRule> = emptyList(),
         activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
-        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
+        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
+        billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
+        categoryParentMap: Map<String, String> = emptyMap(),
+        channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap,
+        collapseChannelToParent: Boolean = true
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.IO) {
         val rawEndpoint = config.apiBaseUrl.trim()
         val apiKey = config.apiKey.trim()
@@ -595,7 +624,15 @@ class AiUnderstandingManager {
         }
 
         val chatUrl = normalizeChatCompletionsUrl(rawEndpoint)
-        val systemPrompt = buildEffectiveSystemPrompt(config, selectedRules, activeCategories, activeChannels)
+        val systemPrompt = buildEffectiveSystemPrompt(
+            config = config,
+            selectedRules = selectedRules,
+            activeCategories = activeCategories,
+            activeChannels = activeChannels,
+            billFieldsConfig = billFieldsConfig,
+            categoryParentMap = categoryParentMap,
+            channelParentMap = channelParentMap
+        )
 
         val userPrompt = buildString {
             appendLine("应用包名: ${packageName.ifBlank { "unknown" }}")
@@ -675,7 +712,11 @@ class AiUnderstandingManager {
                     .takeIf { ChinaNotificationParser.isConcreteChannelName(it) }
                 ?: ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
                 ?: "未知渠道"
-            val channel = com.example.model.ChannelCatalog.normalizeRecognizedChannel(rawAiChannel)
+            val channel = com.example.model.ChannelCatalog.normalizeRecognizedChannel(
+                rawChannel = rawAiChannel,
+                parentMap = channelParentMap,
+                collapseToParent = collapseChannelToParent
+            )
             val merchant = parsedJson.optString("merchant")
                 .trim()
                 .takeIf { it.isNotBlank() && it != "null" }
@@ -690,6 +731,19 @@ class AiUnderstandingManager {
             val occurredAtMillis = aiTimeText?.let { ChinaNotificationParser.extractOccurredAtMillis(it) }
                 ?: ChinaNotificationParser.extractOccurredAtMillis("$title\n$content")
             val confidence = parsedJson.optDouble("confidence", 0.92).toFloat().coerceIn(0.5f, 1.0f)
+            val customFields = buildMap<String, String> {
+                val obj = parsedJson.optJSONObject("customFields")
+                if (obj != null) {
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next().trim().take(40)
+                        val v = obj.optString(k).trim().take(160)
+                        if (k.isNotEmpty() && v.isNotEmpty() && v != "null") {
+                            put(k, v)
+                        }
+                    }
+                }
+            }
 
             Result.success(
                 ParsedNotificationResult(
@@ -707,7 +761,8 @@ class AiUnderstandingManager {
                     reasoning = "在线 AI [$modelName] 理解",
                     needsInquiry = false,
                     inquiryReason = "",
-                    occurredAtMillis = occurredAtMillis
+                    occurredAtMillis = occurredAtMillis,
+                    customFields = customFields
                 )
             )
         } catch (e: CancellationException) {
@@ -909,7 +964,10 @@ class AiUnderstandingManager {
     companion object {
         fun buildDefaultSystemPrompt(
             categories: List<String> = com.example.model.CategoryCatalog.allCategories,
-            channels: List<String> = com.example.model.ChannelCatalog.defaultChannels
+            channels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
+            billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
+            categoryParentMap: Map<String, String> = emptyMap(),
+            channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap
         ): String {
             val categoryUnion = categories
                 .map { it.trim() }
@@ -923,18 +981,55 @@ class AiUnderstandingManager {
                 .distinct()
                 .ifEmpty { com.example.model.ChannelCatalog.defaultChannels }
                 .joinToString("|")
-            return """
-                你是一个精准的中国大陆账单与支付通知结构化解析引擎。请判断通知或账单文本是否为真实动账记录，并仅输出一行严格合法的 JSON 对象（不要包含 Markdown 代码块或额外解释）：
-                {"isFinancial":boolean,"amount":number,"currency":"ISO4217三位币种代码(如CNY/USD/HKD/EUR/JPY/GBP/CHF/SGD/KRW/AUD/CAD/THB/MYR等)","type":"EXPENSE|INCOME|TRANSFER","category":"$categoryUnion","merchant":"交易对方或商户名","channel":"$channelUnion","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm:ss或MM-dd HH:mm:ss或HH:mm:ss或null","confidence":0.0到1.0之间数字}
-                严格遵守以下判定规则：
-                1. 验证码、快递物流、登录提醒、营销广告、免息分期邀约等非动账消息必须返回 isFinancial=false，不可编造未出现的金额。
-                2. 【严格金额单位校验】仅当通知中存在前后紧邻明确金额单位或中文/外币货币单位的数字（如 ¥/￥/$/€/£/元/块/人民币/新加坡元/美元/港元/日元/RMB/CNY/USD/SGD 等）时才视为有效金额；任何前后无金额单位的孤立数字（如 [3条]、中国移动10086、10010、955xx、订单号、流量GB、人数、验证码、时间等）一律返回 isFinancial=false。
-                3. 【多金额精准提取】同一通知出现多个金额时（如同时出现消费/支出金额与已冻结金额、可用余额、折合人民币、手续费、原价或优惠立减），仅提取“支出/消费/付款/扣款/入账/收款”等核心交易字眼对应的金额及其配对币种（如“消费交易，金额10.49新加坡元，已冻结55.50人民币”应提取 amount=10.49, currency="SGD"）。
-                4. 【不计收支规则】微信/支付宝零钱提现、余额提现、提现到银行卡、银行卡收到提现到账、零钱充值、转入/转出零钱通或余额宝、本人名下账户互转、本人转账/同名转账、信用卡还款均属于内部资金划转，不计入日常支出与收入，必须返回 "type":"TRANSFER"，且 category 设为 "不计收支" 或 "账户互转"。
-                5. 【渠道归属规则】识别到“花呗”“余额宝”时 channel 统一归属为“支付宝”；识别到“零钱”“零钱通”时 channel 统一归属为“微信支付”。
-                6. 消费退款、退货返现、冲正退回的 type 应为 INCOME（category 设为 "退款返现"）；他人向我转账收款 type 为 INCOME，向他人消费付款或发红包 type 为 EXPENSE。
-                7. occurredTime 尽量保留到秒（yyyy-MM-dd HH:mm:ss）；未出现时间则返回 null。
-            """.trimIndent()
+            val customOptionalFields = com.example.model.BillFieldCatalog.customFields(billFieldsConfig)
+                .filter { it.enabled }
+            val customFieldsSchema = if (customOptionalFields.isNotEmpty()) {
+                val keysHint = customOptionalFields.joinToString(",") { "\"${it.id}\":\"${it.label}或null\"" }
+                ",\"customFields\":{$keysHint}"
+            } else {
+                ""
+            }
+            val channelAttributionSummary = channelParentMap.entries
+                .filter { it.key.isNotBlank() && it.value.isNotBlank() }
+                .groupBy({ it.value }, { it.key })
+                .entries
+                .joinToString("；") { (parent, children) ->
+                    "识别到${children.joinToString("、") { "“$it”" }}时归属为“$parent”"
+                }
+                .ifBlank { "识别到“花呗”“余额宝”时 channel 统一归属为“支付宝”；识别到“零钱”“零钱通”时 channel 统一归属为“微信支付”" }
+            val categoryAttributionSummary = categoryParentMap.entries
+                .filter { it.key.isNotBlank() && it.value.isNotBlank() }
+                .groupBy({ it.value }, { it.key })
+                .entries
+                .joinToString("；") { (parent, children) ->
+                    "${children.joinToString("、")}归属「$parent」"
+                }
+            val extraRules = buildString {
+                if (categoryAttributionSummary.isNotBlank()) {
+                    appendLine("8. 【分类归属关系】$categoryAttributionSummary。")
+                }
+                if (customOptionalFields.isNotEmpty()) {
+                    val idx = if (categoryAttributionSummary.isNotBlank()) 9 else 8
+                    val fieldDesc = customOptionalFields.joinToString("、") { "${it.label}(key:${it.id})" }
+                    appendLine("$idx. 【自定义账单信息字段】若文本包含以下信息请提取并填入 customFields：$fieldDesc；未提及的键可省略或填 null。")
+                }
+            }.trimEnd()
+            return buildString {
+                appendLine("你是一个精准的中国大陆账单与支付通知结构化解析引擎。请判断通知或账单文本是否为真实动账记录，并仅输出一行严格合法的 JSON 对象（不要包含 Markdown 代码块或额外解释）：")
+                appendLine("""{"isFinancial":boolean,"amount":number,"currency":"ISO4217三位币种代码(如CNY/USD/HKD/EUR/JPY/GBP/CHF/SGD/KRW/AUD/CAD/THB/MYR等)","type":"EXPENSE|INCOME|TRANSFER","category":"$categoryUnion","merchant":"交易对方或商户名","channel":"$channelUnion","cardLastFour":"四位尾号或null","occurredTime":"yyyy-MM-dd HH:mm:ss或MM-dd HH:mm:ss或HH:mm:ss或null","confidence":0.0到1.0之间数字$customFieldsSchema}""")
+                appendLine("严格遵守以下判定规则：")
+                appendLine("1. 验证码、快递物流、登录提醒、营销广告、免息分期邀约等非动账消息必须返回 isFinancial=false，不可编造未出现的金额。")
+                appendLine("2. 【严格金额单位校验】仅当通知中存在前后紧邻明确金额单位或中文/外币货币单位的数字（如 ¥/￥/$/€/£/元/块/人民币/新加坡元/美元/港元/日元/RMB/CNY/USD/SGD 等）时才视为有效金额；任何前后无金额单位的孤立数字（如 [3条]、中国移动10086、10010、955xx、订单号、流量GB、人数、验证码、时间等）一律返回 isFinancial=false。")
+                appendLine("3. 【多金额精准提取】同一通知出现多个金额时（如同时出现消费/支出金额与已冻结金额、可用余额、折合人民币、手续费、原价或优惠立减），仅提取“支出/消费/付款/扣款/入账/收款”等核心交易字眼对应的金额及其配对币种（如“消费交易，金额10.49新加坡元，已冻结55.50人民币”应提取 amount=10.49, currency=\"SGD\"）。")
+                appendLine("4. 【不计收支规则】微信/支付宝零钱提现、余额提现、提现到银行卡、银行卡收到提现到账、零钱充值、转入/转出零钱通或余额宝、本人名下账户互转、本人转账/同名转账、信用卡还款均属于内部资金划转，不计入日常支出与收入，必须返回 \"type\":\"TRANSFER\"，且 category 设为 \"不计收支\" 或 \"账户互转\"。")
+                appendLine("5. 【渠道归属规则】$channelAttributionSummary。")
+                appendLine("6. 消费退款、退货返现、冲正退回的 type 应为 INCOME（category 设为 \"退款返现\"）；他人向我转账收款 type 为 INCOME，向他人消费付款或发红包 type 为 EXPENSE。")
+                append("7. occurredTime 尽量保留到秒（yyyy-MM-dd HH:mm:ss）；未出现时间则返回 null。")
+                if (extraRules.isNotBlank()) {
+                    appendLine()
+                    append(extraRules)
+                }
+            }.trimIndent()
         }
 
         val DEFAULT_SYSTEM_PROMPT: String = buildDefaultSystemPrompt(
@@ -951,16 +1046,26 @@ class AiUnderstandingManager {
         private val CHANNEL_FIELD_REGEX = Regex("""("channel"\s*:\s*")([^"]*)(")""")
         private val CUSTOM_CATEGORIES_LINE_REGEX = Regex("""(?m)^【当前可用分类列表】.*$""")
         private val CUSTOM_CHANNELS_LINE_REGEX = Regex("""(?m)^【当前可用渠道列表】.*$""")
+        private val CUSTOM_BILL_FIELDS_LINE_REGEX = Regex("""(?m)^【自定义账单信息字段】.*$""")
 
         fun isLegacyOrDefaultPrompt(
             raw: String,
             activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
-            activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
+            activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
+            billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
+            categoryParentMap: Map<String, String> = emptyMap(),
+            channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap
         ): Boolean {
             val trimmed = raw.trim()
             if (trimmed.isEmpty() ||
                 trimmed == DEFAULT_SYSTEM_PROMPT.trim() ||
-                trimmed == buildDefaultSystemPrompt(activeCategories, activeChannels).trim()
+                trimmed == buildDefaultSystemPrompt(
+                    categories = activeCategories,
+                    channels = activeChannels,
+                    billFieldsConfig = billFieldsConfig,
+                    categoryParentMap = categoryParentMap,
+                    channelParentMap = channelParentMap
+                ).trim()
             ) {
                 return true
             }
@@ -987,10 +1092,21 @@ class AiUnderstandingManager {
         fun sanitizeStoredCustomPrompt(
             raw: String,
             activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
-            activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
+            activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
+            billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
+            categoryParentMap: Map<String, String> = emptyMap(),
+            channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap
         ): String {
             val trimmed = raw.trim()
-            return if (isLegacyOrDefaultPrompt(trimmed, activeCategories, activeChannels)) "" else trimmed
+            return if (isLegacyOrDefaultPrompt(
+                    raw = trimmed,
+                    activeCategories = activeCategories,
+                    activeChannels = activeChannels,
+                    billFieldsConfig = billFieldsConfig,
+                    categoryParentMap = categoryParentMap,
+                    channelParentMap = channelParentMap
+                )
+            ) "" else trimmed
         }
 
         fun syncPromptForCategoryChange(
@@ -1137,15 +1253,63 @@ class AiUnderstandingManager {
             }.trimEnd()
         }
 
+        fun syncPromptForBillFieldsChange(
+            currentCustomPrompt: String,
+            billFieldsConfig: List<com.example.model.BillFieldConfig>,
+            allActiveCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
+            allActiveChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
+        ): String {
+            val cleanedPrompt = sanitizeStoredCustomPrompt(
+                raw = currentCustomPrompt,
+                activeCategories = allActiveCategories,
+                activeChannels = allActiveChannels,
+                billFieldsConfig = billFieldsConfig
+            )
+            if (cleanedPrompt.isBlank()) return ""
+            val customFields = com.example.model.BillFieldCatalog.customFields(billFieldsConfig).filter { it.enabled }
+            var updated = cleanedPrompt
+            if (customFields.isEmpty()) {
+                updated = CUSTOM_BILL_FIELDS_LINE_REGEX.replace(updated, "").trim()
+            } else {
+                val summaryLine = "【自定义账单信息字段】" + customFields.joinToString("、") { "${it.label}(${it.id})" }
+                updated = if (CUSTOM_BILL_FIELDS_LINE_REGEX.containsMatchIn(updated)) {
+                    CUSTOM_BILL_FIELDS_LINE_REGEX.replace(updated, summaryLine)
+                } else {
+                    "$updated\n$summaryLine"
+                }
+            }
+            return sanitizeStoredCustomPrompt(
+                raw = updated,
+                activeCategories = allActiveCategories,
+                activeChannels = allActiveChannels,
+                billFieldsConfig = billFieldsConfig
+            ).take(4000)
+        }
+
         fun buildEffectiveSystemPrompt(
             config: AiConfig,
             selectedRules: List<CustomParsingRule> = emptyList(),
             activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
-            activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels
+            activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
+            billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
+            categoryParentMap: Map<String, String> = emptyMap(),
+            channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap
         ): String {
-            val defaultPrompt = buildDefaultSystemPrompt(activeCategories, activeChannels)
-            val basePrompt = sanitizeStoredCustomPrompt(config.customSystemPrompt, activeCategories, activeChannels)
-                .ifBlank { defaultPrompt }
+            val defaultPrompt = buildDefaultSystemPrompt(
+                categories = activeCategories,
+                channels = activeChannels,
+                billFieldsConfig = billFieldsConfig,
+                categoryParentMap = categoryParentMap,
+                channelParentMap = channelParentMap
+            )
+            val basePrompt = sanitizeStoredCustomPrompt(
+                raw = config.customSystemPrompt,
+                activeCategories = activeCategories,
+                activeChannels = activeChannels,
+                billFieldsConfig = billFieldsConfig,
+                categoryParentMap = categoryParentMap,
+                channelParentMap = channelParentMap
+            ).ifBlank { defaultPrompt }
             val rulesBlock = formatRulesPromptBlock(selectedRules)
             return if (rulesBlock.isBlank()) {
                 basePrompt

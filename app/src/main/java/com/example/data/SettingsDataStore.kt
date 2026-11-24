@@ -10,6 +10,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.AppIconStyle
 import com.example.model.AppearanceSettings
+import com.example.model.BillFieldCatalog
+import com.example.model.BillFieldConfig
 import com.example.model.BudgetSettings
 import com.example.model.CardDensity
 import com.example.model.CategoryCatalog
@@ -97,6 +99,15 @@ class SettingsDataStore(private val context: Context) {
         val HIDE_ALL_FEATURE_TIPS = booleanPreferencesKey("appearance_hide_all_feature_tips")
         val DISMISSED_TIP_IDS_JSON = stringPreferencesKey("appearance_dismissed_tip_ids_json")
         val HOME_PAGE_LOAD_BATCH_SIZE = intPreferencesKey("appearance_home_page_load_batch_size")
+        val HAPTIC_ENABLED = booleanPreferencesKey("appearance_haptic_enabled")
+        val HAPTIC_FOLLOW_SYSTEM = booleanPreferencesKey("appearance_haptic_follow_system")
+        val HAPTIC_INTENSITY = floatPreferencesKey("appearance_haptic_intensity")
+        val HAPTIC_ON_CLICK = booleanPreferencesKey("appearance_haptic_on_click")
+        val HAPTIC_ON_TOGGLE = booleanPreferencesKey("appearance_haptic_on_toggle")
+        val HAPTIC_ON_LONG_PRESS = booleanPreferencesKey("appearance_haptic_on_long_press")
+        val HAPTIC_ON_DRAG_REORDER = booleanPreferencesKey("appearance_haptic_on_drag_reorder")
+        val HAPTIC_ON_DESTRUCTIVE = booleanPreferencesKey("appearance_haptic_on_destructive")
+        val HAPTIC_ON_GESTURE = booleanPreferencesKey("appearance_haptic_on_gesture")
 
         val EXCHANGE_RATES_JSON = stringPreferencesKey("exchange_rates_json")
         val EXCHANGE_RATES_UPDATED_AT = longPreferencesKey("exchange_rates_updated_at")
@@ -119,6 +130,13 @@ class SettingsDataStore(private val context: Context) {
         val MONITORED_APPS_CUSTOMIZED = booleanPreferencesKey("monitored_apps_customized")
         val MONITORED_APP_PACKAGES_JSON = stringPreferencesKey("monitored_app_packages_json")
         val ALLOW_OTHER_FINANCIAL_APPS_FALLBACK = booleanPreferencesKey("allow_other_financial_apps_fallback")
+        val CATEGORY_PARENT_MAP_JSON = stringPreferencesKey("category_parent_map_json")
+        val CATEGORY_SHOW_CHILDREN = booleanPreferencesKey("category_show_children")
+        val CHANNEL_PARENT_MAP_JSON = stringPreferencesKey("channel_parent_map_json")
+        val CHANNEL_SHOW_CHILDREN = booleanPreferencesKey("channel_show_children")
+        val BILL_FIELDS_CONFIG_JSON = stringPreferencesKey("bill_fields_config_json")
+        val NOTIFICATION_LOG_MAX_COUNT = intPreferencesKey("notification_log_max_count")
+        val NOTIFICATION_LOG_MAX_DAYS = intPreferencesKey("notification_log_max_days")
 
         val AI_PROVIDER_MODE = stringPreferencesKey("ai_provider_mode")
         val AI_LOCAL_MODEL_ID = stringPreferencesKey("ai_local_model_id")
@@ -176,7 +194,15 @@ class SettingsDataStore(private val context: Context) {
             dedupExcludedTransactionIds = decodeStringListJson(prefs[Keys.DEDUP_EXCLUDED_TX_IDS_JSON]),
             monitoredAppsCustomized = prefs[Keys.MONITORED_APPS_CUSTOMIZED] ?: false,
             monitoredAppPackages = decodeStringListJson(prefs[Keys.MONITORED_APP_PACKAGES_JSON]),
-            allowOtherFinancialAppsFallback = prefs[Keys.ALLOW_OTHER_FINANCIAL_APPS_FALLBACK] ?: true
+            allowOtherFinancialAppsFallback = prefs[Keys.ALLOW_OTHER_FINANCIAL_APPS_FALLBACK] ?: true,
+            categoryParentMap = decodeStringMapJson(prefs[Keys.CATEGORY_PARENT_MAP_JSON]),
+            categoryShowChildren = prefs[Keys.CATEGORY_SHOW_CHILDREN] ?: true,
+            channelParentMap = prefs[Keys.CHANNEL_PARENT_MAP_JSON]?.let { decodeStringMapJson(it) }
+                ?: ChannelCatalog.defaultChannelParentMap,
+            channelShowChildren = prefs[Keys.CHANNEL_SHOW_CHILDREN] ?: true,
+            billFieldsConfig = decodeBillFieldsConfigJson(prefs[Keys.BILL_FIELDS_CONFIG_JSON]),
+            notificationLogMaxCount = (prefs[Keys.NOTIFICATION_LOG_MAX_COUNT] ?: 500).coerceAtLeast(0),
+            notificationLogMaxDays = (prefs[Keys.NOTIFICATION_LOG_MAX_DAYS] ?: 30).coerceAtLeast(0)
         )
     }
 
@@ -231,7 +257,16 @@ class SettingsDataStore(private val context: Context) {
             deleteUndoDuration = DeleteUndoDuration.fromRaw(prefs[Keys.DELETE_UNDO_DURATION]),
             hideAllFeatureTips = prefs[Keys.HIDE_ALL_FEATURE_TIPS] ?: false,
             dismissedTipIds = decodeStringListJson(prefs[Keys.DISMISSED_TIP_IDS_JSON]).toSet(),
-            homePageLoadBatchSize = (prefs[Keys.HOME_PAGE_LOAD_BATCH_SIZE] ?: 100).coerceIn(20, 500)
+            homePageLoadBatchSize = (prefs[Keys.HOME_PAGE_LOAD_BATCH_SIZE] ?: 100).coerceIn(20, 500),
+            hapticEnabled = prefs[Keys.HAPTIC_ENABLED] ?: true,
+            hapticFollowSystem = prefs[Keys.HAPTIC_FOLLOW_SYSTEM] ?: true,
+            hapticIntensity = (prefs[Keys.HAPTIC_INTENSITY] ?: 0.65f).coerceIn(0.1f, 1.0f),
+            hapticOnClick = prefs[Keys.HAPTIC_ON_CLICK] ?: true,
+            hapticOnToggle = prefs[Keys.HAPTIC_ON_TOGGLE] ?: true,
+            hapticOnLongPress = prefs[Keys.HAPTIC_ON_LONG_PRESS] ?: true,
+            hapticOnDragReorder = prefs[Keys.HAPTIC_ON_DRAG_REORDER] ?: true,
+            hapticOnDestructive = prefs[Keys.HAPTIC_ON_DESTRUCTIVE] ?: true,
+            hapticOnGesture = prefs[Keys.HAPTIC_ON_GESTURE] ?: true
         )
     }
 
@@ -343,6 +378,13 @@ class SettingsDataStore(private val context: Context) {
                 settings.monitoredAppPackages.map { it.trim().take(128) }.filter { it.isNotEmpty() }
             )
             prefs[Keys.ALLOW_OTHER_FINANCIAL_APPS_FALLBACK] = settings.allowOtherFinancialAppsFallback
+            prefs[Keys.CATEGORY_PARENT_MAP_JSON] = encodeStringMapJson(settings.categoryParentMap)
+            prefs[Keys.CATEGORY_SHOW_CHILDREN] = settings.categoryShowChildren
+            prefs[Keys.CHANNEL_PARENT_MAP_JSON] = encodeStringMapJson(settings.channelParentMap)
+            prefs[Keys.CHANNEL_SHOW_CHILDREN] = settings.channelShowChildren
+            prefs[Keys.BILL_FIELDS_CONFIG_JSON] = encodeBillFieldsConfigJson(settings.billFieldsConfig)
+            prefs[Keys.NOTIFICATION_LOG_MAX_COUNT] = settings.notificationLogMaxCount.coerceAtLeast(0)
+            prefs[Keys.NOTIFICATION_LOG_MAX_DAYS] = settings.notificationLogMaxDays.coerceAtLeast(0)
         }
     }
 
@@ -416,6 +458,15 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.HIDE_ALL_FEATURE_TIPS] = settings.hideAllFeatureTips
             prefs[Keys.DISMISSED_TIP_IDS_JSON] = encodeStringListJson(settings.dismissedTipIds.toList())
             prefs[Keys.HOME_PAGE_LOAD_BATCH_SIZE] = settings.homePageLoadBatchSize.coerceIn(20, 500)
+            prefs[Keys.HAPTIC_ENABLED] = settings.hapticEnabled
+            prefs[Keys.HAPTIC_FOLLOW_SYSTEM] = settings.hapticFollowSystem
+            prefs[Keys.HAPTIC_INTENSITY] = settings.hapticIntensity.coerceIn(0.1f, 1.0f)
+            prefs[Keys.HAPTIC_ON_CLICK] = settings.hapticOnClick
+            prefs[Keys.HAPTIC_ON_TOGGLE] = settings.hapticOnToggle
+            prefs[Keys.HAPTIC_ON_LONG_PRESS] = settings.hapticOnLongPress
+            prefs[Keys.HAPTIC_ON_DRAG_REORDER] = settings.hapticOnDragReorder
+            prefs[Keys.HAPTIC_ON_DESTRUCTIVE] = settings.hapticOnDestructive
+            prefs[Keys.HAPTIC_ON_GESTURE] = settings.hapticOnGesture
         }
     }
 
@@ -513,5 +564,54 @@ class SettingsDataStore(private val context: Context) {
             }
             result
         }.getOrDefault(emptyMap())
+    }
+
+    private fun encodeStringMapJson(map: Map<String, String>): String =
+        JSONObject().apply {
+            map.forEach { (k, v) ->
+                val ck = k.trim().take(28)
+                val cv = v.trim().take(28)
+                if (ck.isNotEmpty() && cv.isNotEmpty() && ck != cv) put(ck, cv)
+            }
+        }.toString()
+
+    private fun encodeBillFieldsConfigJson(fields: List<BillFieldConfig>): String =
+        JSONArray().apply {
+            BillFieldCatalog.normalizeFields(fields).forEach { f ->
+                put(JSONObject().apply {
+                    put("id", f.id)
+                    put("label", f.label)
+                    put("isBuiltIn", f.isBuiltIn)
+                    put("isMajorItem", f.isMajorItem)
+                    put("foldedInMore", f.foldedInMore)
+                    put("enabled", f.enabled)
+                })
+            }
+        }.toString()
+
+    private fun decodeBillFieldsConfigJson(raw: String?): List<BillFieldConfig> {
+        if (raw.isNullOrBlank()) return BillFieldCatalog.defaultFields
+        return runCatching {
+            val arr = JSONArray(raw)
+            val parsed = buildList(arr.length()) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id").trim()
+                    val label = o.optString("label").trim()
+                    if (id.isEmpty() || label.isEmpty()) continue
+                    add(
+                        BillFieldConfig(
+                            id = id,
+                            label = label,
+                            isBuiltIn = o.optBoolean("isBuiltIn", id in BillFieldCatalog.builtInById),
+                            isMajorItem = o.optBoolean("isMajorItem", BillFieldCatalog.builtInById[id]?.isMajorItem == true),
+                            foldedInMore = o.optBoolean("foldedInMore", false),
+                            enabled = o.optBoolean("enabled", true)
+                        )
+                    )
+                }
+            }
+            BillFieldCatalog.normalizeFields(parsed)
+        }.getOrDefault(BillFieldCatalog.defaultFields)
     }
 }

@@ -347,19 +347,28 @@ fun LedgerHomeScreen(
         derivedStateOf {
             val timeScoped = LedgerViewModel.filterByHomeDimension(confirmedTransactions, listTimeDimension)
             timeScoped.filter { tx ->
+                val resolvedParentChannel = com.example.model.ChannelCatalog.resolveDisplayChannel(
+                    tx.channel,
+                    settings.channelParentMap,
+                    showChildren = false
+                )
                 val matchesFilter = when (selectedFilter) {
                     "全部" -> true
                     "支出" -> tx.txType == TransactionType.EXPENSE
                     "收入" -> tx.txType == TransactionType.INCOME
                     "外币" -> !tx.currencyCode.equals(baseCurrency, ignoreCase = true)
-                    "支付宝" -> tx.channel.contains("支付宝")
-                    "微信支付" -> tx.channel.contains("微信")
-                    "云闪付" -> tx.channel.contains("云闪付") || tx.channel.contains("银联")
-                    "银行卡" -> tx.channel.contains("银行")
+                    "支付宝" -> tx.channel.contains("支付宝") || resolvedParentChannel.contains("支付宝")
+                    "微信支付" -> tx.channel.contains("微信") || resolvedParentChannel.contains("微信")
+                    "云闪付" -> tx.channel.contains("云闪付") || tx.channel.contains("银联") || resolvedParentChannel.contains("云闪付")
+                    "银行卡" -> tx.channel.contains("银行") || resolvedParentChannel.contains("银行")
                     else -> true
                 }
                 val q = searchQuery.trim()
-                val matchesSearch = tx.matchesSearchQuery(q)
+                val matchesSearch = tx.matchesSearchQuery(
+                    rawQuery = q,
+                    categoryParentMap = settings.categoryParentMap,
+                    channelParentMap = settings.channelParentMap
+                )
                 val matchesStart = customStartMillis == null || tx.occurredAtMillis >= customStartMillis
                 val matchesEnd = customEndMillis == null || tx.occurredAtMillis <= customEndMillis
                 val matchesTimeSlot = matchesTimeOfDayRange(
@@ -1399,6 +1408,7 @@ fun LedgerHomeScreen(
         var extTradeStatus: String? = null
         var extTxNo: String? = null
         var extMerchantOrderNo: String? = null
+        var extCustomFields: Map<String, String> = emptyMap()
         TransactionEditorDialog(
             initialTransaction = null,
             defaultCurrencyCode = baseCurrency,
@@ -1415,6 +1425,7 @@ fun LedgerHomeScreen(
                 extTxNo = tno
                 extMerchantOrderNo = mno
             },
+            onSaveCustomFields = { extCustomFields = it },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.addManualTransaction(
                     amountCents = amountCents,
@@ -1430,7 +1441,8 @@ fun LedgerHomeScreen(
                     productName = extProductName,
                     tradeStatus = extTradeStatus,
                     transactionNo = extTxNo,
-                    merchantOrderNo = extMerchantOrderNo
+                    merchantOrderNo = extMerchantOrderNo,
+                    customFields = extCustomFields
                 )
                 showCreateDialog = false
             }
@@ -1443,6 +1455,7 @@ fun LedgerHomeScreen(
         var extTradeStatus: String? = tx.tradeStatus
         var extTxNo: String? = tx.transactionNo
         var extMerchantOrderNo: String? = tx.merchantOrderNo
+        var extCustomFields: Map<String, String> = tx.customFields
         TransactionEditorDialog(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
@@ -1477,6 +1490,7 @@ fun LedgerHomeScreen(
                 extTxNo = tno
                 extMerchantOrderNo = mno
             },
+            onSaveCustomFields = { extCustomFields = it },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
                     txId = tx.id,
@@ -1495,7 +1509,8 @@ fun LedgerHomeScreen(
                     tradeStatus = extTradeStatus,
                     transactionNo = extTxNo,
                     merchantOrderNo = extMerchantOrderNo,
-                    updateExtendedFields = true
+                    updateExtendedFields = true,
+                    customFields = extCustomFields
                 )
                 editingTransaction = null
             }
@@ -2344,8 +2359,19 @@ private fun PendingConfirmationCard(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                val pendingHierarchy = com.example.ui.components.LocalHierarchyDisplay.current
+                                val pendingChannel = com.example.model.ChannelCatalog.resolveDisplayChannel(
+                                    tx.channel,
+                                    pendingHierarchy.channelParentMap,
+                                    pendingHierarchy.channelShowChildren
+                                )
+                                val pendingCategory = CategoryCatalog.resolveDisplayCategory(
+                                    tx.category,
+                                    pendingHierarchy.categoryParentMap,
+                                    pendingHierarchy.categoryShowChildren
+                                )
                                 Text(
-                                    text = "${tx.channel} · ${tx.category}",
+                                    text = "$pendingChannel · $pendingCategory",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -3250,8 +3276,14 @@ private fun TransactionRowCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    val rowHierarchy = com.example.ui.components.LocalHierarchyDisplay.current
+                    val displayCat = CategoryCatalog.resolveDisplayCategory(
+                        transaction.category,
+                        rowHierarchy.categoryParentMap,
+                        rowHierarchy.categoryShowChildren
+                    )
                     Text(
-                        text = "${transaction.category} · ${formatItemTimeCompact(transaction.occurredAtMillis)}",
+                        text = "$displayCat · ${formatItemTimeCompact(transaction.occurredAtMillis)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

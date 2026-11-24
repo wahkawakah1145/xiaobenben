@@ -2590,9 +2590,10 @@ class ExampleRobolectricTest {
       settings = loaded
     )
     val decoded = com.example.data.LedgerBackupCodec.decodeBackupJson(backupJson)
-    org.junit.Assert.assertTrue(decoded.settings!!.monitoredAppsCustomized)
-    assertEquals(loaded.monitoredAppPackages, decoded.settings!!.monitoredAppPackages)
-    org.junit.Assert.assertFalse(decoded.settings!!.allowOtherFinancialAppsFallback)
+    val decodedSettings = requireNotNull(decoded.settings)
+    org.junit.Assert.assertTrue(decodedSettings.monitoredAppsCustomized)
+    assertEquals(loaded.monitoredAppPackages, decodedSettings.monitoredAppPackages)
+    org.junit.Assert.assertFalse(decodedSettings.allowOtherFinancialAppsFallback)
 
     // 4. Settings search catalog covers monitored apps
     val searchHits = com.example.ui.SettingsSearchCatalog.search("监听应用")
@@ -2600,6 +2601,245 @@ class ExampleRobolectricTest {
 
     // Restore original settings
     store.saveBudgetSettings(original)
+  }
+
+  @Test
+  fun `category and channel hierarchy supports attribution cycle prevention parent-only display and consolidation`() = kotlinx.coroutines.runBlocking<Unit> {
+    // 1. Cycle prevention & display resolution
+    val catMap = mapOf("咖啡奶茶" to "餐饮美食")
+    org.junit.Assert.assertFalse(com.example.model.CategoryCatalog.canAssignParent("餐饮美食", "咖啡奶茶", catMap))
+    org.junit.Assert.assertFalse(com.example.model.CategoryCatalog.canAssignParent("餐饮美食", "餐饮美食", catMap))
+    org.junit.Assert.assertTrue(com.example.model.CategoryCatalog.canAssignParent("夜宵", "餐饮美食", catMap))
+
+    assertEquals("餐饮美食", com.example.model.CategoryCatalog.resolveDisplayCategory("咖啡奶茶", catMap, showChildren = false))
+    assertEquals("咖啡奶茶", com.example.model.CategoryCatalog.resolveDisplayCategory("咖啡奶茶", catMap, showChildren = true))
+
+    val chMap = com.example.model.ChannelCatalog.defaultChannelParentMap
+    assertEquals("支付宝", com.example.model.ChannelCatalog.resolveDisplayChannel("花呗", chMap, showChildren = false))
+    assertEquals("花呗", com.example.model.ChannelCatalog.resolveDisplayChannel("花呗", chMap, showChildren = true))
+    assertEquals("微信支付", com.example.model.ChannelCatalog.resolveDisplayChannel("零钱通", chMap, showChildren = false))
+
+    // 2. Repository consolidation rewrites transactions & rules into parent
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val store = com.example.data.SettingsDataStore(context)
+    val originalSettings = store.getBudgetSettingsOnce()
+
+    val tx = com.example.model.LedgerTransaction(
+      amountCents = 2500L,
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "咖啡奶茶",
+      merchant = "瑞幸咖啡",
+      channel = "花呗"
+    )
+    repo.addTransaction(tx).getOrThrow()
+    repo.setCategoryParent("咖啡奶茶", "餐饮美食").getOrThrow()
+    repo.setChannelParent("花呗", "支付宝").getOrThrow()
+
+    val catSync = repo.consolidateCategoryChildrenToParent("餐饮美食").getOrThrow()
+    org.junit.Assert.assertTrue(catSync.updatedTransactions >= 1)
+    val chSync = repo.consolidateChannelChildrenToParent("支付宝").getOrThrow()
+    org.junit.Assert.assertTrue(chSync.updatedTransactions >= 1)
+
+    val allTxs = repo.getAllTransactionsOnce()
+    val reloaded = allTxs.first { it.id == tx.id }
+    assertEquals("餐饮美食", reloaded.category)
+    assertEquals("支付宝", reloaded.channel)
+
+    // Cleanup test transaction & settings
+    repo.deleteTransaction(tx.id)
+    store.saveBudgetSettings(originalSettings)
+  }
+
+  @Test
+  fun `custom bill fields support ordering folding full-text search Room v9 persistence and AI prompt sync`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val store = com.example.data.SettingsDataStore(context)
+    val originalSettings = store.getBudgetSettingsOnce()
+
+    val customField = com.example.model.BillFieldConfig(
+      id = "custom_project_code",
+      label = "项目编号",
+      isBuiltIn = false,
+      isMajorItem = false,
+      foldedInMore = true,
+      enabled = true
+    )
+    val updatedFields = com.example.model.BillFieldCatalog.normalizeFields(
+      listOf(customField) + com.example.model.BillFieldCatalog.defaultFields
+    )
+    repo.saveBillFieldsConfig(updatedFields).getOrThrow()
+
+    val reloadedSettings = store.getBudgetSettingsOnce()
+    org.junit.Assert.assertTrue(reloadedSettings.billFieldsConfig.any { it.id == "custom_project_code" && it.foldedInMore })
+
+    // Verify AI prompt includes custom field key & label
+    val aiPrompt = com.example.data.AiUnderstandingManager.buildDefaultSystemPrompt(
+      billFieldsConfig = reloadedSettings.billFieldsConfig,
+      categoryParentMap = reloadedSettings.categoryParentMap,
+      channelParentMap = reloadedSettings.channelParentMap
+    )
+    org.junit.Assert.assertTrue(aiPrompt.contains("项目编号"))
+    org.junit.Assert.assertTrue(aiPrompt.contains("custom_project_code"))
+
+    // Persist transaction with customFields in Room v9 and verify search matches custom field & parent hierarchy
+    val tx = com.example.model.LedgerTransaction(
+      amountCents = 8800L,
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "咖啡奶茶",
+      merchant = "星巴克",
+      channel = "花呗",
+      customFields = mapOf("custom_project_code" to "PRJ-2026-ALPHA")
+    )
+    repo.addTransaction(tx).getOrThrow()
+    val loadedTx = repo.getAllTransactionsOnce().first { it.id == tx.id }
+    assertEquals("PRJ-2026-ALPHA", loadedTx.customFields["custom_project_code"])
+
+    val catParents = mapOf("咖啡奶茶" to "餐饮美食")
+    val chParents = mapOf("花呗" to "支付宝")
+    org.junit.Assert.assertTrue(loadedTx.matchesSearchQuery("PRJ-2026-ALPHA", catParents, chParents))
+    org.junit.Assert.assertTrue(loadedTx.matchesSearchQuery("餐饮美食 支付宝", catParents, chParents))
+    org.junit.Assert.assertFalse(loadedTx.matchesSearchQuery("不存在关键词", catParents, chParents))
+
+    // Cleanup
+    repo.deleteTransaction(tx.id)
+    store.saveBudgetSettings(originalSettings)
+  }
+
+  @Test
+  fun `notification logs persist with pagination search count-time retention and unlimited option`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val store = com.example.data.SettingsDataStore(context)
+    val originalSettings = store.getBudgetSettingsOnce()
+
+    repo.clearAllNotificationLogs().getOrThrow()
+    // Unlimited & permanent retention (0 / 0)
+    store.saveBudgetSettings(originalSettings.copy(notificationLogMaxCount = 0, notificationLogMaxDays = 0))
+    val now = System.currentTimeMillis()
+    for (i in 1..6) {
+      repo.recordNotificationLog(
+        packageName = "com.eg.android.AlipayGphone",
+        appLabel = "支付宝",
+        title = "交易提醒 #$i",
+        content = "您支出${i * 10}.00元",
+        status = "已自动入账",
+        summary = "¥${i * 10}.00",
+        capturedAtMillis = now - (6 - i) * 60_000L
+      ).getOrThrow()
+    }
+    assertEquals(6, repo.observeNotificationLogsCount().first())
+
+    // Pagination & search
+    val page1 = repo.loadNotificationLogsPage(query = "", limit = 4, offset = 0)
+    val page2 = repo.loadNotificationLogsPage(query = "", limit = 4, offset = 4)
+    assertEquals(4, page1.size)
+    assertEquals(2, page2.size)
+    val searchHits = repo.loadNotificationLogsPage(query = "#5", limit = 20, offset = 0)
+    assertEquals(1, searchHits.size)
+    org.junit.Assert.assertTrue(searchHits.first().title.contains("#5"))
+
+    // Count retention cap prunes oldest entries
+    repo.updateNotificationLogRetention(maxCount = 3, maxDays = 0).getOrThrow()
+    assertEquals(3, repo.observeNotificationLogsCount().first())
+
+    // Cleanup
+    repo.clearAllNotificationLogs()
+    store.saveBudgetSettings(originalSettings)
+  }
+
+  @Test
+  fun `encrypted zip backup round-trips with default key custom password and legacy plaintext json compatibility`() {
+    val sampleJson = com.example.data.LedgerBackupCodec.encodeBackupJson(
+      transactions = emptyList(),
+      rules = emptyList(),
+      settings = com.example.model.BudgetSettings(monthlyBudgetCents = 666_600L)
+    )
+
+    // 1. Default app-key encrypted ZIP round-trip
+    val defaultZipBytes = com.example.data.BackupCryptoCodec.encodeEncryptedZip(sampleJson, password = null)
+    org.junit.Assert.assertTrue(com.example.data.BackupCryptoCodec.isZipArchive(defaultZipBytes))
+    // Ensure plaintext JSON is NOT exposed verbatim inside the encrypted binary
+    org.junit.Assert.assertFalse(String(defaultZipBytes, Charsets.UTF_8).contains("666600"))
+    val decodedDefault = com.example.data.BackupCryptoCodec.decodeBackupBytes(defaultZipBytes, password = null)
+    org.junit.Assert.assertTrue(decodedDefault.wasEncryptedZip)
+    org.junit.Assert.assertFalse(decodedDefault.usedCustomPassword)
+    assertEquals(sampleJson, decodedDefault.jsonText)
+
+    // 2. Custom password encrypted ZIP round-trip + missing/wrong password rejection
+    val pwdZipBytes = com.example.data.BackupCryptoCodec.encodeEncryptedZip(sampleJson, password = "MyStrongPassword!2026")
+    org.junit.Assert.assertTrue(com.example.data.BackupCryptoCodec.requiresPassword(pwdZipBytes))
+    var caughtRequired = false
+    try {
+      com.example.data.BackupCryptoCodec.decodeBackupBytes(pwdZipBytes, password = null)
+    } catch (_: com.example.data.BackupPasswordRequiredException) {
+      caughtRequired = true
+    }
+    org.junit.Assert.assertTrue(caughtRequired)
+
+    var caughtWrong = false
+    try {
+      com.example.data.BackupCryptoCodec.decodeBackupBytes(pwdZipBytes, password = "WrongPassword")
+    } catch (_: com.example.data.BackupWrongPasswordException) {
+      caughtWrong = true
+    }
+    org.junit.Assert.assertTrue(caughtWrong)
+
+    val decodedWithPwd = com.example.data.BackupCryptoCodec.decodeBackupBytes(pwdZipBytes, password = "MyStrongPassword!2026")
+    org.junit.Assert.assertTrue(decodedWithPwd.usedCustomPassword)
+    assertEquals(sampleJson, decodedWithPwd.jsonText)
+
+    // 3. Backward-compatible legacy plaintext JSON import
+    val legacyDecoded = com.example.data.BackupCryptoCodec.decodeBackupBytes(sampleJson.toByteArray(Charsets.UTF_8), password = null)
+    org.junit.Assert.assertFalse(legacyDecoded.wasEncryptedZip)
+    assertEquals(sampleJson, legacyDecoded.jsonText)
+  }
+
+  @Test
+  fun `fine-grained haptic settings persist and settings search covers personalization bill fields logs and haptics`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val store = com.example.data.SettingsDataStore(context)
+    val originalAppearance = store.getAppearanceSettingsOnce()
+
+    val customAppearance = originalAppearance.copy(
+      hapticEnabled = true,
+      hapticFollowSystem = false,
+      hapticIntensity = 0.75f,
+      hapticOnClick = false,
+      hapticOnGesture = true,
+      hapticOnLongPress = true,
+      hapticOnDragReorder = true,
+      hapticOnToggle = false,
+      hapticOnDestructive = true
+    )
+    store.saveAppearanceSettings(customAppearance)
+    val reloaded = store.getAppearanceSettingsOnce()
+    org.junit.Assert.assertTrue(reloaded.hapticEnabled)
+    org.junit.Assert.assertFalse(reloaded.hapticFollowSystem)
+    assertEquals(0.75f, reloaded.hapticIntensity, 0.01f)
+    org.junit.Assert.assertFalse(reloaded.hapticOnClick)
+    org.junit.Assert.assertTrue(reloaded.hapticOnGesture)
+    org.junit.Assert.assertTrue(reloaded.hapticOnDragReorder)
+    org.junit.Assert.assertFalse(reloaded.hapticOnToggle)
+
+    // Verify notification without valid amount is ignored by parser
+    val nonAmountParsed = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "com.tencent.mm",
+      title = "微信支付",
+      content = "账单月报已生成，点击查看详情"
+    )
+    org.junit.Assert.assertNull(nonAmountParsed)
+
+    // Verify SettingsSearchCatalog covers all new/renamed sections
+    org.junit.Assert.assertTrue(com.example.ui.SettingsSearchCatalog.search("个性化设置").any { it.route == com.example.ui.ROUTE_SETTINGS_APPEARANCE_THEME })
+    org.junit.Assert.assertTrue(com.example.ui.SettingsSearchCatalog.search("触感反馈").any { it.route == com.example.ui.ROUTE_SETTINGS_APPEARANCE_INTERACTION })
+    org.junit.Assert.assertTrue(com.example.ui.SettingsSearchCatalog.search("账单信息").any { it.route == com.example.ui.ROUTE_SETTINGS_BILL_FIELDS })
+    org.junit.Assert.assertTrue(com.example.ui.SettingsSearchCatalog.search("通知读取日志").any { it.route == com.example.ui.ROUTE_SETTINGS_NOTIFICATION_LOGS })
+    org.junit.Assert.assertTrue(com.example.ui.SettingsSearchCatalog.search("加密").any { it.route == com.example.ui.ROUTE_SETTINGS_LOCAL_BACKUP })
+
+    // Restore original appearance
+    store.saveAppearanceSettings(originalAppearance)
   }
 }
 

@@ -33,6 +33,8 @@ import com.example.viewmodel.SettingsHighlightTarget
 import kotlinx.coroutines.delay
 
 const val ROUTE_SETTINGS_CHANNELS = "settings/channels"
+const val ROUTE_SETTINGS_BILL_FIELDS = "settings/bill_fields"
+const val ROUTE_SETTINGS_NOTIFICATION_LOGS = "settings/notification_logs"
 
 val LocalSettingsHighlight = compositionLocalOf<SettingsHighlightTarget?> { null }
 
@@ -69,21 +71,30 @@ object SettingsSearchCatalog {
         ),
         SettingsSearchItem(
             id = "category_mgmt",
-            title = "分类管理（图标与同步）",
-            subtitle = "自定义收支分类与图标，动态同步历史账单、识别规则与 AI 提示词",
+            title = "分类管理（图标、排序与归属）",
+            subtitle = "自定义分类图标、长按拖动排序与归属父子类、一键整合子类到父类并同步规则与 AI",
             categoryLabel = "账单工具",
             route = ROUTE_SETTINGS_CATEGORIES,
             sectionKey = "category_header_card",
-            keywords = listOf("分类", "图标", "自定义分类", "餐饮", "购物", "同步规则")
+            keywords = listOf("分类", "图标", "自定义分类", "分类归属", "子类", "父类", "排序", "整合", "餐饮", "购物")
         ),
         SettingsSearchItem(
             id = "channel_mgmt",
-            title = "渠道管理（同步规则与 AI）",
-            subtitle = "自定义支付渠道列表，自动归属花呗/余额宝与零钱/零钱通",
+            title = "渠道管理（排序与归属）",
+            subtitle = "自定义支付渠道附属关系与排序，花呗/余额宝归属支付宝，零钱/零钱通归属微信支付",
             categoryLabel = "账单工具",
             route = ROUTE_SETTINGS_CHANNELS,
             sectionKey = "channel_header_info",
-            keywords = listOf("渠道", "花呗", "余额宝", "零钱", "零钱通", "支付宝", "微信支付", "银行卡")
+            keywords = listOf("渠道", "渠道归属", "子类", "父类", "排序", "整合", "花呗", "余额宝", "零钱", "零钱通", "支付宝", "微信支付")
+        ),
+        SettingsSearchItem(
+            id = "bill_fields_mgmt",
+            title = "账单信息与可选字段排序",
+            subtitle = "自定义账单可选信息类别（商品/类型/状态/单号及自定义项），长按排序并配置折叠进更多信息",
+            categoryLabel = "账单工具",
+            route = ROUTE_SETTINGS_BILL_FIELDS,
+            sectionKey = "bill_fields_header",
+            keywords = listOf("账单信息", "账单字段", "可选信息", "自定义字段", "更多账单信息", "折叠", "排序", "商品", "单号")
         ),
         SettingsSearchItem(
             id = "budget_and_behavior",
@@ -144,11 +155,20 @@ object SettingsSearchCatalog {
         SettingsSearchItem(
             id = "monitored_apps",
             title = "自定义监听应用（图形化选择）",
-            subtitle = "勾选需要监听通知的微信、支付宝、短信、银行或其他已安装应用，并引导开启权限",
-            categoryLabel = "权限管理",
+            subtitle = "勾选需要监听通知的微信、支付宝、短信、银行或其他已安装应用",
+            categoryLabel = "通知识别与规则",
             route = ROUTE_SETTINGS_MONITORED_APPS,
             sectionKey = "monitored_apps_card",
             keywords = listOf("监听应用", "选择应用", "应用通知", "微信", "支付宝", "短信", "银行app", "包名", "通知监听")
+        ),
+        SettingsSearchItem(
+            id = "notification_logs",
+            title = "通知读取日志与保留策略",
+            subtitle = "记录每一条读取到的通知，可选保存条数与天数，支持无限条数永久保存",
+            categoryLabel = "通知识别与规则",
+            route = ROUTE_SETTINGS_NOTIFICATION_LOGS,
+            sectionKey = "notification_log_retention_card",
+            keywords = listOf("日志", "通知日志", "读取记录", "保留时间", "永久保存", "无限条数", "通知记录")
         ),
 
         // AI理解
@@ -174,104 +194,113 @@ object SettingsSearchCatalog {
         // 备份与恢复
         SettingsSearchItem(
             id = "local_backup_and_export",
-            title = "本地备份、恢复与文件导出",
-            subtitle = "导出/导入 JSON 完整备份，或导出 CSV / XLSX / JSON（可选带分析文本）",
+            title = "加密备份、恢复与文件导出",
+            subtitle = "AES-256-GCM 加密 ZIP 备份与兼容旧版 JSON 恢复，导出 CSV / XLSX / JSON（附隐私提示）",
             categoryLabel = "备份与恢复",
             route = ROUTE_SETTINGS_LOCAL_BACKUP,
             sectionKey = "local_export_spreadsheet_card",
-            keywords = listOf("备份", "恢复", "导出", "csv", "xlsx", "json", "定时备份提醒")
+            keywords = listOf("备份", "加密备份", "zip", "密码", "恢复", "导出", "csv", "xlsx", "json", "定时备份提醒")
         ),
         SettingsSearchItem(
             id = "webdav_sync",
             title = "WebDAV 云端同步",
-            subtitle = "配置坚果云 / Alist / Nextcloud WebDAV 自动云备份与拉取恢复",
+            subtitle = "配置坚果云 / Alist / Nextcloud WebDAV 加密云备份与拉取恢复",
             categoryLabel = "备份与恢复",
             route = ROUTE_SETTINGS_DATA_HUB,
             sectionKey = "webdav_form",
             keywords = listOf("webdav", "云备份", "坚果云", "同步", "云端")
         ),
 
-        // 外观与布局
+        // 个性化设置
         SettingsSearchItem(
             id = "theme_dynamic_color",
             title = "莫奈动态取色与调色盘风格",
             subtitle = "开启动态取色、自定义主题主色与 Tonal / Expressive / Vibrant 调色盘",
-            categoryLabel = "外观与布局 · 主题配色",
+            categoryLabel = "个性化设置 · 主题配色",
             route = ROUTE_SETTINGS_APPEARANCE_THEME,
             sectionKey = "color_and_palette",
-            keywords = listOf("主题", "莫奈", "动态取色", "配色", "调色盘", "主题色")
+            keywords = listOf("个性化", "主题", "莫奈", "动态取色", "配色", "调色盘", "主题色")
         ),
         SettingsSearchItem(
             id = "dark_mode_oled",
             title = "深色模式与 OLED 纯黑背景",
             subtitle = "切换浅色/深色/跟随系统，并可在深色模式下启用 OLED 纯黑省电背景",
-            categoryLabel = "外观与布局 · 主题配色",
+            categoryLabel = "个性化设置 · 主题配色",
             route = ROUTE_SETTINGS_APPEARANCE_THEME,
             sectionKey = "theme_mode_and_oled",
-            keywords = listOf("深色", "暗黑", "夜间", "oled", "纯黑", "浅色")
+            keywords = listOf("个性化", "深色", "暗黑", "夜间", "oled", "纯黑", "浅色")
         ),
         SettingsSearchItem(
             id = "font_and_dpi",
             title = "数字字体、页面缩放与显示密度 (DPI)",
             subtitle = "调整数字字体、DPI 缩放比例（点击应用后生效）与卡片紧凑度",
-            categoryLabel = "外观与布局 · 显示与排版",
+            categoryLabel = "个性化设置 · 显示与排版",
             route = ROUTE_SETTINGS_APPEARANCE_DISPLAY,
             sectionKey = "page_dpi_scaling",
-            keywords = listOf("dpi", "缩放", "密度", "字体", "卡片密度", "角标")
+            keywords = listOf("个性化", "dpi", "缩放", "密度", "字体", "卡片密度", "角标")
         ),
         SettingsSearchItem(
             id = "bottom_tab_order",
             title = "底部导航栏排序与账本 Tab 显隐",
             subtitle = "自定义底部 Tab 顺序，支持隐藏或显示「账本」入口",
-            categoryLabel = "外观与布局 · 主页与导航",
+            categoryLabel = "个性化设置 · 主页与导航",
             route = ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
             sectionKey = "bottom_tab_bar_customization",
-            keywords = listOf("tab", "底栏", "底部导航", "账本tab", "排序", "隐藏")
+            keywords = listOf("个性化", "tab", "底栏", "底部导航", "账本tab", "排序", "隐藏")
         ),
         SettingsSearchItem(
             id = "home_batch_load_settings",
             title = "首页账单单次加载条数",
             subtitle = "自定义主页初次加载及触底上划续载的条数，提升进出流畅度",
-            categoryLabel = "外观与布局 · 主页与导航",
+            categoryLabel = "个性化设置 · 主页与导航",
             route = ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
             sectionKey = "home_batch_load_settings",
-            keywords = listOf("加载", "分批加载", "条数", "100条", "性能", "流畅", "上划加载")
+            keywords = listOf("个性化", "加载", "分批加载", "条数", "100条", "性能", "流畅", "上划加载")
         ),
         SettingsSearchItem(
             id = "feature_tips_management",
             title = "功能提示管理（一键关闭 / 重新打开）",
             subtitle = "一键关闭所有页面提示条，或逐项重新打开已关闭的功能提示",
-            categoryLabel = "外观与布局 · 主页与导航",
+            categoryLabel = "个性化设置 · 主页与导航",
             route = ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
             sectionKey = "feature_tips_management",
-            keywords = listOf("提示", "功能提示", "关闭提示", "隐藏提示", "重新打开提示", "引导")
+            keywords = listOf("个性化", "提示", "功能提示", "关闭提示", "隐藏提示", "重新打开提示", "引导")
         ),
         SettingsSearchItem(
             id = "home_brand_tips",
             title = "主页标题、Tips 与悬浮按钮位置",
             subtitle = "自定义顶部标题与图标尺寸、财务 Tips 文案以及右下/左下悬浮按钮",
-            categoryLabel = "外观与布局 · 主页与导航",
+            categoryLabel = "个性化设置 · 主页与导航",
             route = ROUTE_SETTINGS_APPEARANCE_HOME_NAV,
             sectionKey = "home_brand_header_customization",
-            keywords = listOf("主页", "tips", "标题", "悬浮按钮", "fab", "置顶")
+            keywords = listOf("个性化", "主页", "tips", "标题", "悬浮按钮", "fab", "置顶")
+        ),
+        SettingsSearchItem(
+            id = "haptic_feedback",
+            title = "触感反馈（跟随系统 / 强度与分场景调节）",
+            subtitle = "开启或关闭触感反馈，支持跟随系统触感、自定义振动强度与各交互场景细粒度开关",
+            categoryLabel = "个性化设置 · 触感与交互",
+            route = ROUTE_SETTINGS_APPEARANCE_INTERACTION,
+            sectionKey = "haptic_feedback_card",
+            keywords = listOf("个性化", "触感", "触感反馈", "震动", "振动", "马达", "跟随系统", "强度", "haptic")
         ),
         SettingsSearchItem(
             id = "interaction_gestures",
             title = "导航动画、预测性返回与撤回横栏时长",
             subtitle = "设置 Tab 切换动画、预测性返回样式与底部提示/撤回横栏停留时长",
-            categoryLabel = "外观与布局 · 交互与提示",
+            categoryLabel = "个性化设置 · 触感与交互",
             route = ROUTE_SETTINGS_APPEARANCE_INTERACTION,
             sectionKey = "navigation_and_gestures",
-            keywords = listOf("手势", "预测性返回", "撤回", "横栏", "提示时长", "动画")
+            keywords = listOf("个性化", "手势", "预测性返回", "撤回", "横栏", "提示时长", "动画")
         ),
         SettingsSearchItem(
             id = "icon_and_shortcut",
             title = "图标风格与创建桌面快捷方式",
             subtitle = "切换应用图标风格（含莫奈徽标）或创建自定义图标与名称的桌面快捷方式",
-            categoryLabel = "外观与布局 · 图标与快捷方式",
+            categoryLabel = "个性化设置 · 图标与快捷方式",
             route = ROUTE_SETTINGS_APPEARANCE_ICON,
             sectionKey = "icon_style_settings",
-            keywords = listOf("图标", "桌面图标", "快捷方式", "莫奈图标", "图标风格", "应用图标")
+            keywords = listOf("个性化", "图标", "桌面图标", "快捷方式", "莫奈图标", "图标风格", "应用图标")
         ),
 
         // 权限管理 & 关于

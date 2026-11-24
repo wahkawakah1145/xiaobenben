@@ -30,7 +30,7 @@ object LedgerBackupCodec {
         bookLinks: List<TransactionBookLink> = emptyList()
     ): String {
         val rootJson = JSONObject().apply {
-            put("version", 4)
+            put("version", 5)
             put("appId", "com.live150yo.lvshuiqingshan")
             put("exportedAtMillis", System.currentTimeMillis())
             put("settings", JSONObject().apply {
@@ -66,9 +66,39 @@ object LedgerBackupCodec {
                         }
                     })
                 }
+                if (settings.categoryParentMap.isNotEmpty()) {
+                    put("categoryParentMap", JSONObject().apply {
+                        settings.categoryParentMap.forEach { (k, v) ->
+                            if (k.isNotBlank() && v.isNotBlank()) put(k, v)
+                        }
+                    })
+                }
+                put("categoryShowChildren", settings.categoryShowChildren)
                 put("customChannels", JSONArray().apply {
                     ChannelCatalog.activeChannels(settings).forEach { put(it) }
                 })
+                if (settings.channelParentMap.isNotEmpty()) {
+                    put("channelParentMap", JSONObject().apply {
+                        settings.channelParentMap.forEach { (k, v) ->
+                            if (k.isNotBlank() && v.isNotBlank()) put(k, v)
+                        }
+                    })
+                }
+                put("channelShowChildren", settings.channelShowChildren)
+                put("billFieldsConfig", JSONArray().apply {
+                    com.example.model.BillFieldCatalog.normalizeFields(settings.billFieldsConfig).forEach { field ->
+                        put(JSONObject().apply {
+                            put("id", field.id)
+                            put("label", field.label)
+                            put("isBuiltIn", field.isBuiltIn)
+                            put("isMajorItem", field.isMajorItem)
+                            put("foldedInMore", field.foldedInMore)
+                            put("enabled", field.enabled)
+                        })
+                    }
+                })
+                put("notificationLogMaxCount", settings.notificationLogMaxCount)
+                put("notificationLogMaxDays", settings.notificationLogMaxDays)
                 if (settings.dedupExcludedTransactionIds.isNotEmpty()) {
                     put("dedupExcludedTransactionIds", JSONArray().apply {
                         settings.dedupExcludedTransactionIds.distinct().forEach { put(it) }
@@ -106,6 +136,13 @@ object LedgerBackupCodec {
                         tx.tradeStatus?.takeIf { it.isNotBlank() }?.let { put("tradeStatus", it.take(40)) }
                         tx.transactionNo?.takeIf { it.isNotBlank() }?.let { put("transactionNo", it.take(80)) }
                         tx.merchantOrderNo?.takeIf { it.isNotBlank() }?.let { put("merchantOrderNo", it.take(80)) }
+                        if (tx.customFields.isNotEmpty()) {
+                            put("customFields", JSONObject().apply {
+                                tx.customFields.forEach { (k, v) ->
+                                    if (k.isNotBlank() && v.isNotBlank()) put(k.take(40), v.take(160))
+                                }
+                            })
+                        }
                         tx.balanceAfterCents?.let { put("balanceAfterCents", it) }
                         put("occurredAtMillis", tx.occurredAtMillis)
                         if (!tx.confirmed) put("confirmed", false)
@@ -203,6 +240,16 @@ object LedgerBackupCodec {
                         tradeStatus = o.optString("tradeStatus").takeIf { it.isNotBlank() && it != "null" },
                         transactionNo = o.optString("transactionNo").takeIf { it.isNotBlank() && it != "null" },
                         merchantOrderNo = o.optString("merchantOrderNo").takeIf { it.isNotBlank() && it != "null" },
+                        customFields = o.optJSONObject("customFields")?.let { cfObj ->
+                            buildMap {
+                                val keys = cfObj.keys()
+                                while (keys.hasNext()) {
+                                    val k = keys.next().trim().take(40)
+                                    val v = cfObj.optString(k).trim().take(160)
+                                    if (k.isNotEmpty() && v.isNotEmpty() && v != "null") put(k, v)
+                                }
+                            }
+                        } ?: emptyMap(),
                         balanceAfterCents = if (o.has("balanceAfterCents") && !o.isNull("balanceAfterCents")) {
                             o.optLong("balanceAfterCents")
                         } else {
@@ -341,6 +388,20 @@ object LedgerBackupCodec {
                     }
                     map
                 } ?: currentSettings.categoryIcons,
+                categoryParentMap = s.optJSONObject("categoryParentMap")?.let { obj ->
+                    val map = LinkedHashMap<String, String>()
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next().trim().take(24)
+                        val v = obj.optString(k).trim().take(24)
+                        if (k.isNotEmpty() && v.isNotEmpty() && k != v) map[k] = v
+                    }
+                    map
+                } ?: currentSettings.categoryParentMap,
+                categoryShowChildren = s.optBoolean(
+                    "categoryShowChildren",
+                    currentSettings.categoryShowChildren
+                ),
                 customChannels = s.optJSONArray("customChannels")?.let { arr ->
                     ChannelCatalog.normalizeChannelList(
                         buildList(arr.length()) {
@@ -349,6 +410,50 @@ object LedgerBackupCodec {
                         currentSettings.customChannels
                     )
                 } ?: currentSettings.customChannels,
+                channelParentMap = s.optJSONObject("channelParentMap")?.let { obj ->
+                    val map = LinkedHashMap<String, String>()
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next().trim().take(28)
+                        val v = obj.optString(k).trim().take(28)
+                        if (k.isNotEmpty() && v.isNotEmpty() && !k.equals(v, ignoreCase = true)) map[k] = v
+                    }
+                    map
+                } ?: currentSettings.channelParentMap,
+                channelShowChildren = s.optBoolean(
+                    "channelShowChildren",
+                    currentSettings.channelShowChildren
+                ),
+                billFieldsConfig = s.optJSONArray("billFieldsConfig")?.let { arr ->
+                    val parsed = buildList(arr.length()) {
+                        for (i in 0 until arr.length()) {
+                            val item = arr.optJSONObject(i) ?: continue
+                            val id = item.optString("id").ifBlank { item.optString("key") }.trim()
+                            val label = item.optString("label").trim()
+                            if (id.isNotEmpty() && label.isNotEmpty()) {
+                                add(
+                                    com.example.model.BillFieldConfig(
+                                        id = id,
+                                        label = label,
+                                        isBuiltIn = item.optBoolean("isBuiltIn", false),
+                                        isMajorItem = item.optBoolean("isMajorItem", !item.optBoolean("isOptional", true)),
+                                        foldedInMore = item.optBoolean("foldedInMore", true),
+                                        enabled = item.optBoolean("enabled", true)
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    com.example.model.BillFieldCatalog.normalizeFields(parsed)
+                } ?: currentSettings.billFieldsConfig,
+                notificationLogMaxCount = s.optInt(
+                    "notificationLogMaxCount",
+                    currentSettings.notificationLogMaxCount
+                ).coerceAtLeast(0),
+                notificationLogMaxDays = s.optInt(
+                    "notificationLogMaxDays",
+                    currentSettings.notificationLogMaxDays
+                ).coerceAtLeast(0),
                 dedupExcludedTransactionIds = s.optJSONArray("dedupExcludedTransactionIds")?.let { arr ->
                     buildList(arr.length()) {
                         for (i in 0 until arr.length()) {

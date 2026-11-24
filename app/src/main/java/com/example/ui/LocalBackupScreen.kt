@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import com.example.ui.theme.AppIcons
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -36,6 +37,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -48,6 +50,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.LocalBackupManager
@@ -108,11 +111,16 @@ fun LocalBackupScreen(
         mutableStateOf(displayVal.toString())
     }
 
+    var showExportPasswordDialog by remember { mutableStateOf(false) }
+    var pendingExportPassword by remember { mutableStateOf<String?>(null) }
+
     val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
+        contract = ActivityResultContracts.CreateDocument("application/zip")
     ) { uri: Uri? ->
+        val pwd = pendingExportPassword
+        pendingExportPassword = null
         if (uri != null) {
-            viewModel.exportLocalBackup(context, uri)
+            viewModel.exportLocalBackup(context, uri, password = pwd)
         }
     }
 
@@ -173,7 +181,7 @@ fun LocalBackupScreen(
                             )
                             Text(
                                 text = settingsHighlightedText(
-                                    "当前账本共有 $txCount 笔账单、$ruleCount 条识别规则。导出为完整 JSON 备份文件，恢复时将智能去重合并。",
+                                    "当前账本共有 $txCount 笔账单、$ruleCount 条识别规则。导出为 AES-256-GCM 加密的 ZIP 备份包（可选自定义密码），恢复时自动兼容旧版明文 JSON 备份并智能去重合并。",
                                     ROUTE_SETTINGS_LOCAL_BACKUP
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
@@ -204,9 +212,7 @@ fun LocalBackupScreen(
                             ) {
                                 Button(
                                     enabled = !isWorking,
-                                    onClick = {
-                                        exportLauncher.launch(LocalBackupManager.buildDefaultBackupFileName())
-                                    },
+                                    onClick = { showExportPasswordDialog = true },
                                     modifier = Modifier
                                         .weight(1f)
                                         .minimumInteractiveComponentSize()
@@ -214,13 +220,21 @@ fun LocalBackupScreen(
                                 ) {
                                     Icon(AppIcons.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("导出本地备份")
+                                    Text("加密导出备份")
                                 }
 
                                 OutlinedButton(
                                     enabled = !isWorking,
                                     onClick = {
-                                        restoreLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                        restoreLauncher.launch(
+                                            arrayOf(
+                                                "application/zip",
+                                                "application/json",
+                                                "application/octet-stream",
+                                                "text/plain",
+                                                "*/*"
+                                            )
+                                        )
                                     },
                                     modifier = Modifier
                                         .weight(1f)
@@ -267,6 +281,20 @@ fun LocalBackupScreen(
                                         Text(
                                             text = state.message,
                                             color = ExpenseCoral,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.padding(10.dp)
+                                        )
+                                    }
+                                }
+                                is LocalBackupActionState.PasswordRequired -> {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = state.message,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
                                             style = MaterialTheme.typography.bodySmall,
                                             modifier = Modifier.padding(10.dp)
                                         )
@@ -517,6 +545,120 @@ fun LocalBackupScreen(
             bookName = chosenBook?.name,
             onDismiss = { showFileExportDialog = false },
             onExportFeedback = { msg -> onShowMessage(msg) }
+        )
+    }
+
+    if (showExportPasswordDialog) {
+        var customPwd by remember { mutableStateOf("") }
+        var confirmPwd by remember { mutableStateOf("") }
+        var errorMsg by remember { mutableStateOf<String?>(null) }
+
+        AlertDialog(
+            onDismissRequest = { showExportPasswordDialog = false },
+            icon = { Icon(AppIcons.Security, contentDescription = null) },
+            title = { Text("加密备份设置") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "备份文件将默认使用 AES-256-GCM 加密并封装为 ZIP 压缩包。你也可以额外设置自定义密码加强保护（留空则使用应用内置加密，换机仍可直接恢复）。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = customPwd,
+                        onValueChange = { customPwd = it; errorMsg = null },
+                        label = { Text("自定义加密密码（可选）") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("local_backup_export_password_input")
+                    )
+                    if (customPwd.isNotEmpty()) {
+                        OutlinedTextField(
+                            value = confirmPwd,
+                            onValueChange = { confirmPwd = it; errorMsg = null },
+                            label = { Text("确认密码") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("local_backup_export_password_confirm")
+                        )
+                    }
+                    if (errorMsg != null) {
+                        Text(errorMsg!!, color = ExpenseCoral, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportPasswordDialog = false }) { Text("取消") }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (customPwd.isNotEmpty() && customPwd != confirmPwd) {
+                            errorMsg = "两次输入的密码不一致"
+                            return@Button
+                        }
+                        pendingExportPassword = customPwd.takeIf { it.isNotEmpty() }
+                        showExportPasswordDialog = false
+                        exportLauncher.launch(LocalBackupManager.buildDefaultBackupFileName())
+                    },
+                    modifier = Modifier.testTag("local_backup_export_confirm_button")
+                ) {
+                    Text(if (customPwd.isEmpty()) "默认加密并导出" else "使用密码加密导出")
+                }
+            }
+        )
+    }
+
+    val passwordPromptState = backupState as? LocalBackupActionState.PasswordRequired
+    if (passwordPromptState != null) {
+        var restorePwd by remember(passwordPromptState.uri, passwordPromptState.message) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { viewModel.clearLocalBackupActionState() },
+            icon = { Icon(AppIcons.Security, contentDescription = null) },
+            title = { Text("输入备份解密密码") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = passwordPromptState.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = restorePwd,
+                        onValueChange = { restorePwd = it },
+                        label = { Text("备份密码") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("local_backup_restore_password_input")
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.clearLocalBackupActionState() }) {
+                    Text("取消")
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = restorePwd.isNotEmpty(),
+                    onClick = {
+                        viewModel.restoreLocalBackup(
+                            context = context,
+                            uri = passwordPromptState.uri,
+                            password = restorePwd
+                        )
+                    },
+                    modifier = Modifier.testTag("local_backup_restore_password_confirm")
+                ) {
+                    Text("解密并恢复")
+                }
+            }
         )
     }
 }

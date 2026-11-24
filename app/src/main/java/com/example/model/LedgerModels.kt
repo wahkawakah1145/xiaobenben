@@ -681,7 +681,16 @@ data class AppearanceSettings(
     val deleteUndoDuration: DeleteUndoDuration = DeleteUndoDuration.MANUAL_ONLY,
     val hideAllFeatureTips: Boolean = false,
     val dismissedTipIds: Set<String> = emptySet(),
-    val homePageLoadBatchSize: Int = 100
+    val homePageLoadBatchSize: Int = 100,
+    val hapticEnabled: Boolean = true,
+    val hapticFollowSystem: Boolean = true,
+    val hapticIntensity: Float = 0.65f,
+    val hapticOnClick: Boolean = true,
+    val hapticOnToggle: Boolean = true,
+    val hapticOnLongPress: Boolean = true,
+    val hapticOnDragReorder: Boolean = true,
+    val hapticOnDestructive: Boolean = true,
+    val hapticOnGesture: Boolean = true
 ) {
     fun visibleBottomTabs(): List<MainBottomTab> {
         val normalized = MainBottomTab.normalizeOrder(bottomTabOrder)
@@ -710,6 +719,7 @@ object FeatureTipsCatalog {
     const val CHANNEL_ATTRIBUTION = "channel_attribution"
     const val MANUAL_IMPORT_FORMAT = "manual_import_format"
     const val AI_AMOUNT_GUARD = "ai_amount_guard"
+    const val APP_LIST_PERMISSION = "app_list_permission"
 
     val allTips: List<FeatureTipSpec> = listOf(
         FeatureTipSpec(
@@ -720,7 +730,7 @@ object FeatureTipsCatalog {
         FeatureTipSpec(
             id = HOME_SEARCH_SYNTAX,
             title = "账单搜索与筛选说明",
-            shortText = "多关键词用空格隔开，搜对方/商品/分类/币种/单号/备注；日期输数字自动补全 -，支持按时段筛选"
+            shortText = "多关键词用空格隔开，搜对方/商品/分类/币种/单号/备注及自定义字段；日期输数字自动补全 -"
         ),
         FeatureTipSpec(
             id = BOOKS_OVERVIEW,
@@ -754,8 +764,8 @@ object FeatureTipsCatalog {
         ),
         FeatureTipSpec(
             id = CHANNEL_ATTRIBUTION,
-            title = "支付渠道自动归属说明",
-            shortText = "花呗/余额宝自动归属「支付宝」，零钱/零钱通自动归属「微信支付」"
+            title = "渠道归属与排序说明",
+            shortText = "长按拖动排序，拖到目标项高亮时松手即可归属；支持仅显示父类或全部子类，默认花呗/余额宝归属支付宝，零钱/零钱通归属微信支付"
         ),
         FeatureTipSpec(
             id = MANUAL_IMPORT_FORMAT,
@@ -766,8 +776,102 @@ object FeatureTipsCatalog {
             id = AI_AMOUNT_GUARD,
             title = "AI 金额单位防误触说明",
             shortText = "仅识别含明确货币单位的金额，自动过滤 10086、验证码等无单位裸数字通知"
+        ),
+        FeatureTipSpec(
+            id = APP_LIST_PERMISSION,
+            title = "读取应用列表权限提示",
+            shortText = "若应用列表不完整，点此前往系统权限管理页开启「读取应用列表」权限"
         )
     )
+}
+
+data class BillFieldConfig(
+    val id: String,
+    val label: String,
+    val isBuiltIn: Boolean = true,
+    val isMajorItem: Boolean = false,
+    val foldedInMore: Boolean = false,
+    val enabled: Boolean = true
+)
+
+object BillFieldCatalog {
+    const val ID_AMOUNT = "amount"
+    const val ID_MERCHANT = "merchant"
+    const val ID_CHANNEL = "channel"
+    const val ID_CATEGORY = "category"
+    const val ID_OCCURRED_AT = "occurredAt"
+    const val ID_BOOKS = "books"
+    const val ID_CARD_TAIL = "cardLastFour"
+    const val ID_NOTE = "note"
+    const val ID_PRODUCT_NAME = "productName"
+    const val ID_TRADE_TYPE = "tradeType"
+    const val ID_TRADE_STATUS = "tradeStatus"
+    const val ID_BALANCE_AFTER = "balanceAfterCents"
+    const val ID_TRANSACTION_NO = "transactionNo"
+    const val ID_MERCHANT_ORDER_NO = "merchantOrderNo"
+    const val ID_RAW_NOTIFICATION = "rawNotification"
+
+    val defaultFields: List<BillFieldConfig> = listOf(
+        BillFieldConfig(ID_AMOUNT, "金额与币种", isBuiltIn = true, isMajorItem = true, foldedInMore = false, enabled = true),
+        BillFieldConfig(ID_MERCHANT, "商户 / 交易对象", isBuiltIn = true, isMajorItem = true, foldedInMore = false, enabled = true),
+        BillFieldConfig(ID_CHANNEL, "支付渠道", isBuiltIn = true, isMajorItem = true, foldedInMore = false, enabled = true),
+        BillFieldConfig(ID_CATEGORY, "分类", isBuiltIn = true, isMajorItem = true, foldedInMore = false, enabled = true),
+        BillFieldConfig(ID_BOOKS, "所属账本", isBuiltIn = true, isMajorItem = true, foldedInMore = false, enabled = true),
+        BillFieldConfig(ID_CARD_TAIL, "卡尾号", isBuiltIn = true, isMajorItem = false, foldedInMore = false, enabled = true),
+        BillFieldConfig(ID_NOTE, "备注", isBuiltIn = true, isMajorItem = false, foldedInMore = false, enabled = true),
+        BillFieldConfig(ID_PRODUCT_NAME, "商品 / 说明", isBuiltIn = true, isMajorItem = false, foldedInMore = true, enabled = true),
+        BillFieldConfig(ID_TRADE_TYPE, "交易类型", isBuiltIn = true, isMajorItem = false, foldedInMore = true, enabled = true),
+        BillFieldConfig(ID_TRADE_STATUS, "当前状态", isBuiltIn = true, isMajorItem = false, foldedInMore = true, enabled = true),
+        BillFieldConfig(ID_BALANCE_AFTER, "本次余额", isBuiltIn = true, isMajorItem = false, foldedInMore = true, enabled = true),
+        BillFieldConfig(ID_TRANSACTION_NO, "交易单号", isBuiltIn = true, isMajorItem = false, foldedInMore = true, enabled = true),
+        BillFieldConfig(ID_MERCHANT_ORDER_NO, "商户单号", isBuiltIn = true, isMajorItem = false, foldedInMore = true, enabled = true),
+        BillFieldConfig(ID_OCCURRED_AT, "记账时间", isBuiltIn = true, isMajorItem = true, foldedInMore = false, enabled = true),
+        BillFieldConfig(ID_RAW_NOTIFICATION, "原始记录", isBuiltIn = true, isMajorItem = false, foldedInMore = false, enabled = true)
+    )
+
+    val builtInById: Map<String, BillFieldConfig> = defaultFields.associateBy { it.id }
+
+    fun normalizeFields(raw: List<BillFieldConfig>?): List<BillFieldConfig> {
+        if (raw.isNullOrEmpty()) return defaultFields
+        val seen = LinkedHashSet<String>()
+        val result = ArrayList<BillFieldConfig>(raw.size + defaultFields.size)
+        raw.forEach { item ->
+            val id = item.id.trim().take(48)
+            val label = item.label.trim().take(24)
+            if (id.isEmpty() || label.isEmpty() || !seen.add(id)) return@forEach
+            val builtIn = builtInById[id]
+            if (builtIn != null) {
+                result.add(
+                    builtIn.copy(
+                        label = label,
+                        foldedInMore = if (builtIn.isMajorItem) false else item.foldedInMore,
+                        enabled = if (builtIn.isMajorItem) true else item.enabled
+                    )
+                )
+            } else {
+                result.add(
+                    item.copy(
+                        id = id,
+                        label = label,
+                        isBuiltIn = false,
+                        isMajorItem = false
+                    )
+                )
+            }
+        }
+        defaultFields.forEach { builtIn ->
+            if (builtIn.id !in seen) {
+                result.add(builtIn)
+            }
+        }
+        return result
+    }
+
+    fun customFields(fields: List<BillFieldConfig>): List<BillFieldConfig> =
+        normalizeFields(fields).filter { !it.isBuiltIn && it.enabled }
+
+    fun optionalFields(fields: List<BillFieldConfig>): List<BillFieldConfig> =
+        normalizeFields(fields).filter { !it.isMajorItem && it.id != ID_RAW_NOTIFICATION }
 }
 
 enum class HomeStatsDimension(val label: String, val shortLabel: String) {
@@ -831,6 +935,7 @@ data class LedgerTransaction(
     val transactionNo: String? = null,
     val merchantOrderNo: String? = null,
     val balanceAfterCents: Long? = null,
+    val customFields: Map<String, String> = emptyMap(),
     val occurredAtMillis: Long = System.currentTimeMillis(),
     val confirmed: Boolean = true,
     val recordedBaseCurrencyCode: String = "CNY",
@@ -844,7 +949,11 @@ data class LedgerTransaction(
     val currencyInfo: CurrencyInfo get() = CurrencyCatalog.resolve(currencyCode)
     val splitChannels: List<String> get() = ChannelSplitter.splitChannels(channel)
 
-    fun matchesSearchQuery(rawQuery: String): Boolean {
+    fun matchesSearchQuery(
+        rawQuery: String,
+        categoryParentMap: Map<String, String> = emptyMap(),
+        channelParentMap: Map<String, String> = emptyMap()
+    ): Boolean {
         val tokens = rawQuery
             .trim()
             .split(Regex("""[\s\u3000]+"""))
@@ -860,12 +969,20 @@ data class LedgerTransaction(
         val day = cal.get(java.util.Calendar.DAY_OF_MONTH)
         val dateDash = "%04d-%02d-%02d".format(java.util.Locale.US, year, month, day)
         val dateCompact = "%04d%02d%02d".format(java.util.Locale.US, year, month, day)
+        val resolvedCategoryParent = if (categoryParentMap.isNotEmpty()) {
+            CategoryCatalog.resolveRootParent(category, categoryParentMap)
+        } else null
+        val resolvedChannelParents = if (channelParentMap.isNotEmpty()) {
+            splitChannels.map { ChannelCatalog.resolveRootParent(it, channelParentMap) }
+        } else emptyList()
 
         return tokens.all { q ->
             merchant.contains(q, ignoreCase = true) ||
                 category.contains(q, ignoreCase = true) ||
+                (resolvedCategoryParent?.contains(q, ignoreCase = true) == true) ||
                 channel.contains(q, ignoreCase = true) ||
                 splitChannels.any { it.contains(q, ignoreCase = true) } ||
+                resolvedChannelParents.any { it.contains(q, ignoreCase = true) } ||
                 txType.label.contains(q, ignoreCase = true) ||
                 txSourceApp.label.contains(q, ignoreCase = true) ||
                 txParseMethod.label.contains(q, ignoreCase = true) ||
@@ -882,7 +999,10 @@ data class LedgerTransaction(
                 (transactionNo?.contains(q, ignoreCase = true) == true) ||
                 (merchantOrderNo?.contains(q, ignoreCase = true) == true) ||
                 (note?.contains(q, ignoreCase = true) == true) ||
-                (rawNotification?.contains(q, ignoreCase = true) == true)
+                (rawNotification?.contains(q, ignoreCase = true) == true) ||
+                customFields.any { (k, v) ->
+                    k.contains(q, ignoreCase = true) || v.contains(q, ignoreCase = true)
+                }
         }
     }
 
@@ -1047,7 +1167,14 @@ data class BudgetSettings(
     val dedupExcludedTransactionIds: List<String> = emptyList(),
     val monitoredAppsCustomized: Boolean = false,
     val monitoredAppPackages: List<String> = emptyList(),
-    val allowOtherFinancialAppsFallback: Boolean = true
+    val allowOtherFinancialAppsFallback: Boolean = true,
+    val categoryParentMap: Map<String, String> = emptyMap(),
+    val categoryShowChildren: Boolean = true,
+    val channelParentMap: Map<String, String> = ChannelCatalog.defaultChannelParentMap,
+    val channelShowChildren: Boolean = true,
+    val billFieldsConfig: List<BillFieldConfig> = BillFieldCatalog.defaultFields,
+    val notificationLogMaxCount: Int = 500,
+    val notificationLogMaxDays: Int = 30
 )
 
 data class WebDavConfig(
@@ -1074,7 +1201,8 @@ data class ParsedNotificationResult(
     val reasoning: String,
     val needsInquiry: Boolean = false,
     val inquiryReason: String = "",
-    val occurredAtMillis: Long? = null
+    val occurredAtMillis: Long? = null,
+    val customFields: Map<String, String> = emptyMap()
 )
 
 data class CapturedNotificationLog(
@@ -1087,6 +1215,8 @@ data class CapturedNotificationLog(
     val status: String,
     val summary: String
 )
+
+typealias NotificationLogRecord = CapturedNotificationLog
 
 data class ChannelCatalogItem(
     val id: String,
@@ -1204,12 +1334,69 @@ object CategoryCatalog {
         }
         return result.toList()
     }
+
+    fun resolveDirectParent(name: String, parentMap: Map<String, String>): String? {
+        val clean = name.trim()
+        if (clean.isEmpty()) return null
+        return parentMap[clean]?.trim()?.takeIf { it.isNotEmpty() && it != clean }
+    }
+
+    fun resolveRootParent(name: String, parentMap: Map<String, String>): String {
+        var cur = name.trim()
+        if (cur.isEmpty()) return cur
+        val visited = HashSet<String>(8)
+        visited.add(cur)
+        repeat(8) {
+            val parent = parentMap[cur]?.trim()?.takeIf { it.isNotEmpty() } ?: return cur
+            if (!visited.add(parent)) return cur
+            cur = parent
+        }
+        return cur
+    }
+
+    fun resolveDisplayCategory(
+        rawCategory: String,
+        parentMap: Map<String, String>,
+        showChildren: Boolean
+    ): String {
+        val clean = rawCategory.trim().ifBlank { "其他" }
+        if (showChildren || parentMap.isEmpty()) return clean
+        return resolveRootParent(clean, parentMap)
+    }
+
+    fun canAssignParent(child: String, targetParent: String, parentMap: Map<String, String>): Boolean {
+        val c = child.trim()
+        val p = targetParent.trim()
+        if (c.isEmpty() || p.isEmpty() || c == p) return false
+        var cur: String? = p
+        val visited = HashSet<String>(8)
+        while (!cur.isNullOrBlank() && visited.add(cur)) {
+            if (cur == c) return false
+            cur = parentMap[cur]?.trim()
+        }
+        return true
+    }
+
+    fun childrenOf(parent: String, allCategories: List<String>, parentMap: Map<String, String>): List<String> =
+        allCategories.filter { resolveDirectParent(it, parentMap) == parent }
+
+    fun topLevelCategories(allCategories: List<String>, parentMap: Map<String, String>): List<String> {
+        val validSet = allCategories.toHashSet()
+        return allCategories.filter { cat ->
+            val parent = resolveDirectParent(cat, parentMap)
+            parent == null || parent !in validSet
+        }
+    }
 }
 
 object ChannelCatalog {
     val defaultChannels: List<String> = listOf(
         "支付宝",
+        "花呗",
+        "余额宝",
         "微信支付",
+        "零钱",
+        "零钱通",
         "云闪付",
         "银行卡",
         "招商银行",
@@ -1231,43 +1418,131 @@ object ChannelCatalog {
         "其他"
     )
 
+    val defaultChannelParentMap: Map<String, String> = linkedMapOf(
+        "花呗" to "支付宝",
+        "蚂蚁花呗" to "支付宝",
+        "花呗分期" to "支付宝",
+        "余额宝" to "支付宝",
+        "零钱" to "微信支付",
+        "微信零钱" to "微信支付",
+        "零钱通" to "微信支付"
+    )
+
     private val alipaySubChannels = setOf("花呗", "蚂蚁花呗", "花呗分期", "余额宝")
     private val wechatSubChannels = setOf("零钱", "微信零钱", "零钱通")
 
-    fun attributeSingleChannelToken(rawToken: String): String {
+    fun resolveDirectParent(name: String, parentMap: Map<String, String>): String? {
+        val clean = name.trim()
+        if (clean.isEmpty()) return null
+        val exact = parentMap[clean]?.trim()?.takeIf { it.isNotEmpty() && !it.equals(clean, ignoreCase = true) }
+        if (exact != null) return exact
+        return parentMap.entries.firstOrNull { it.key.equals(clean, ignoreCase = true) }
+            ?.value?.trim()?.takeIf { it.isNotEmpty() && !it.equals(clean, ignoreCase = true) }
+    }
+
+    fun resolveRootParent(name: String, parentMap: Map<String, String>): String {
+        var cur = name.trim()
+        if (cur.isEmpty()) return cur
+        val visited = HashSet<String>(8)
+        visited.add(cur.lowercase())
+        repeat(8) {
+            val parent = resolveDirectParent(cur, parentMap) ?: return cur
+            if (!visited.add(parent.lowercase())) return cur
+            cur = parent
+        }
+        return cur
+    }
+
+    fun canAssignParent(child: String, targetParent: String, parentMap: Map<String, String>): Boolean {
+        val c = child.trim()
+        val p = targetParent.trim()
+        if (c.isEmpty() || p.isEmpty() || c.equals(p, ignoreCase = true)) return false
+        var cur: String? = p
+        val visited = HashSet<String>(8)
+        while (!cur.isNullOrBlank() && visited.add(cur.lowercase())) {
+            if (cur.equals(c, ignoreCase = true)) return false
+            cur = resolveDirectParent(cur, parentMap)
+        }
+        return true
+    }
+
+    fun childrenOf(parent: String, allChannels: List<String>, parentMap: Map<String, String>): List<String> =
+        allChannels.filter { ch ->
+            resolveDirectParent(ch, parentMap)?.equals(parent, ignoreCase = true) == true
+        }
+
+    fun topLevelChannels(allChannels: List<String>, parentMap: Map<String, String>): List<String> {
+        val validLower = allChannels.mapTo(HashSet()) { it.lowercase() }
+        return allChannels.filter { ch ->
+            val parent = resolveDirectParent(ch, parentMap)
+            parent == null || parent.lowercase() !in validLower
+        }
+    }
+
+    fun attributeSingleChannelToken(
+        rawToken: String,
+        parentMap: Map<String, String> = defaultChannelParentMap
+    ): String {
         val token = rawToken.trim()
         if (token.isEmpty()) return token
+        val mappedFromTable = resolveRootParent(token, parentMap)
+        if (!mappedFromTable.equals(token, ignoreCase = true)) {
+            return mappedFromTable
+        }
         if (token in alipaySubChannels ||
             token.contains("花呗") ||
             token.contains("余额宝")
         ) {
-            return "支付宝"
+            return resolveRootParent("支付宝", parentMap)
         }
         if (token in wechatSubChannels ||
             token.contains("零钱通") ||
             token == "零钱" ||
             token.contains("微信零钱")
         ) {
-            return "微信支付"
+            return resolveRootParent("微信支付", parentMap)
         }
         return token
     }
 
     /**
-     * Normalizes recognized payment channels during notification/import/AI parsing:
-     * - "花呗" / "余额宝" -> "支付宝"
-     * - "零钱" / "零钱通" -> "微信支付"
+     * Resolves channel attribution for display or analytics according to [parentMap] and [showChildren].
+     * When [showChildren] is false, sub-channels collapse to their configured root parent.
+     */
+    fun resolveDisplayChannel(
+        rawChannel: String?,
+        parentMap: Map<String, String> = defaultChannelParentMap,
+        showChildren: Boolean = true
+    ): String {
+        val trimmed = rawChannel?.trim().orEmpty()
+        if (trimmed.isEmpty()) return "未知渠道"
+        if (showChildren) return trimmed
+        return normalizeRecognizedChannel(trimmed, parentMap = parentMap, collapseToParent = true)
+    }
+
+    /**
+     * Normalizes recognized payment channels using attribution logic:
+     * - By default (`collapseToParent = true`), attributes sub-channels via [parentMap]
+     *   (e.g. "花呗"/"余额宝" -> "支付宝", "零钱"/"零钱通" -> "微信支付", plus any custom mappings).
+     * - When `collapseToParent = false`, keeps the exact recognized sub-channel token intact.
      * Preserves composite channels separated by '&' (deduplicating mapped tokens in order).
      */
-    fun normalizeRecognizedChannel(rawChannel: String?): String {
+    fun normalizeRecognizedChannel(
+        rawChannel: String?,
+        parentMap: Map<String, String> = defaultChannelParentMap,
+        collapseToParent: Boolean = true
+    ): String {
         val trimmed = rawChannel?.trim().orEmpty()
         if (trimmed.isEmpty()) return "未知渠道"
         val parts = ChannelSplitter.splitChannels(trimmed)
+        if (!collapseToParent) {
+            return if (parts.isEmpty()) trimmed.take(60) else parts.joinToString("&").take(60)
+        }
         if (parts.size <= 1) {
-            return attributeSingleChannelToken(parts.firstOrNull() ?: trimmed).ifBlank { "未知渠道" }
+            return attributeSingleChannelToken(parts.firstOrNull() ?: trimmed, parentMap).ifBlank { "未知渠道" }
         }
         val mapped = parts
-            .map { attributeSingleChannelToken(it) }
+            .map { attributeSingleChannelToken(it, parentMap) }
             .filter { it.isNotBlank() }
             .distinct()
         return if (mapped.isEmpty()) "未知渠道" else mapped.joinToString("&").take(60)
@@ -1283,6 +1558,12 @@ object ChannelCatalog {
 
     fun activeChannels(settings: BudgetSettings?): List<String> =
         normalizeChannelList(settings?.customChannels ?: defaultChannels, defaultChannels)
+
+    fun selectableChannels(settings: BudgetSettings?): List<String> {
+        val all = activeChannels(settings)
+        if (settings == null || settings.channelShowChildren) return all
+        return topLevelChannels(all, settings.channelParentMap)
+    }
 
     fun allExistingChannels(
         settings: BudgetSettings?,

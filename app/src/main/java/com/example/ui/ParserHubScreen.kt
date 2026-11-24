@@ -84,6 +84,7 @@ fun ParserHubScreen(
     viewModel: LedgerViewModel,
     isListenerEnabled: Boolean,
     onOpenMonitoredApps: () -> Unit = {},
+    onOpenNotificationLogs: () -> Unit = {},
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -92,6 +93,7 @@ fun ParserHubScreen(
     val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val capturedLogs by NotificationBridge.capturedLogs.collectAsStateWithLifecycle()
+    val persistedLogCount by viewModel.notificationLogCountState.collectAsStateWithLifecycle()
     val activeCategories = remember(settings) { CategoryCatalog.allActiveCategories(settings) }
     val numberFont = LocalNumberFontFamily.current
 
@@ -178,6 +180,52 @@ fun ParserHubScreen(
                             modifier = Modifier.testTag("parser_open_monitored_apps_button")
                         ) {
                             Text("去选择")
+                        }
+                    }
+                }
+            }
+
+            item(key = "notification_logs_shortcut") {
+                val retentionSummary = buildString {
+                    append(if (settings.notificationLogMaxCount <= 0) "无限条数" else "最多${settings.notificationLogMaxCount}条")
+                    append(" · ")
+                    append(if (settings.notificationLogMaxDays <= 0) "永久保存" else "保留${settings.notificationLogMaxDays}天")
+                }
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenNotificationLogs)
+                        .testTag("parser_open_notification_logs_card")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .minimumInteractiveComponentSize()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "通知读取日志",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "已记录 $persistedLogCount 条读取通知 · $retentionSummary",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = onOpenNotificationLogs,
+                            modifier = Modifier.testTag("parser_open_notification_logs_button")
+                        ) {
+                            Text("查看日志")
                         }
                     }
                 }
@@ -557,7 +605,19 @@ fun ParserHubScreen(
             if (capturedLogs.isNotEmpty()) {
                 item(key = "live_capture_section") {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("最近捕捉日志", style = MaterialTheme.typography.titleMedium)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("最近捕捉日志", style = MaterialTheme.typography.titleMedium)
+                            TextButton(
+                                onClick = onOpenNotificationLogs,
+                                modifier = Modifier.testTag("parser_recent_logs_view_all")
+                            ) {
+                                Text("查看全部 ($persistedLogCount)")
+                            }
+                        }
                         capturedLogs.take(4).forEach { log ->
                             Surface(
                                 color = MaterialTheme.colorScheme.surfaceContainerLow,

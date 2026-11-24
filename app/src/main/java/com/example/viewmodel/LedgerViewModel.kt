@@ -91,7 +91,18 @@ sealed interface LocalBackupActionState {
     data class Working(val label: String) : LocalBackupActionState
     data class Success(val message: String) : LocalBackupActionState
     data class Error(val message: String) : LocalBackupActionState
+    data class PasswordRequired(
+        val uri: android.net.Uri,
+        val message: String = "该备份文件已设置加密密码，请输入密码解密恢复"
+    ) : LocalBackupActionState
 }
+
+data class NotificationLogsUiState(
+    val items: List<com.example.model.CapturedNotificationLog> = emptyList(),
+    val query: String = "",
+    val isLoading: Boolean = false,
+    val hasMore: Boolean = false
+)
 
 sealed interface AiModelDownloadState {
     data object Idle : AiModelDownloadState
@@ -347,6 +358,21 @@ class LedgerViewModel(
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
 
+    private val _notificationLogsState = MutableStateFlow(NotificationLogsUiState())
+    val notificationLogsState: StateFlow<NotificationLogsUiState> = _notificationLogsState.asStateFlow()
+
+    val notificationLogCountState: StateFlow<Int> =
+        repository.observeNotificationLogsCount()
+            .catch { error ->
+                if (error is CancellationException) throw error
+                emit(0)
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                initialValue = 0
+            )
+
     fun postActionMessage(message: String) {
         _actionMessage.value = message
     }
@@ -491,7 +517,8 @@ class LedgerViewModel(
         productName: String? = null,
         tradeStatus: String? = null,
         transactionNo: String? = null,
-        merchantOrderNo: String? = null
+        merchantOrderNo: String? = null,
+        customFields: Map<String, String> = emptyMap()
     ) {
         viewModelScope.launch {
             val resolvedCurrency = CurrencyCatalog.resolve(currencyCode)
@@ -512,6 +539,7 @@ class LedgerViewModel(
                 tradeStatus = tradeStatus?.takeIf { it.isNotBlank() },
                 transactionNo = transactionNo?.takeIf { it.isNotBlank() },
                 merchantOrderNo = merchantOrderNo?.takeIf { it.isNotBlank() },
+                customFields = customFields,
                 occurredAtMillis = occurredAtMillis,
                 confirmed = true
             )
@@ -540,7 +568,8 @@ class LedgerViewModel(
         tradeStatus: String? = null,
         transactionNo: String? = null,
         merchantOrderNo: String? = null,
-        updateExtendedFields: Boolean = false
+        updateExtendedFields: Boolean = false,
+        customFields: Map<String, String>? = null
     ) {
         viewModelScope.launch {
             repository.updateTransaction(
@@ -561,7 +590,8 @@ class LedgerViewModel(
                 tradeStatus = tradeStatus,
                 transactionNo = transactionNo,
                 merchantOrderNo = merchantOrderNo,
-                updateExtendedFields = updateExtendedFields
+                updateExtendedFields = updateExtendedFields,
+                customFields = customFields
             )
                 .onSuccess { templateUpdated ->
                     if (templateUpdated) {
@@ -818,14 +848,17 @@ class LedgerViewModel(
             return
         }
         val rules = (rulesState.value as? UiState.Success)?.data ?: emptyList()
-        val activeChannels = com.example.model.ChannelCatalog.activeChannels(settingsState.value)
+        val settings = settingsState.value
+        val activeChannels = com.example.model.ChannelCatalog.activeChannels(settings)
         val parsed = ChinaNotificationParser.parse(
             packageName = packageName,
             title = title,
             content = content,
             customRules = rules,
             enableLocalSemanticPass = enableSemanticPass,
-            customChannels = activeChannels
+            customChannels = activeChannels,
+            channelParentMap = settings.channelParentMap,
+            collapseChannelToParent = !settings.channelShowChildren
         )
         if (parsed != null && parsed.isFinancialTransaction) {
             _parseBenchState.value = ParseBenchState.Parsed(parsed, title, content)
@@ -851,8 +884,9 @@ class LedgerViewModel(
                 return@launch
             }
             val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
-            val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settingsState.value)
-            val activeChannels = com.example.model.ChannelCatalog.activeChannels(settingsState.value)
+            val settings = settingsState.value
+            val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settings)
+            val activeChannels = com.example.model.ChannelCatalog.activeChannels(settings)
             val result = aiManager.enhanceOrParseNotification(
                 context = context,
                 config = config,
@@ -862,7 +896,11 @@ class LedgerViewModel(
                 fallbackParsed = null,
                 availableRules = rules,
                 activeCategories = activeCategories,
-                activeChannels = activeChannels
+                activeChannels = activeChannels,
+                billFieldsConfig = settings.billFieldsConfig,
+                categoryParentMap = settings.categoryParentMap,
+                channelParentMap = settings.channelParentMap,
+                collapseChannelToParent = !settings.channelShowChildren
             )
             result
                 .onSuccess { parsed ->
@@ -892,6 +930,7 @@ class LedgerViewModel(
                 parseMethod = parsed.parseMethod.name,
                 rawNotification = "$rawTitle: $rawContent".trim().take(220),
                 note = parsed.reasoning.take(120),
+                customFields = parsed.customFields,
                 occurredAtMillis = parsed.occurredAtMillis ?: System.currentTimeMillis(),
                 confirmed = true
             )
@@ -1227,6 +1266,230 @@ class LedgerViewModel(
                 .onFailure { err ->
                     _actionMessage.value = err.message ?: "恢复默认渠道失败"
                 }
+        }
+    }
+
+    fun reorderCategories(type: TransactionType, orderedNames: List<String>) {
+        viewModelScope.launch {
+            repository.reorderCategories(type, orderedNames)
+                .onFailure { err -> _actionMessage.value = err.message ?: "分类排序失败" }
+        }
+    }
+
+    fun setCategoryParent(childName: String, parentName: String?) {
+        viewModelScope.launch {
+            repository.setCategoryParent(childName, parentName)
+                .onSuccess {
+                    _actionMessage.value = if (parentName.isNullOrBlank()) {
+                        "已解除「$childName」的归属关系"
+                    } else {
+                        "已将「$childName」归属到「$parentName」"
+                    }
+                }
+                .onFailure { err -> _actionMessage.value = err.message ?: "设置分类归属失败" }
+        }
+    }
+
+    fun batchSetCategoryParent(childNames: Collection<String>, parentName: String?) {
+        viewModelScope.launch {
+            repository.batchSetCategoryParent(childNames, parentName)
+                .onSuccess { count ->
+                    if (count > 0) {
+                        _actionMessage.value = if (parentName.isNullOrBlank()) {
+                            "已解除 $count 个分类的归属关系"
+                        } else {
+                            "已将 $count 个分类一键归属到「$parentName」"
+                        }
+                    }
+                }
+                .onFailure { err -> _actionMessage.value = err.message ?: "批量归属分类失败" }
+        }
+    }
+
+    fun setCategoryShowChildren(showChildren: Boolean) {
+        viewModelScope.launch {
+            repository.setCategoryShowChildren(showChildren)
+                .onFailure { err -> _actionMessage.value = err.message ?: "切换分类显示模式失败" }
+        }
+    }
+
+    fun consolidateCategoryChildrenToParent(
+        parentName: String? = null,
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true
+    ) {
+        viewModelScope.launch {
+            repository.consolidateCategoryChildrenToParent(
+                parentName = parentName,
+                syncTransactions = syncTransactions,
+                syncRules = syncRules
+            )
+                .onSuccess { res ->
+                    val target = parentName?.takeIf { it.isNotBlank() }?.let { "「$it」" } ?: "对应父类"
+                    _actionMessage.value = "已一键整合到$target（更新 ${res.updatedTransactions} 笔账单、${res.updatedRules} 条规则）"
+                }
+                .onFailure { err -> _actionMessage.value = err.message ?: "一键整合分类失败" }
+        }
+    }
+
+    fun reorderChannels(orderedNames: List<String>) {
+        viewModelScope.launch {
+            repository.reorderChannels(orderedNames)
+                .onFailure { err -> _actionMessage.value = err.message ?: "渠道排序失败" }
+        }
+    }
+
+    fun setChannelParent(childName: String, parentName: String?) {
+        viewModelScope.launch {
+            repository.setChannelParent(childName, parentName)
+                .onSuccess {
+                    _actionMessage.value = if (parentName.isNullOrBlank()) {
+                        "已解除「$childName」的归属关系"
+                    } else {
+                        "已将渠道「$childName」归属到「$parentName」"
+                    }
+                }
+                .onFailure { err -> _actionMessage.value = err.message ?: "设置渠道归属失败" }
+        }
+    }
+
+    fun batchSetChannelParent(childNames: Collection<String>, parentName: String?) {
+        viewModelScope.launch {
+            repository.batchSetChannelParent(childNames, parentName)
+                .onSuccess { count ->
+                    if (count > 0) {
+                        _actionMessage.value = if (parentName.isNullOrBlank()) {
+                            "已解除 $count 个渠道的归属关系"
+                        } else {
+                            "已将 $count 个渠道一键归属到「$parentName」"
+                        }
+                    }
+                }
+                .onFailure { err -> _actionMessage.value = err.message ?: "批量归属渠道失败" }
+        }
+    }
+
+    fun setChannelShowChildren(showChildren: Boolean) {
+        viewModelScope.launch {
+            repository.setChannelShowChildren(showChildren)
+                .onFailure { err -> _actionMessage.value = err.message ?: "切换渠道显示模式失败" }
+        }
+    }
+
+    fun consolidateChannelChildrenToParent(
+        parentName: String? = null,
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true
+    ) {
+        viewModelScope.launch {
+            repository.consolidateChannelChildrenToParent(
+                parentName = parentName,
+                syncTransactions = syncTransactions,
+                syncRules = syncRules
+            )
+                .onSuccess { res ->
+                    val target = parentName?.takeIf { it.isNotBlank() }?.let { "「$it」" } ?: "对应父渠道"
+                    _actionMessage.value = "已一键整合到$target（更新 ${res.updatedTransactions} 笔账单、${res.updatedRules} 条规则）"
+                }
+                .onFailure { err -> _actionMessage.value = err.message ?: "一键整合渠道失败" }
+        }
+    }
+
+    fun saveBillFieldsConfig(
+        fields: List<com.example.model.BillFieldConfig>,
+        syncAiPrompt: Boolean = true,
+        silent: Boolean = false
+    ) {
+        viewModelScope.launch {
+            repository.saveBillFieldsConfig(fields, syncAiPrompt = syncAiPrompt)
+                .onSuccess {
+                    if (!silent) {
+                        _actionMessage.value = if (syncAiPrompt) {
+                            "已保存账单信息字段配置并同步 AI 提示词"
+                        } else {
+                            "已保存账单信息字段配置"
+                        }
+                    }
+                }
+                .onFailure { err -> _actionMessage.value = err.message ?: "保存账单字段配置失败" }
+        }
+    }
+
+    fun resetBillFieldsConfig() {
+        saveBillFieldsConfig(com.example.model.BillFieldCatalog.defaultFields, syncAiPrompt = true, silent = false)
+    }
+
+    fun loadNotificationLogs(query: String = _notificationLogsState.value.query) {
+        viewModelScope.launch {
+            val cleanQuery = query.trim()
+            _notificationLogsState.value = _notificationLogsState.value.copy(
+                query = cleanQuery,
+                isLoading = true
+            )
+            runCatching {
+                repository.loadNotificationLogsPage(
+                    query = cleanQuery,
+                    limit = NOTIFICATION_LOG_PAGE_SIZE,
+                    offset = 0
+                )
+            }.onSuccess { page ->
+                _notificationLogsState.value = NotificationLogsUiState(
+                    items = page,
+                    query = cleanQuery,
+                    isLoading = false,
+                    hasMore = page.size >= NOTIFICATION_LOG_PAGE_SIZE
+                )
+            }.onFailure {
+                _notificationLogsState.value = _notificationLogsState.value.copy(isLoading = false)
+            }
+        }
+    }
+
+    fun loadMoreNotificationLogs() {
+        val current = _notificationLogsState.value
+        if (current.isLoading || !current.hasMore) return
+        viewModelScope.launch {
+            _notificationLogsState.value = current.copy(isLoading = true)
+            runCatching {
+                repository.loadNotificationLogsPage(
+                    query = current.query,
+                    limit = NOTIFICATION_LOG_PAGE_SIZE,
+                    offset = current.items.size
+                )
+            }.onSuccess { page ->
+                _notificationLogsState.value = current.copy(
+                    items = current.items + page,
+                    isLoading = false,
+                    hasMore = page.size >= NOTIFICATION_LOG_PAGE_SIZE
+                )
+            }.onFailure {
+                _notificationLogsState.value = current.copy(isLoading = false)
+            }
+        }
+    }
+
+    fun clearAllNotificationLogs() {
+        viewModelScope.launch {
+            repository.clearAllNotificationLogs()
+                .onSuccess {
+                    _notificationLogsState.value = NotificationLogsUiState(query = _notificationLogsState.value.query)
+                    NotificationBridge.clearLogs()
+                    _actionMessage.value = "已清空全部通知日志"
+                }
+                .onFailure { err -> _actionMessage.value = err.message ?: "清空日志失败" }
+        }
+    }
+
+    fun updateNotificationLogRetention(maxCount: Int, maxDays: Int) {
+        viewModelScope.launch {
+            repository.updateNotificationLogRetention(maxCount, maxDays)
+                .onSuccess {
+                    loadNotificationLogs(_notificationLogsState.value.query)
+                    val countDesc = if (maxCount <= 0) "无限条数" else "最多 $maxCount 条"
+                    val daysDesc = if (maxDays <= 0) "永久保存" else "保留 $maxDays 天"
+                    _actionMessage.value = "已更新日志保留策略：$countDesc · $daysDesc"
+                }
+                .onFailure { err -> _actionMessage.value = err.message ?: "更新保留策略失败" }
         }
     }
 
@@ -1971,10 +2234,18 @@ class LedgerViewModel(
         }
     }
 
-    fun exportLocalBackup(context: android.content.Context, uri: android.net.Uri) {
+    fun clearLocalBackupActionState() {
+        _localBackupActionState.value = LocalBackupActionState.Idle
+    }
+
+    fun exportLocalBackup(
+        context: android.content.Context,
+        uri: android.net.Uri,
+        password: String? = null
+    ) {
         viewModelScope.launch {
-            _localBackupActionState.value = LocalBackupActionState.Working("正在导出本地备份...")
-            LocalBackupManager.exportBackupToUri(context, uri, repository)
+            _localBackupActionState.value = LocalBackupActionState.Working("正在加密打包本地备份...")
+            LocalBackupManager.exportBackupToUri(context, uri, repository, password = password)
                 .onSuccess { msg ->
                     _localBackupActionState.value = LocalBackupActionState.Success(msg)
                     val s = repository.getSettingsOnce()
@@ -1992,15 +2263,30 @@ class LedgerViewModel(
         }
     }
 
-    fun restoreLocalBackup(context: android.content.Context, uri: android.net.Uri) {
+    fun restoreLocalBackup(
+        context: android.content.Context,
+        uri: android.net.Uri,
+        password: String? = null
+    ) {
         viewModelScope.launch {
-            _localBackupActionState.value = LocalBackupActionState.Working("正在读取并恢复本地备份...")
-            LocalBackupManager.restoreBackupFromUri(context, uri, repository)
+            _localBackupActionState.value = LocalBackupActionState.Working("正在校验并恢复本地备份...")
+            LocalBackupManager.restoreBackupFromUri(context, uri, repository, password = password)
                 .onSuccess { msg ->
                     _localBackupActionState.value = LocalBackupActionState.Success(msg)
                 }
                 .onFailure { err ->
-                    _localBackupActionState.value = LocalBackupActionState.Error(err.message ?: "恢复失败")
+                    when (err) {
+                        is com.example.data.BackupPasswordRequiredException,
+                        is com.example.data.BackupWrongPasswordException -> {
+                            _localBackupActionState.value = LocalBackupActionState.PasswordRequired(
+                                uri = uri,
+                                message = err.message ?: "请输入备份加密密码"
+                            )
+                        }
+                        else -> {
+                            _localBackupActionState.value = LocalBackupActionState.Error(err.message ?: "恢复失败")
+                        }
+                    }
                 }
         }
     }
@@ -2038,7 +2324,7 @@ class LedgerViewModel(
         val ok = NotificationBridge.postUrgentBackupReminder(
             context = context,
             title = "【通知】请及时备份小本本账单",
-            body = "定期备份通知已生效（每 $intervalText），点击可直接前往导出本地 JSON 备份。"
+            body = "定期备份通知已生效（每 $intervalText），点击可直接前往导出加密 ZIP 备份。"
         )
         if (ok) {
             _localBackupActionState.value = LocalBackupActionState.Success("已发送测试通知")
@@ -2254,5 +2540,7 @@ class LedgerViewModel(
                 HomeStatsDimension.ALL_TIME -> list
             }
         }
+
+        const val NOTIFICATION_LOG_PAGE_SIZE = 50
     }
 }

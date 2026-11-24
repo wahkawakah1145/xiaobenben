@@ -99,12 +99,6 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
 
         if (title.isBlank() && content.isBlank()) return
 
-        val policy = monitoredPolicy
-        val isLikelyFinancial = ChinaNotificationParser.isLikelyFinancialNotification(sbn.packageName, title, content)
-        if (!shouldProcessNotificationPackage(sbn.packageName, isSelfTestNotification, policy, isLikelyFinancial)) {
-            return
-        }
-
         val fingerprint = "${sbn.packageName}|$title|$content"
         val now = System.currentTimeMillis()
         val lastSeen = recentFingerprints[fingerprint]
@@ -122,13 +116,33 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             resolveCachedAppLabel(sbn.packageName)
         }
 
+        val policy = monitoredPolicy
+        val isLikelyFinancial = ChinaNotificationParser.isLikelyFinancialNotification(sbn.packageName, title, content)
+        val shouldProcess = shouldProcessNotificationPackage(sbn.packageName, isSelfTestNotification, policy, isLikelyFinancial)
+        val occurredAt = sbn.postTime.takeIf { it > 0L } ?: now
+
+        if (!shouldProcess) {
+            serviceScope.launch {
+                recordLogBoth(
+                    packageName = sbn.packageName,
+                    appLabel = appLabel,
+                    title = title,
+                    content = content,
+                    status = "非监听范围已忽略",
+                    summary = "不在已选监听应用列表内",
+                    capturedAtMillis = now
+                )
+            }
+            return
+        }
+
         serviceScope.launch {
             processIncomingNotification(
                 packageName = sbn.packageName,
                 appLabel = appLabel,
                 title = title,
                 content = content,
-                occurredAt = sbn.postTime.takeIf { it > 0L } ?: now
+                occurredAt = occurredAt
             )
         }
     }
@@ -143,6 +157,36 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         return resolved
     }
 
+    private suspend fun recordLogBoth(
+        packageName: String,
+        appLabel: String,
+        title: String,
+        content: String,
+        status: String,
+        summary: String,
+        capturedAtMillis: Long = System.currentTimeMillis()
+    ) {
+        NotificationBridge.appendLog(
+            packageName = packageName,
+            appLabel = appLabel,
+            title = title,
+            content = content,
+            status = status,
+            summary = summary
+        )
+        runCatching {
+            repository.recordNotificationLog(
+                packageName = packageName,
+                appLabel = appLabel,
+                title = title,
+                content = content,
+                status = status,
+                summary = summary,
+                capturedAtMillis = capturedAtMillis
+            )
+        }
+    }
+
     private suspend fun processIncomingNotification(
         packageName: String,
         appLabel: String,
@@ -153,7 +197,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         repository.ensureDefaultRulesSeeded()
         val settings = repository.getSettingsOnce()
         if (!settings.autoRecordEnabled) {
-            NotificationBridge.appendLog(
+            recordLogBoth(
                 packageName = packageName,
                 appLabel = appLabel,
                 title = title,
@@ -172,7 +216,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             customRules = customRules
         )
         if (ignoreRule != null) {
-            NotificationBridge.appendLog(
+            recordLogBoth(
                 packageName = packageName,
                 appLabel = appLabel,
                 title = title,
@@ -184,6 +228,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         }
 
         val activeChannels = com.example.model.ChannelCatalog.activeChannels(settings)
+        val collapseChannel = !settings.channelShowChildren
         val ruleParsed = ChinaNotificationParser.parse(
             packageName = packageName,
             title = title,
@@ -191,7 +236,9 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             customRules = customRules,
             enableLocalSemanticPass = false,
             referenceTimeMillis = occurredAt,
-            customChannels = activeChannels
+            customChannels = activeChannels,
+            channelParentMap = settings.channelParentMap,
+            collapseChannelToParent = collapseChannel
         )
         val aiConfig = repository.getAiConfigOnce()
         val hasExplicitUnitForAi = ChinaNotificationParser.hasExplicitAmountUnit("$title\n$content")
@@ -213,7 +260,11 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 fallbackParsed = ruleParsed,
                 availableRules = customRules,
                 activeCategories = activeCategories,
-                activeChannels = activeChannels
+                activeChannels = activeChannels,
+                billFieldsConfig = settings.billFieldsConfig,
+                categoryParentMap = settings.categoryParentMap,
+                channelParentMap = settings.channelParentMap,
+                collapseChannelToParent = collapseChannel
             ).getOrNull()
             aiResult ?: ruleParsed
         } else {
@@ -224,53 +275,16 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             ?: ChinaNotificationParser.extractOccurredAtMillis("$title\n$content", occurredAt)
             ?: occurredAt
 
+        // Notifications without a valid financial amount are automatically ignored (never prompt inquiry)
         if (parsed == null || !parsed.isFinancialTransaction || parsed.amountCents <= 0L) {
-            val isExplicitlyWatched = if (settings.monitoredAppsCustomized) {
-                packageName in settings.monitoredAppPackages
-            } else {
-                ChinaPaymentCatalog.isWatchedPackage(packageName)
-            }
-            if (ChinaNotificationParser.hasUncertainFinancialCue(packageName, title, content, treatAsWatched = isExplicitlyWatched)) {
-                val inquiry = com.example.model.NotificationInquiry(
-                    packageName = packageName,
-                    appLabel = appLabel,
-                    title = title,
-                    content = content,
-                    suggestedAmountCents = 0L,
-                    suggestedCurrencyCode = ChinaNotificationParser.detectCurrencyCode("$title $content"),
-                    suggestedType = com.example.model.TransactionType.EXPENSE.name,
-                    suggestedCategory = "其他",
-                    suggestedMerchant = title.ifBlank { appLabel }.take(40),
-                    suggestedChannel = appLabel,
-                    reason = "未能自动提取金额或模板，等待确认并生成规则",
-                    occurredAtMillis = resolvedInquiryTime
-                )
-                repository.addInquiry(inquiry)
-                NotificationBridge.appendLog(
-                    packageName = packageName,
-                    appLabel = appLabel,
-                    title = title,
-                    content = content,
-                    status = "待询问确认",
-                    summary = inquiry.reason
-                )
-                if (settings.notifyOnRecorded) {
-                    NotificationBridge.postRecordedConfirmation(
-                        context = applicationContext,
-                        title = "小本本需要你确认一条通知 ($appLabel)",
-                        body = "${title.ifBlank { content }} — 点击进入软件补充并学习规则"
-                    )
-                }
-            } else {
-                NotificationBridge.appendLog(
-                    packageName = packageName,
-                    appLabel = appLabel,
-                    title = title,
-                    content = content,
-                    status = "未能识别金额",
-                    summary = "非动账通知"
-                )
-            }
+            recordLogBoth(
+                packageName = packageName,
+                appLabel = appLabel,
+                title = title,
+                content = content,
+                status = "不含有效金额，已自动忽略",
+                summary = "未检测到有效动账金额"
+            )
             return
         }
 
@@ -293,7 +307,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             repository.addInquiry(inquiry)
             val currencySymbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
             val formattedAmount = "$currencySymbol%.2f".format(parsed.amountCents / 100.0)
-            NotificationBridge.appendLog(
+            recordLogBoth(
                 packageName = packageName,
                 appLabel = parsed.channel,
                 title = title,
@@ -329,6 +343,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             parseMethod = parsed.parseMethod.name,
             rawNotification = compactRaw,
             note = parsed.reasoning.take(120),
+            customFields = parsed.customFields,
             occurredAtMillis = resolvedTxOccurredAt,
             confirmed = !needsManualConfirm
         )
@@ -339,7 +354,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             val formattedAmount = "$currencySymbol%.2f".format(parsed.amountCents / 100.0)
             val methodTag = if (parsed.parseMethod == ParseMethod.LOCAL_NLP) "AI理解" else "规则匹配"
             val stateLabel = if (needsManualConfirm) "待进软件确认" else "已自动入账"
-            NotificationBridge.appendLog(
+            recordLogBoth(
                 packageName = packageName,
                 appLabel = parsed.channel,
                 title = title,
@@ -360,7 +375,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 )
             }
         }.onFailure { error ->
-            NotificationBridge.appendLog(
+            recordLogBoth(
                 packageName = packageName,
                 appLabel = parsed.channel,
                 title = title,
@@ -395,6 +410,10 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             }
             if (isWatched) return true
             return policy.allowOtherFinancialAppsFallback && isLikelyFinancial
+        }
+
+        fun shouldAutoIgnoreWithoutAmount(parsed: com.example.model.ParsedNotificationResult?): Boolean {
+            return parsed == null || !parsed.isFinancialTransaction || parsed.amountCents <= 0L
         }
     }
 }

@@ -342,6 +342,7 @@ class LedgerRepository(
                 tradeStatus = compactText(tx.tradeStatus, 40),
                 transactionNo = compactText(tx.transactionNo, 80),
                 merchantOrderNo = compactText(tx.merchantOrderNo, 80),
+                customFields = sanitizeCustomFields(tx.customFields),
                 occurredAtMillis = tx.occurredAtMillis.coerceAtLeast(1L),
                 recordedBaseCurrencyCode = baseCode,
                 recordedRateToBase = snapshotRate,
@@ -355,6 +356,17 @@ class LedgerRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private fun sanitizeCustomFields(raw: Map<String, String>): Map<String, String> {
+        if (raw.isEmpty()) return emptyMap()
+        val clean = LinkedHashMap<String, String>()
+        raw.forEach { (k, v) ->
+            val ck = k.trim().take(40)
+            val cv = v.trim().take(160)
+            if (ck.isNotEmpty() && cv.isNotEmpty()) clean[ck] = cv
+        }
+        return clean
     }
 
     suspend fun updateTransaction(
@@ -375,7 +387,8 @@ class LedgerRepository(
         tradeStatus: String? = null,
         transactionNo: String? = null,
         merchantOrderNo: String? = null,
-        updateExtendedFields: Boolean = false
+        updateExtendedFields: Boolean = false,
+        customFields: Map<String, String>? = null
     ): Result<Boolean> {
         return try {
             require(txId.isNotBlank()) { "账单 ID 不能为空" }
@@ -386,6 +399,10 @@ class LedgerRepository(
             val cleanCategory = category.trim().ifBlank { "其他" }.take(40)
             val cleanMerchant = merchant.trim().ifBlank { "未知商户" }.take(120)
             val cleanChannel = channel.trim().ifBlank { "未知渠道" }.take(60)
+            val nextCustomFieldsJson = when {
+                customFields != null -> TransactionEntity.encodeCustomFieldsJson(sanitizeCustomFields(customFields))
+                else -> existing.customFieldsJson
+            }
             val updated = existing.copy(
                 amountCents = amountCents,
                 currencyCode = CurrencyCatalog.resolve(currencyCode).code,
@@ -400,6 +417,7 @@ class LedgerRepository(
                 tradeStatus = if (updateExtendedFields) compactText(tradeStatus, 40) else existing.tradeStatus,
                 transactionNo = if (updateExtendedFields) compactText(transactionNo, 80) else existing.transactionNo,
                 merchantOrderNo = if (updateExtendedFields) compactText(merchantOrderNo, 80) else existing.merchantOrderNo,
+                customFieldsJson = nextCustomFieldsJson,
                 occurredAtMillis = occurredAtMillis.coerceAtLeast(1L),
                 confirmed = confirmed,
                 updatedAtMillis = now
@@ -1109,7 +1127,17 @@ class LedgerRepository(
             } else {
                 (cur + cleanNew).distinct()
             }
-            val updatedSettings = settings.copy(customChannels = replaced)
+            val updatedChannelParentMap = buildMap<String, String> {
+                settings.channelParentMap.forEach { (k, v) ->
+                    val nk = if (k.equals(cleanOld, ignoreCase = true)) cleanNew else k
+                    val nv = if (v.equals(cleanOld, ignoreCase = true)) cleanNew else v
+                    if (!nk.equals(nv, ignoreCase = true)) put(nk, nv)
+                }
+            }
+            val updatedSettings = settings.copy(
+                customChannels = replaced,
+                channelParentMap = updatedChannelParentMap
+            )
             settingsStore.saveBudgetSettings(updatedSettings)
 
             val now = System.currentTimeMillis()
@@ -1194,7 +1222,14 @@ class LedgerRepository(
             } else {
                 cur
             }
-            val updatedSettings = settings.copy(customChannels = updatedChannels)
+            val cleanedParentMap = settings.channelParentMap
+                .filterNot { (k, v) ->
+                    k.equals(cleanTarget, ignoreCase = true) || v.equals(cleanTarget, ignoreCase = true)
+                }
+            val updatedSettings = settings.copy(
+                customChannels = updatedChannels,
+                channelParentMap = cleanedParentMap
+            )
             settingsStore.saveBudgetSettings(updatedSettings)
 
             val now = System.currentTimeMillis()
@@ -1263,7 +1298,10 @@ class LedgerRepository(
     suspend fun resetChannelsToDefault(syncAiPrompt: Boolean = true): Result<Unit> {
         return try {
             val settings = settingsStore.getBudgetSettingsOnce()
-            val reset = settings.copy(customChannels = com.example.model.ChannelCatalog.defaultChannels)
+            val reset = settings.copy(
+                customChannels = com.example.model.ChannelCatalog.defaultChannels,
+                channelParentMap = com.example.model.ChannelCatalog.defaultChannelParentMap
+            )
             settingsStore.saveBudgetSettings(reset)
             if (syncAiPrompt) {
                 val aiCfg = settingsStore.getAiConfigOnce()
@@ -1279,6 +1317,182 @@ class LedgerRepository(
                 }
             }
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun reorderChannels(orderedNames: List<String>): Result<Unit> {
+        return try {
+            val clean = orderedNames.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (clean.isEmpty()) return Result.success(Unit)
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val existing = com.example.model.ChannelCatalog.activeChannels(settings)
+            val merged = (clean + existing.filterNot { name -> clean.any { it.equals(name, ignoreCase = true) } }).distinct()
+            settingsStore.saveBudgetSettings(settings.copy(customChannels = merged))
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setChannelParent(
+        childName: String,
+        parentName: String?
+    ): Result<Unit> {
+        return try {
+            val cleanChild = childName.trim()
+            val cleanParent = parentName?.trim()?.takeIf { it.isNotEmpty() }
+            require(cleanChild.isNotEmpty()) { "渠道名称不能为空" }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedMap = settings.channelParentMap.toMutableMap()
+            if (cleanParent == null) {
+                updatedMap.remove(cleanChild)
+            } else {
+                require(com.example.model.ChannelCatalog.canAssignParent(cleanChild, cleanParent, updatedMap)) {
+                    "不能将渠道归属给自身或形成循环归属"
+                }
+                updatedMap[cleanChild] = cleanParent
+            }
+            val currentChannels = com.example.model.ChannelCatalog.activeChannels(settings)
+            val nextChannels = buildList {
+                addAll(currentChannels)
+                if (cleanChild !in this) add(cleanChild)
+                if (cleanParent != null && cleanParent !in this) add(cleanParent)
+            }
+            settingsStore.saveBudgetSettings(
+                settings.copy(
+                    customChannels = nextChannels,
+                    channelParentMap = updatedMap
+                )
+            )
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun batchSetChannelParent(
+        childNames: Collection<String>,
+        parentName: String?
+    ): Result<Int> {
+        return try {
+            val cleanParent = parentName?.trim()?.takeIf { it.isNotEmpty() }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedMap = settings.channelParentMap.toMutableMap()
+            var count = 0
+            val extraChannels = LinkedHashSet<String>()
+            if (cleanParent != null) extraChannels.add(cleanParent)
+            childNames.map { it.trim() }.filter { it.isNotEmpty() }.distinct().forEach { child ->
+                if (cleanParent == null) {
+                    if (updatedMap.remove(child) != null) count++
+                } else if (com.example.model.ChannelCatalog.canAssignParent(child, cleanParent, updatedMap)) {
+                    updatedMap[child] = cleanParent
+                    extraChannels.add(child)
+                    count++
+                }
+            }
+            val nextChannels = (com.example.model.ChannelCatalog.activeChannels(settings) + extraChannels).distinct()
+            settingsStore.saveBudgetSettings(
+                settings.copy(
+                    customChannels = nextChannels,
+                    channelParentMap = updatedMap
+                )
+            )
+            Result.success(count)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setChannelShowChildren(showChildren: Boolean): Result<Unit> {
+        return try {
+            val settings = settingsStore.getBudgetSettingsOnce()
+            settingsStore.saveBudgetSettings(settings.copy(channelShowChildren = showChildren))
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun consolidateChannelChildrenToParent(
+        parentName: String? = null,
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true
+    ): Result<ChannelSyncResult> {
+        return try {
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val parentMap = settings.channelParentMap
+            if (parentMap.isEmpty()) return Result.success(ChannelSyncResult())
+            val cleanTargetParent = parentName?.trim()?.takeIf { it.isNotEmpty() }
+            val targetPairs = parentMap.entries.mapNotNull { (child, _) ->
+                val root = com.example.model.ChannelCatalog.resolveRootParent(child, parentMap)
+                if (root == child) return@mapNotNull null
+                if (cleanTargetParent != null && !root.equals(cleanTargetParent, ignoreCase = true) &&
+                    !parentMap[child].equals(cleanTargetParent, ignoreCase = true)
+                ) {
+                    return@mapNotNull null
+                }
+                child to (cleanTargetParent ?: root)
+            }
+            if (targetPairs.isEmpty()) return Result.success(ChannelSyncResult())
+            val now = System.currentTimeMillis()
+            var updatedTxCount = 0
+            if (syncTransactions) {
+                val allTxs = getAllTransactionsOnce()
+                val changed = allTxs.mapNotNull { tx ->
+                    var curChannel = tx.channel
+                    targetPairs.forEach { (child, target) ->
+                        curChannel = com.example.model.ChannelCatalog.replaceChannelToken(curChannel, child, target)
+                    }
+                    if (curChannel != tx.channel) {
+                        TransactionEntity.fromDomain(tx.copy(channel = curChannel, updatedAtMillis = now))
+                    } else {
+                        null
+                    }
+                }
+                if (changed.isNotEmpty()) {
+                    changed.chunked(300).forEach { dao.upsertTransactions(it) }
+                    updatedTxCount = changed.size
+                }
+            }
+            var updatedRulesCount = 0
+            if (syncRules) {
+                val allRules = dao.getAllRulesOnce().map { it.toDomain() }
+                val changedRules = allRules.mapNotNull { rule ->
+                    if (rule.isIgnoreRule) return@mapNotNull null
+                    var curChannel = rule.channelName
+                    targetPairs.forEach { (child, target) ->
+                        curChannel = com.example.model.ChannelCatalog.replaceChannelToken(curChannel, child, target)
+                    }
+                    if (curChannel != rule.channelName) {
+                        ParsingRuleEntity.fromDomain(rule.copy(channelName = curChannel, updatedAtMillis = now))
+                    } else {
+                        null
+                    }
+                }
+                if (changedRules.isNotEmpty()) {
+                    dao.upsertRules(changedRules)
+                    updatedRulesCount = changedRules.size
+                }
+            }
+            Result.success(
+                ChannelSyncResult(
+                    updatedTransactions = updatedTxCount,
+                    updatedRules = updatedRulesCount,
+                    aiPromptSynced = false
+                )
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1385,6 +1599,13 @@ class LedgerRepository(
                     put(cleanNew, prevIcon)
                 }
             }
+            val updatedParentMap = buildMap<String, String> {
+                settings.categoryParentMap.forEach { (k, v) ->
+                    val nk = if (k == cleanOld) cleanNew else k
+                    val nv = if (v == cleanOld) cleanNew else v
+                    if (nk != nv) put(nk, nv)
+                }
+            }
             val updatedSettings = when (type) {
                 TransactionType.EXPENSE -> {
                     val cur = CategoryCatalog.activeExpenseCategories(settings)
@@ -1393,7 +1614,7 @@ class LedgerRepository(
                     } else {
                         (cur + cleanNew).distinct()
                     }
-                    settings.copy(expenseCategories = replaced, categoryIcons = updatedIcons)
+                    settings.copy(expenseCategories = replaced, categoryIcons = updatedIcons, categoryParentMap = updatedParentMap)
                 }
                 TransactionType.INCOME -> {
                     val cur = CategoryCatalog.activeIncomeCategories(settings)
@@ -1402,7 +1623,7 @@ class LedgerRepository(
                     } else {
                         (cur + cleanNew).distinct()
                     }
-                    settings.copy(incomeCategories = replaced, categoryIcons = updatedIcons)
+                    settings.copy(incomeCategories = replaced, categoryIcons = updatedIcons, categoryParentMap = updatedParentMap)
                 }
                 TransactionType.TRANSFER -> {
                     val cur = CategoryCatalog.activeTransferCategories(settings)
@@ -1411,7 +1632,7 @@ class LedgerRepository(
                     } else {
                         (cur + cleanNew).distinct()
                     }
-                    settings.copy(transferCategories = replaced, categoryIcons = updatedIcons)
+                    settings.copy(transferCategories = replaced, categoryIcons = updatedIcons, categoryParentMap = updatedParentMap)
                 }
             }
             settingsStore.saveBudgetSettings(updatedSettings)
@@ -1503,7 +1724,17 @@ class LedgerRepository(
             } else {
                 updatedSettings.categoryIcons
             }
-            settingsStore.saveBudgetSettings(updatedSettings.copy(categoryIcons = cleanedIcons))
+            val cleanedParentMap = if (cleanTarget !in remainingCategories) {
+                updatedSettings.categoryParentMap.filterNot { (k, v) -> k == cleanTarget || v == cleanTarget }
+            } else {
+                updatedSettings.categoryParentMap
+            }
+            settingsStore.saveBudgetSettings(
+                updatedSettings.copy(
+                    categoryIcons = cleanedIcons,
+                    categoryParentMap = cleanedParentMap
+                )
+            )
             val now = System.currentTimeMillis()
             val updatedTx = if (syncTransactions && cleanFallback != cleanTarget) {
                 dao.renameTransactionCategory(cleanTarget, cleanFallback, now)
@@ -1553,7 +1784,8 @@ class LedgerRepository(
                 expenseCategories = CategoryCatalog.expenseCategories,
                 incomeCategories = CategoryCatalog.incomeCategories,
                 transferCategories = CategoryCatalog.transferCategories,
-                categoryIcons = if (resetIcons) emptyMap() else settings.categoryIcons
+                categoryIcons = if (resetIcons) emptyMap() else settings.categoryIcons,
+                categoryParentMap = emptyMap()
             )
             settingsStore.saveBudgetSettings(reset)
             if (syncAiPrompt) {
@@ -1568,6 +1800,280 @@ class LedgerRepository(
                     settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
                 }
             }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun reorderCategories(
+        type: TransactionType,
+        orderedNames: List<String>
+    ): Result<Unit> {
+        return try {
+            val clean = orderedNames.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (clean.isEmpty()) return Result.success(Unit)
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updated = when (type) {
+                TransactionType.EXPENSE -> {
+                    val cur = CategoryCatalog.activeExpenseCategories(settings)
+                    settings.copy(expenseCategories = (clean + cur.filterNot { it in clean }).distinct())
+                }
+                TransactionType.INCOME -> {
+                    val cur = CategoryCatalog.activeIncomeCategories(settings)
+                    settings.copy(incomeCategories = (clean + cur.filterNot { it in clean }).distinct())
+                }
+                TransactionType.TRANSFER -> {
+                    val cur = CategoryCatalog.activeTransferCategories(settings)
+                    settings.copy(transferCategories = (clean + cur.filterNot { it in clean }).distinct())
+                }
+            }
+            settingsStore.saveBudgetSettings(updated)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setCategoryParent(
+        childName: String,
+        parentName: String?
+    ): Result<Unit> {
+        return try {
+            val cleanChild = childName.trim()
+            val cleanParent = parentName?.trim()?.takeIf { it.isNotEmpty() }
+            require(cleanChild.isNotEmpty()) { "分类名称不能为空" }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedMap = settings.categoryParentMap.toMutableMap()
+            if (cleanParent == null) {
+                updatedMap.remove(cleanChild)
+            } else {
+                require(CategoryCatalog.canAssignParent(cleanChild, cleanParent, updatedMap)) {
+                    "不能将分类归属给自身或形成循环归属"
+                }
+                updatedMap[cleanChild] = cleanParent
+            }
+            settingsStore.saveBudgetSettings(settings.copy(categoryParentMap = updatedMap))
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun batchSetCategoryParent(
+        childNames: Collection<String>,
+        parentName: String?
+    ): Result<Int> {
+        return try {
+            val cleanParent = parentName?.trim()?.takeIf { it.isNotEmpty() }
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updatedMap = settings.categoryParentMap.toMutableMap()
+            var count = 0
+            childNames.map { it.trim() }.filter { it.isNotEmpty() }.distinct().forEach { child ->
+                if (cleanParent == null) {
+                    if (updatedMap.remove(child) != null) count++
+                } else if (CategoryCatalog.canAssignParent(child, cleanParent, updatedMap)) {
+                    updatedMap[child] = cleanParent
+                    count++
+                }
+            }
+            settingsStore.saveBudgetSettings(settings.copy(categoryParentMap = updatedMap))
+            Result.success(count)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setCategoryShowChildren(showChildren: Boolean): Result<Unit> {
+        return try {
+            val settings = settingsStore.getBudgetSettingsOnce()
+            settingsStore.saveBudgetSettings(settings.copy(categoryShowChildren = showChildren))
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun consolidateCategoryChildrenToParent(
+        parentName: String? = null,
+        syncTransactions: Boolean = true,
+        syncRules: Boolean = true
+    ): Result<CategorySyncResult> {
+        return try {
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val parentMap = settings.categoryParentMap
+            if (parentMap.isEmpty()) return Result.success(CategorySyncResult())
+            val cleanTargetParent = parentName?.trim()?.takeIf { it.isNotEmpty() }
+            val targetPairs = parentMap.entries.mapNotNull { (child, directParent) ->
+                val root = CategoryCatalog.resolveRootParent(child, parentMap)
+                if (root == child) return@mapNotNull null
+                if (cleanTargetParent != null && root != cleanTargetParent && directParent != cleanTargetParent) {
+                    return@mapNotNull null
+                }
+                child to (cleanTargetParent ?: root)
+            }
+            if (targetPairs.isEmpty()) return Result.success(CategorySyncResult())
+            val now = System.currentTimeMillis()
+            var updatedTx = 0
+            var updatedRules = 0
+            targetPairs.forEach { (child, target) ->
+                if (syncTransactions) {
+                    updatedTx += dao.renameTransactionCategory(child, target, now)
+                }
+                if (syncRules) {
+                    updatedRules += dao.renameRuleCategory(child, target, now)
+                }
+            }
+            Result.success(
+                CategorySyncResult(
+                    updatedTransactions = updatedTx,
+                    updatedRules = updatedRules,
+                    aiPromptSynced = false
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveBillFieldsConfig(
+        fields: List<com.example.model.BillFieldConfig>,
+        syncAiPrompt: Boolean = true
+    ): Result<Unit> {
+        return try {
+            val normalized = com.example.model.BillFieldCatalog.normalizeFields(fields)
+            val settings = settingsStore.getBudgetSettingsOnce()
+            val updated = settings.copy(billFieldsConfig = normalized)
+            settingsStore.saveBudgetSettings(updated)
+            if (syncAiPrompt) {
+                val aiCfg = settingsStore.getAiConfigOnce()
+                val newPrompt = AiUnderstandingManager.syncPromptForBillFieldsChange(
+                    currentCustomPrompt = aiCfg.customSystemPrompt,
+                    billFieldsConfig = normalized,
+                    allActiveCategories = CategoryCatalog.allActiveCategories(updated),
+                    allActiveChannels = com.example.model.ChannelCatalog.activeChannels(updated)
+                )
+                if (newPrompt != aiCfg.customSystemPrompt) {
+                    settingsStore.saveAiConfig(aiCfg.copy(customSystemPrompt = newPrompt))
+                }
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun recordNotificationLog(
+        packageName: String,
+        appLabel: String,
+        title: String,
+        content: String,
+        status: String,
+        summary: String,
+        capturedAtMillis: Long = System.currentTimeMillis()
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val entity = NotificationLogEntity(
+                id = java.util.UUID.randomUUID().toString(),
+                packageName = packageName.take(120),
+                appLabel = appLabel.take(60),
+                title = title.take(160),
+                content = content.take(400),
+                status = status.take(60),
+                summary = summary.take(240),
+                capturedAtMillis = capturedAtMillis
+            )
+            dao.insertNotificationLog(entity)
+            val settings = settingsStore.getBudgetSettingsOnce()
+            applyNotificationLogRetentionLocked(
+                maxCount = settings.notificationLogMaxCount,
+                maxDays = settings.notificationLogMaxDays,
+                nowMillis = capturedAtMillis
+            )
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun applyNotificationLogRetentionLocked(
+        maxCount: Int,
+        maxDays: Int,
+        nowMillis: Long = System.currentTimeMillis()
+    ) {
+        if (maxDays > 0) {
+            val cutoff = nowMillis - maxDays.toLong() * 86_400_000L
+            dao.deleteNotificationLogsOlderThan(cutoff)
+        }
+        if (maxCount > 0) {
+            dao.deleteNotificationLogsExcess(maxCount)
+        }
+    }
+
+    suspend fun loadNotificationLogsPage(
+        query: String = "",
+        limit: Int = 50,
+        offset: Int = 0
+    ): List<com.example.model.CapturedNotificationLog> = withContext(Dispatchers.IO) {
+        val safeLimit = limit.coerceIn(1, 200)
+        val safeOffset = offset.coerceAtLeast(0)
+        val cleanQuery = query.trim()
+        val entities = if (cleanQuery.isEmpty()) {
+            dao.getNotificationLogsPage(limit = safeLimit, offset = safeOffset)
+        } else {
+            val escaped = cleanQuery
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            dao.searchNotificationLogsPage(pattern = "%$escaped%", limit = safeLimit, offset = safeOffset)
+        }
+        entities.map { it.toDomain() }
+    }
+
+    fun observeNotificationLogsCount(): Flow<Int> = dao.observeNotificationLogsCount()
+
+    suspend fun clearAllNotificationLogs(): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            dao.clearAllNotificationLogs()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateNotificationLogRetention(
+        maxCount: Int,
+        maxDays: Int
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val safeCount = maxCount.coerceAtLeast(0)
+            val safeDays = maxDays.coerceAtLeast(0)
+            val settings = settingsStore.getBudgetSettingsOnce()
+            settingsStore.saveBudgetSettings(
+                settings.copy(
+                    notificationLogMaxCount = safeCount,
+                    notificationLogMaxDays = safeDays
+                )
+            )
+            applyNotificationLogRetentionLocked(maxCount = safeCount, maxDays = safeDays)
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e

@@ -296,6 +296,44 @@ fun LedgerExportDialog(
                     }
                 }
 
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.48f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("export_privacy_notice_card")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = AppIcons.WarningAmber,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = "隐私与安全提示",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                text = "导出的 CSV / XLSX / JSON 文件为明文未加密格式，包含金额、商户、卡尾号、单号与备注等个人财务敏感信息，请妥善保管，切勿随意上传至公开网盘或陌生群聊。如需长期归档，建议优先使用「本地备份」生成加密 ZIP 备份包。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.92f)
+                            )
+                        }
+                    }
+                }
+
                 if (transactions.isEmpty()) {
                     Text(
                         text = "当前范围内没有可导出的账单记录。",

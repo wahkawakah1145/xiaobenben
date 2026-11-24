@@ -14,6 +14,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.example.model.CapturedNotificationLog
 import com.example.model.CustomParsingRule
 import com.example.model.LedgerBook
 import com.example.model.LedgerTransaction
@@ -21,6 +22,7 @@ import com.example.model.TransactionBookLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 @Entity(tableName = "transactions")
 data class TransactionEntity(
@@ -42,6 +44,7 @@ data class TransactionEntity(
     val transactionNo: String? = null,
     val merchantOrderNo: String? = null,
     val balanceAfterCents: Long? = null,
+    val customFieldsJson: String? = null,
     val occurredAtMillis: Long,
     val confirmed: Boolean,
     val recordedBaseCurrencyCode: String = "CNY",
@@ -68,6 +71,7 @@ data class TransactionEntity(
         transactionNo = transactionNo,
         merchantOrderNo = merchantOrderNo,
         balanceAfterCents = balanceAfterCents,
+        customFields = decodeCustomFieldsJson(customFieldsJson),
         occurredAtMillis = occurredAtMillis,
         confirmed = confirmed,
         recordedBaseCurrencyCode = recordedBaseCurrencyCode,
@@ -77,6 +81,38 @@ data class TransactionEntity(
     )
 
     companion object {
+        fun encodeCustomFieldsJson(fields: Map<String, String>): String? {
+            if (fields.isEmpty()) return null
+            val obj = JSONObject()
+            var count = 0
+            fields.forEach { (k, v) ->
+                val ck = k.trim().take(48)
+                val cv = v.trim().take(160)
+                if (ck.isNotEmpty() && cv.isNotEmpty()) {
+                    obj.put(ck, cv)
+                    count++
+                }
+            }
+            return if (count == 0) null else obj.toString()
+        }
+
+        fun decodeCustomFieldsJson(raw: String?): Map<String, String> {
+            if (raw.isNullOrBlank()) return emptyMap()
+            return runCatching {
+                val obj = JSONObject(raw)
+                val map = LinkedHashMap<String, String>()
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next().trim().take(48)
+                    val v = obj.optString(k).trim().take(160)
+                    if (k.isNotEmpty() && v.isNotEmpty()) {
+                        map[k] = v
+                    }
+                }
+                map
+            }.getOrDefault(emptyMap())
+        }
+
         fun fromDomain(tx: LedgerTransaction): TransactionEntity = TransactionEntity(
             id = tx.id,
             amountCents = tx.amountCents,
@@ -96,6 +132,7 @@ data class TransactionEntity(
             transactionNo = tx.transactionNo,
             merchantOrderNo = tx.merchantOrderNo,
             balanceAfterCents = tx.balanceAfterCents,
+            customFieldsJson = encodeCustomFieldsJson(tx.customFields),
             occurredAtMillis = tx.occurredAtMillis,
             confirmed = tx.confirmed,
             recordedBaseCurrencyCode = tx.recordedBaseCurrencyCode.uppercase().ifBlank { "CNY" },
@@ -288,6 +325,45 @@ data class TransactionBookCrossRefEntity(
     }
 }
 
+@Entity(
+    tableName = "notification_logs",
+    indices = [Index(value = ["capturedAtMillis"])]
+)
+data class NotificationLogEntity(
+    @PrimaryKey val id: String,
+    val packageName: String,
+    val appLabel: String,
+    val title: String,
+    val content: String,
+    val capturedAtMillis: Long,
+    val status: String,
+    val summary: String
+) {
+    fun toDomain(): CapturedNotificationLog = CapturedNotificationLog(
+        id = id,
+        packageName = packageName,
+        appLabel = appLabel,
+        title = title,
+        content = content,
+        capturedAtMillis = capturedAtMillis,
+        status = status,
+        summary = summary
+    )
+
+    companion object {
+        fun fromDomain(log: CapturedNotificationLog): NotificationLogEntity = NotificationLogEntity(
+            id = log.id,
+            packageName = log.packageName.take(128),
+            appLabel = log.appLabel.take(64),
+            title = log.title.take(120),
+            content = log.content.take(360),
+            capturedAtMillis = log.capturedAtMillis,
+            status = log.status.take(48),
+            summary = log.summary.take(180)
+        )
+    }
+}
+
 @Dao
 interface LedgerDao {
     @Query("SELECT * FROM transactions ORDER BY occurredAtMillis DESC")
@@ -427,6 +503,51 @@ interface LedgerDao {
 
     @Query("DELETE FROM transaction_book_cross_ref WHERE bookId = :bookId AND transactionId IN (:txIds)")
     suspend fun deleteRefsByBookAndTransactionIds(bookId: String, txIds: List<String>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertNotificationLog(entity: NotificationLogEntity)
+
+    @Query("SELECT * FROM notification_logs ORDER BY capturedAtMillis DESC, id DESC LIMIT :limit OFFSET :offset")
+    suspend fun getNotificationLogsPage(limit: Int, offset: Int): List<NotificationLogEntity>
+
+    @Query(
+        """
+        SELECT * FROM notification_logs
+        WHERE appLabel LIKE :pattern ESCAPE '\'
+           OR packageName LIKE :pattern ESCAPE '\'
+           OR title LIKE :pattern ESCAPE '\'
+           OR content LIKE :pattern ESCAPE '\'
+           OR status LIKE :pattern ESCAPE '\'
+           OR summary LIKE :pattern ESCAPE '\'
+        ORDER BY capturedAtMillis DESC, id DESC
+        LIMIT :limit OFFSET :offset
+        """
+    )
+    suspend fun searchNotificationLogsPage(pattern: String, limit: Int, offset: Int): List<NotificationLogEntity>
+
+    @Query("SELECT COUNT(*) FROM notification_logs")
+    suspend fun countNotificationLogs(): Int
+
+    @Query("SELECT COUNT(*) FROM notification_logs")
+    fun observeNotificationLogsCount(): Flow<Int>
+
+    @Query("DELETE FROM notification_logs WHERE capturedAtMillis < :cutoffMillis")
+    suspend fun deleteNotificationLogsOlderThan(cutoffMillis: Long): Int
+
+    @Query(
+        """
+        DELETE FROM notification_logs
+        WHERE id NOT IN (
+            SELECT id FROM notification_logs
+            ORDER BY capturedAtMillis DESC, id DESC
+            LIMIT :keepCount
+        )
+        """
+    )
+    suspend fun deleteNotificationLogsExcess(keepCount: Int): Int
+
+    @Query("DELETE FROM notification_logs")
+    suspend fun clearAllNotificationLogs()
 }
 
 @Database(
@@ -435,9 +556,10 @@ interface LedgerDao {
         ParsingRuleEntity::class,
         NotificationInquiryEntity::class,
         LedgerBookEntity::class,
-        TransactionBookCrossRefEntity::class
+        TransactionBookCrossRefEntity::class,
+        NotificationLogEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -550,6 +672,28 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN customFieldsJson TEXT")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `notification_logs` (
+                        `id` TEXT NOT NULL,
+                        `packageName` TEXT NOT NULL,
+                        `appLabel` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `content` TEXT NOT NULL,
+                        `capturedAtMillis` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `summary` TEXT NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_notification_logs_capturedAtMillis` ON `notification_logs` (`capturedAtMillis`)")
+            }
+        }
+
         /**
          * Safely releases idle SQLite page memory in background without closing DB
          * or interrupting active NotificationListener / Accessibility background writes.
@@ -579,7 +723,8 @@ abstract class LedgerDatabase : RoomDatabase() {
                         MIGRATION_4_5,
                         MIGRATION_5_6,
                         MIGRATION_6_7,
-                        MIGRATION_7_8
+                        MIGRATION_7_8,
+                        MIGRATION_8_9
                     )
                     .addCallback(object : Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {

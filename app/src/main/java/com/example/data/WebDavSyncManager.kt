@@ -1,8 +1,5 @@
 package com.example.data
 
-import com.example.model.BudgetSettings
-import com.example.model.CustomParsingRule
-import com.example.model.LedgerTransaction
 import com.example.model.WebDavConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -52,7 +49,8 @@ class WebDavSyncManager {
 
     suspend fun backupToWebDav(
         config: WebDavConfig,
-        repository: LedgerRepository
+        repository: LedgerRepository,
+        encryptionPassword: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = normalizeBaseUrl(config.serverUrl)
@@ -79,15 +77,16 @@ class WebDavSyncManager {
             val books = repository.getAllBooksOnce()
             val bookLinks = repository.getAllBookLinksOnce()
             val backupJson = LedgerBackupCodec.encodeBackupJson(transactions, rules, settings, books, bookLinks)
+            val encryptedZipBytes = BackupCryptoCodec.encodeEncryptedZip(backupJson, encryptionPassword)
 
             val putBuilder = Request.Builder()
                 .url(fileUrl)
-                .put(backupJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .put(encryptedZipBytes.toRequestBody("application/zip".toMediaType()))
             if (authHeader != null) putBuilder.header("Authorization", authHeader)
 
             client.newCall(putBuilder.build()).execute().use { resp ->
                 if (resp.isSuccessful || resp.code == 201 || resp.code == 204) {
-                    val msg = "备份成功：${transactions.size} 笔账单，${rules.size} 条规则"
+                    val msg = "加密备份成功：${transactions.size} 笔账单，${rules.size} 条规则（ZIP 加密包）"
                     repository.updateWebDavSyncStatus(System.currentTimeMillis(), msg)
                     Result.success(msg)
                 } else {
@@ -107,7 +106,8 @@ class WebDavSyncManager {
 
     suspend fun restoreFromWebDav(
         config: WebDavConfig,
-        repository: LedgerRepository
+        repository: LedgerRepository,
+        decryptionPassword: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = normalizeBaseUrl(config.serverUrl)
@@ -118,29 +118,31 @@ class WebDavSyncManager {
 
             val candidates = listOf(
                 "$baseUrl$folder/$BACKUP_FILENAME",
+                "$baseUrl$folder/$LEGACY_JSON_BACKUP_FILENAME",
                 "$baseUrl$folder/$LEGACY_BACKUP_FILENAME"
             )
-            var jsonBody: String? = null
+            var rawBytes: ByteArray? = null
             for (fileUrl in candidates) {
                 val getBuilder = Request.Builder().url(fileUrl).get()
                 if (authHeader != null) getBuilder.header("Authorization", authHeader)
                 client.newCall(getBuilder.build()).execute().use { resp ->
                     if (resp.isSuccessful) {
-                        jsonBody = resp.body?.string()
+                        rawBytes = resp.body?.bytes()
                     } else if (resp.code != 404) {
                         return@withContext Result.failure(
                             IllegalStateException("下载备份失败：HTTP ${resp.code} ${resp.message}")
                         )
                     }
                 }
-                if (jsonBody != null) break
+                if (rawBytes != null && rawBytes!!.isNotEmpty()) break
             }
 
-            val body = jsonBody
+            val bytes = rawBytes?.takeIf { it.isNotEmpty() }
                 ?: return@withContext Result.failure(IllegalStateException("远程目录 $folder 下尚未找到备份文件"))
 
+            val decoded = BackupCryptoCodec.decodeBackupBytes(bytes, decryptionPassword)
             val currentSettings = repository.getSettingsOnce()
-            val payload = LedgerBackupCodec.decodeBackupJson(body, currentSettings)
+            val payload = LedgerBackupCodec.decodeBackupJson(decoded.jsonText, currentSettings)
 
             repository.mergeTransactionsFromBackup(payload.transactions)
             repository.mergeRulesFromBackup(payload.parsingRules)
@@ -154,7 +156,8 @@ class WebDavSyncManager {
                 )
             }
 
-            val msg = "同步恢复成功：合并 ${payload.transactions.size} 笔账单，${payload.parsingRules.size} 条规则"
+            val formatTag = if (decoded.wasEncryptedZip) "加密包" else "旧版明文"
+            val msg = "同步恢复成功（$formatTag）：合并 ${payload.transactions.size} 笔账单，${payload.parsingRules.size} 条规则"
             repository.updateWebDavSyncStatus(System.currentTimeMillis(), msg)
             Result.success(msg)
         } catch (e: CancellationException) {
@@ -178,7 +181,8 @@ class WebDavSyncManager {
     }
 
     companion object {
-        const val BACKUP_FILENAME = "xiaobenben_backup.json"
+        const val BACKUP_FILENAME = "xiaobenben_backup.zip"
+        const val LEGACY_JSON_BACKUP_FILENAME = "xiaobenben_backup.json"
         const val LEGACY_BACKUP_FILENAME = "zhijizhang_backup.json"
     }
 }

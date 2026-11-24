@@ -112,7 +112,7 @@ fun SettingsScreen(
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("搜索设置项（如：渠道、去重、DPI、OLED、趋势、导出）") },
+                    placeholder = { Text("搜索设置项") },
                     leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                     trailingIcon = {
                         if (searchQuery.isNotEmpty()) {
@@ -148,7 +148,7 @@ fun SettingsScreen(
                             ) {
                                 Text("未找到匹配的设置项", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    text = "可尝试搜索：预算、分类、渠道、去重、汇率、AI、提示词、备份、导出、主题、OLED、DPI、底栏、图标、权限",
+                                    text = "可尝试搜索：预算、分类、渠道、账单字段、通知日志、去重、汇率、AI、备份、导出、个性化、触感、DPI、图标、权限",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -238,7 +238,7 @@ fun SettingsScreen(
                             SettingsNavRow(
                                 icon = AppIcons.AccountBalanceWallet,
                                 title = "账单工具",
-                                subtitle = "账本 · 分类与渠道 · 文档/文本导入 · 预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 去重 · 存储",
+                                subtitle = "账本 · 分类与渠道归属 · 账单字段排序 · 导入 · 预算 · 币种 ${baseCurrencyInfo.code}(${rateFreq.label}) · 去重 · 存储",
                                 testTag = "menu_ledger_management",
                                 onClick = onOpenLedgerManagement
                             )
@@ -246,7 +246,7 @@ fun SettingsScreen(
                             SettingsNavRow(
                                 icon = AppIcons.Rule,
                                 title = "通知识别与规则",
-                                subtitle = "通知解析测试、自定义关键词与银行规则",
+                                subtitle = "通知读取日志、监听应用、解析测试、自定义关键词与银行规则",
                                 testTag = "menu_parser_rules",
                                 onClick = onOpenParser
                             )
@@ -272,15 +272,15 @@ fun SettingsScreen(
                             SettingsNavRow(
                                 icon = AppIcons.FolderCopy,
                                 title = "备份与恢复",
-                                subtitle = "本地备份与 CSV/XLSX/JSON 导出 · 定时备份提醒 · WebDAV 云同步",
+                                subtitle = "加密 ZIP 备份恢复 · CSV/XLSX/JSON 导出 · 定时提醒 · WebDAV 云同步",
                                 testTag = "menu_data_hub",
                                 onClick = onOpenDataHub
                             )
                             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                             SettingsNavRow(
                                 icon = AppIcons.Palette,
-                                title = "外观与布局",
-                                subtitle = "主题配色、DPI 密度、主页与导航、提示横栏时长、图标与快捷方式",
+                                title = "个性化设置",
+                                subtitle = "主题配色、DPI 密度、主页与导航、触感反馈、提示横栏、图标与快捷方式",
                                 testTag = "menu_appearance",
                                 onClick = onOpenAppearance
                             )

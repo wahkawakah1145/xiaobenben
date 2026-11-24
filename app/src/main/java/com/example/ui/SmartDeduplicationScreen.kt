@@ -151,7 +151,13 @@ fun SmartDeduplicationScreen(
             } else {
                 candidateGroups.filter { group ->
                     group.representativeMerchant.contains(q, ignoreCase = true) ||
-                        group.items.any { tx -> tx.matchesSearchQuery(q) }
+                        group.items.any { tx ->
+                            tx.matchesSearchQuery(
+                                rawQuery = q,
+                                categoryParentMap = effectiveSettings.categoryParentMap,
+                                channelParentMap = effectiveSettings.channelParentMap
+                            )
+                        }
                 }
             }
         }
@@ -802,6 +808,12 @@ fun SmartDeduplicationScreen(
     }
 
     editingTransaction?.let { tx ->
+        var extTradeType: String? = tx.tradeType
+        var extProductName: String? = tx.productName
+        var extTradeStatus: String? = tx.tradeStatus
+        var extTxNo: String? = tx.transactionNo
+        var extMerchantOrderNo: String? = tx.merchantOrderNo
+        var extCustomFields: Map<String, String> = tx.customFields
         TransactionEditorDialog(
             initialTransaction = tx,
             defaultCurrencyCode = effectiveSettings.baseCurrencyCode,
@@ -809,8 +821,17 @@ fun SmartDeduplicationScreen(
             expenseCategories = CategoryCatalog.activeExpenseCategories(effectiveSettings),
             incomeCategories = CategoryCatalog.activeIncomeCategories(effectiveSettings),
             transferCategories = CategoryCatalog.activeTransferCategories(effectiveSettings),
+            channelOptions = com.example.model.ChannelCatalog.activeChannels(effectiveSettings),
             allTransactions = allTransactions,
             onDismiss = { editingTransaction = null },
+            onSaveExtended = { tt, pn, ts, tno, mno ->
+                extTradeType = tt
+                extProductName = pn
+                extTradeStatus = ts
+                extTxNo = tno
+                extMerchantOrderNo = mno
+            },
+            onSaveCustomFields = { extCustomFields = it },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
                     txId = tx.id,
@@ -823,7 +844,14 @@ fun SmartDeduplicationScreen(
                     cardLastFour = tail,
                     note = note,
                     occurredAtMillis = occurredAtMillis,
-                    confirmed = true
+                    confirmed = true,
+                    tradeType = extTradeType,
+                    productName = extProductName,
+                    tradeStatus = extTradeStatus,
+                    transactionNo = extTxNo,
+                    merchantOrderNo = extMerchantOrderNo,
+                    updateExtendedFields = true,
+                    customFields = extCustomFields
                 )
                 editingTransaction = null
             },

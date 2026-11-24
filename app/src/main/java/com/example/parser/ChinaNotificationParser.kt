@@ -405,7 +405,9 @@ object ChinaNotificationParser {
         customRules: List<CustomParsingRule> = emptyList(),
         enableLocalSemanticPass: Boolean = false,
         referenceTimeMillis: Long = System.currentTimeMillis(),
-        customChannels: List<String> = emptyList()
+        customChannels: List<String> = emptyList(),
+        channelParentMap: Map<String, String> = ChannelCatalog.defaultChannelParentMap,
+        collapseChannelToParent: Boolean = true
     ): ParsedNotificationResult? {
         val combined = "$title\n$content".trim()
         if (combined.isBlank()) return null
@@ -456,7 +458,11 @@ object ChinaNotificationParser {
         val rawChannel = matchedCustomRule?.channelName?.trim()?.takeIf { isConcreteChannelName(it) }
             ?: resolveChannelFromRules(packageName, combined, customRules, content.trim())
             ?: detectChannel(packageName, combined, customChannels)
-        val channel = ChannelCatalog.normalizeRecognizedChannel(rawChannel)
+        val channel = ChannelCatalog.normalizeRecognizedChannel(
+            rawChannel = rawChannel,
+            parentMap = channelParentMap,
+            collapseToParent = collapseChannelToParent
+        )
         val type = if (matchedCustomRule != null &&
             !matchedCustomRule.defaultType.equals("AUTO", ignoreCase = true) &&
             !matchedCustomRule.isIgnoreRule

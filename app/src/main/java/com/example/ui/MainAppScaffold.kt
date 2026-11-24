@@ -272,8 +272,26 @@ fun AppNavigation(
             val deleteUndoBanner by viewModel.deleteUndoBanner.collectAsStateWithLifecycle()
             val settingsHighlight by viewModel.settingsHighlightTarget.collectAsStateWithLifecycle()
 
+            val appHaptics = com.example.ui.theme.rememberAppHaptics(appearance)
+            val hierarchyDisplay = remember(
+                settings.categoryParentMap,
+                settings.categoryShowChildren,
+                settings.channelParentMap,
+                settings.channelShowChildren
+            ) {
+                com.example.ui.components.HierarchyDisplayConfig(
+                    categoryParentMap = settings.categoryParentMap,
+                    categoryShowChildren = settings.categoryShowChildren,
+                    channelParentMap = settings.channelParentMap,
+                    channelShowChildren = settings.channelShowChildren
+                )
+            }
+
             CompositionLocalProvider(
                 com.example.ui.components.LocalCategoryIcons provides settings.categoryIcons,
+                com.example.ui.components.LocalBillFieldsConfig provides settings.billFieldsConfig,
+                com.example.ui.components.LocalHierarchyDisplay provides hierarchyDisplay,
+                com.example.ui.theme.LocalAppHaptics provides appHaptics,
                 LocalSettingsHighlight provides settingsHighlight
             ) {
 
@@ -395,6 +413,7 @@ fun AppNavigation(
                     isAnalyticsCalendarOpen = false
                 }
                 if (pagerState.currentPage != safePage) {
+                    appHaptics.perform(com.example.ui.theme.AppHapticAction.CLICK)
                     lastTabTapPage = safePage
                     lastTabTapMillis = now
                     scope.launch {
@@ -488,18 +507,20 @@ fun AppNavigation(
                 ROUTE_SETTINGS_MANUAL_IMPORT -> "从文档或文本导入"
                 ROUTE_SETTINGS_CATEGORIES -> "分类管理"
                 ROUTE_SETTINGS_CHANNELS -> "渠道管理"
+                ROUTE_SETTINGS_BILL_FIELDS -> "账单信息与可选字段"
                 ROUTE_SETTINGS_BILL_BEHAVIOR -> "记账与预算"
                 ROUTE_SETTINGS_CURRENCY -> "币种与汇率"
                 ROUTE_SETTINGS_DEDUP -> "智能去重"
                 ROUTE_SETTINGS_STORAGE_OPT -> "数据空间与存储优化"
                 ROUTE_SETTINGS_PARSER -> "通知识别与规则"
+                ROUTE_SETTINGS_NOTIFICATION_LOGS -> "通知读取日志"
                 ROUTE_SETTINGS_AI -> "AI理解"
                 ROUTE_SETTINGS_DATA_HUB, ROUTE_SETTINGS_LOCAL_BACKUP -> "备份与恢复"
-                ROUTE_SETTINGS_APPEARANCE -> "外观与布局"
+                ROUTE_SETTINGS_APPEARANCE -> "个性化设置"
                 ROUTE_SETTINGS_APPEARANCE_THEME -> "主题与配色"
                 ROUTE_SETTINGS_APPEARANCE_DISPLAY -> "字体、DPI 与列表样式"
                 ROUTE_SETTINGS_APPEARANCE_HOME_NAV -> "主页、顶栏与导航"
-                ROUTE_SETTINGS_APPEARANCE_INTERACTION -> "动画、手势与提示横栏"
+                ROUTE_SETTINGS_APPEARANCE_INTERACTION -> "触感反馈、动画与手势"
                 ROUTE_SETTINGS_APPEARANCE_ICON -> "图标风格与桌面快捷方式"
                 ROUTE_SETTINGS_PERMISSIONS -> "权限管理"
                 ROUTE_SETTINGS_MONITORED_APPS -> "自定义监听应用"
@@ -620,6 +641,7 @@ fun AppNavigation(
                         onOpenBooks = { navController.navigate(ROUTE_SETTINGS_BOOKS) },
                         onOpenCategories = { navController.navigate(ROUTE_SETTINGS_CATEGORIES) },
                         onOpenChannels = { navController.navigate(ROUTE_SETTINGS_CHANNELS) },
+                        onOpenBillFields = { navController.navigate(ROUTE_SETTINGS_BILL_FIELDS) },
                         onOpenManualImport = { navController.navigate(ROUTE_SETTINGS_MANUAL_IMPORT) },
                         onOpenBehaviorBudget = { navController.navigate(ROUTE_SETTINGS_BILL_BEHAVIOR) },
                         onOpenCurrencyRates = { navController.navigate(ROUTE_SETTINGS_CURRENCY) },
@@ -672,6 +694,10 @@ fun AppNavigation(
                     ROUTE_SETTINGS_CHANNELS -> ChannelManagementScreen(
                         viewModel = viewModel
                     )
+                    ROUTE_SETTINGS_BILL_FIELDS -> BillFieldsSettingsScreen(
+                        settings = settings,
+                        viewModel = viewModel
+                    )
                     ROUTE_SETTINGS_BILL_BEHAVIOR -> BookkeepingBehaviorScreen(
                         settings = settings,
                         viewModel = viewModel,
@@ -694,6 +720,12 @@ fun AppNavigation(
                         viewModel = viewModel,
                         isListenerEnabled = isListenerEnabled,
                         onOpenMonitoredApps = { navController.navigate(ROUTE_SETTINGS_MONITORED_APPS) },
+                        onOpenNotificationLogs = { navController.navigate(ROUTE_SETTINGS_NOTIFICATION_LOGS) },
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) }
+                    )
+                    ROUTE_SETTINGS_NOTIFICATION_LOGS -> NotificationLogScreen(
+                        settings = settings,
+                        viewModel = viewModel,
                         onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_AI -> AiSettingsScreen(
@@ -1109,6 +1141,7 @@ fun AppNavigation(
                                 ROUTE_SETTINGS_BOOKS,
                                 ROUTE_SETTINGS_CATEGORIES,
                                 ROUTE_SETTINGS_CHANNELS,
+                                ROUTE_SETTINGS_BILL_FIELDS,
                                 ROUTE_SETTINGS_MANUAL_IMPORT,
                                 ROUTE_BOOK_ANALYTICS,
                                 ROUTE_SETTINGS_BILL_BEHAVIOR,
@@ -1116,6 +1149,7 @@ fun AppNavigation(
                                 ROUTE_SETTINGS_DEDUP,
                                 ROUTE_SETTINGS_STORAGE_OPT,
                                 ROUTE_SETTINGS_PARSER,
+                                ROUTE_SETTINGS_NOTIFICATION_LOGS,
                                 ROUTE_SETTINGS_AI,
                                 ROUTE_SETTINGS_DATA_HUB,
                                 ROUTE_SETTINGS_LOCAL_BACKUP,

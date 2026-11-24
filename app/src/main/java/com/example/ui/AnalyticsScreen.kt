@@ -242,9 +242,21 @@ fun AnalyticsScreen(
         periodTransactions.filter { it.txType == TransactionType.INCOME }.sumOf { toBase(it) }
     }
 
-    val categoryData = remember(periodExpenseTxs, exchangeRates.ratesToCny, baseCurrency) {
+    val categoryData = remember(
+        periodExpenseTxs,
+        exchangeRates.ratesToCny,
+        baseCurrency,
+        settings.categoryParentMap,
+        settings.categoryShowChildren
+    ) {
         periodExpenseTxs
-            .groupBy { it.category }
+            .groupBy {
+                com.example.model.CategoryCatalog.resolveDisplayCategory(
+                    it.category,
+                    settings.categoryParentMap,
+                    settings.categoryShowChildren
+                )
+            }
             .mapValues { (_, list) -> list.sumOf { toBase(it) } }
             .entries
             .sortedByDescending { it.value }
@@ -253,13 +265,28 @@ fun AnalyticsScreen(
             }
     }
 
-    val channelData = remember(periodExpenseTxs, exchangeRates.ratesToCny, baseCurrency) {
+    val channelData = remember(
+        periodExpenseTxs,
+        exchangeRates.ratesToCny,
+        baseCurrency,
+        settings.channelParentMap,
+        settings.channelShowChildren
+    ) {
         val sums = LinkedHashMap<String, Long>()
         periodExpenseTxs.forEach { tx ->
             val cents = toBase(tx)
-            com.example.model.ChannelSplitter.splitChannels(tx.channel).forEach { subChannel ->
-                sums[subChannel] = (sums[subChannel] ?: 0L) + cents
-            }
+            com.example.model.ChannelSplitter.splitChannels(tx.channel)
+                .map { sub ->
+                    com.example.model.ChannelCatalog.resolveDisplayChannel(
+                        sub,
+                        settings.channelParentMap,
+                        settings.channelShowChildren
+                    )
+                }
+                .distinct()
+                .forEach { resolved ->
+                    sums[resolved] = (sums[resolved] ?: 0L) + cents
+                }
         }
         sums.entries
             .sortedByDescending { it.value }
@@ -274,16 +301,40 @@ fun AnalyticsScreen(
         periodExpenseTxs.any { it.splitChannels.size > 1 }
     }
 
-    val filteredCategoryTxs = remember(periodExpenseTxs, selectedCategoryFilter) {
+    val filteredCategoryTxs = remember(
+        periodExpenseTxs,
+        selectedCategoryFilter,
+        settings.categoryParentMap,
+        settings.categoryShowChildren
+    ) {
         selectedCategoryFilter?.let { target ->
-            periodExpenseTxs.filter { it.category == target }.sortedByDescending { it.occurredAtMillis }
+            periodExpenseTxs.filter {
+                com.example.model.CategoryCatalog.resolveDisplayCategory(
+                    it.category,
+                    settings.categoryParentMap,
+                    settings.categoryShowChildren
+                ) == target
+            }.sortedByDescending { it.occurredAtMillis }
         } ?: emptyList()
     }
 
-    val filteredChannelTxs = remember(periodExpenseTxs, selectedChannelFilter) {
+    val filteredChannelTxs = remember(
+        periodExpenseTxs,
+        selectedChannelFilter,
+        settings.channelParentMap,
+        settings.channelShowChildren
+    ) {
         selectedChannelFilter?.let { target ->
             periodExpenseTxs
-                .filter { com.example.model.ChannelSplitter.matchesChannel(it.channel, target) }
+                .filter { tx ->
+                    com.example.model.ChannelSplitter.splitChannels(tx.channel).any { sub ->
+                        com.example.model.ChannelCatalog.resolveDisplayChannel(
+                            sub,
+                            settings.channelParentMap,
+                            settings.channelShowChildren
+                        ) == target
+                    } || com.example.model.ChannelSplitter.matchesChannel(tx.channel, target)
+                }
                 .sortedByDescending { it.occurredAtMillis }
         } ?: emptyList()
     }
@@ -1463,6 +1514,7 @@ fun AnalyticsScreen(
         var extTradeStatus: String? = tx.tradeStatus
         var extTxNo: String? = tx.transactionNo
         var extMerchantOrderNo: String? = tx.merchantOrderNo
+        var extCustomFields: Map<String, String> = tx.customFields
         TransactionEditorDialog(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
@@ -1470,6 +1522,7 @@ fun AnalyticsScreen(
             expenseCategories = com.example.model.CategoryCatalog.activeExpenseCategories(settings),
             incomeCategories = com.example.model.CategoryCatalog.activeIncomeCategories(settings),
             transferCategories = com.example.model.CategoryCatalog.activeTransferCategories(settings),
+            channelOptions = com.example.model.ChannelCatalog.activeChannels(settings),
             allTransactions = allTransactions,
             onBatchApplySimilar = { matchedIds, type, category, channel, merchant, currencyCode, note ->
                 viewModel.batchUpdateTransactions(
@@ -1490,6 +1543,7 @@ fun AnalyticsScreen(
                 extTxNo = tno
                 extMerchantOrderNo = mno
             },
+            onSaveCustomFields = { extCustomFields = it },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
                     txId = tx.id,
@@ -1508,7 +1562,8 @@ fun AnalyticsScreen(
                     tradeStatus = extTradeStatus,
                     transactionNo = extTxNo,
                     merchantOrderNo = extMerchantOrderNo,
-                    updateExtendedFields = true
+                    updateExtendedFields = true,
+                    customFields = extCustomFields
                 )
                 editingTransaction = null
             }

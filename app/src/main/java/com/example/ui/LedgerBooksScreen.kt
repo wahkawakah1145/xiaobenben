@@ -368,18 +368,27 @@ fun LedgerBooksScreen(
                         derivedStateOf {
                             val timeScoped = LedgerViewModel.filterByHomeDimension(bookTxList, detailTimeDimension)
                             timeScoped.filter { tx ->
+                                val resolvedParentChannel = ChannelCatalog.resolveDisplayChannel(
+                                    tx.channel,
+                                    settings.channelParentMap,
+                                    showChildren = false
+                                )
                                 val matchesFilter = when (detailSelectedFilter) {
                                     "全部" -> true
                                     "支出" -> tx.txType == TransactionType.EXPENSE
                                     "收入" -> tx.txType == TransactionType.INCOME
                                     "外币" -> !tx.currencyCode.equals(baseCurrency, ignoreCase = true)
-                                    "支付宝" -> tx.channel.contains("支付宝")
-                                    "微信支付" -> tx.channel.contains("微信")
-                                    "云闪付" -> tx.channel.contains("云闪付") || tx.channel.contains("银联")
-                                    "银行卡" -> tx.channel.contains("银行")
+                                    "支付宝" -> tx.channel.contains("支付宝") || resolvedParentChannel.contains("支付宝")
+                                    "微信支付" -> tx.channel.contains("微信") || resolvedParentChannel.contains("微信")
+                                    "云闪付" -> tx.channel.contains("云闪付") || tx.channel.contains("银联") || resolvedParentChannel.contains("云闪付")
+                                    "银行卡" -> tx.channel.contains("银行") || resolvedParentChannel.contains("银行")
                                     else -> true
                                 }
-                                val matchesSearch = tx.matchesSearchQuery(detailSearchQuery.trim())
+                                val matchesSearch = tx.matchesSearchQuery(
+                                    rawQuery = detailSearchQuery.trim(),
+                                    categoryParentMap = settings.categoryParentMap,
+                                    channelParentMap = settings.channelParentMap
+                                )
                                 val matchesStart = detailStartMillis == null || tx.occurredAtMillis >= detailStartMillis
                                 val matchesEnd = detailEndMillis == null || tx.occurredAtMillis <= detailEndMillis
                                 val matchesTimeSlot = matchesTimeOfDayRange(
@@ -1043,8 +1052,13 @@ fun LedgerBooksScreen(
                                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
                                                     ChannelBadge(channel = tx.channel)
+                                                    val bookTxDisplayCategory = CategoryCatalog.resolveDisplayCategory(
+                                                        tx.category,
+                                                        settings.categoryParentMap,
+                                                        settings.categoryShowChildren
+                                                    )
                                                     Text(
-                                                        text = "${tx.category} · ${formatDateHeader(tx.occurredAtMillis)} ${formatItemTimeCompact(tx.occurredAtMillis)}",
+                                                        text = "$bookTxDisplayCategory · ${formatDateHeader(tx.occurredAtMillis)} ${formatItemTimeCompact(tx.occurredAtMillis)}",
                                                         style = MaterialTheme.typography.labelSmall,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                         maxLines = 1,
@@ -1684,6 +1698,12 @@ fun LedgerBooksScreen(
     }
 
     editingTx?.let { tx ->
+        var extTradeType: String? = tx.tradeType
+        var extProductName: String? = tx.productName
+        var extTradeStatus: String? = tx.tradeStatus
+        var extTxNo: String? = tx.transactionNo
+        var extMerchantOrderNo: String? = tx.merchantOrderNo
+        var extCustomFields: Map<String, String> = tx.customFields
         TransactionEditorDialog(
             initialTransaction = tx,
             defaultCurrencyCode = baseCurrency,
@@ -1694,6 +1714,14 @@ fun LedgerBooksScreen(
             channelOptions = ChannelCatalog.activeChannels(settings),
             allTransactions = allTransactions,
             onDismiss = { editingTx = null },
+            onSaveExtended = { tt, pn, ts, tno, mno ->
+                extTradeType = tt
+                extProductName = pn
+                extTradeStatus = ts
+                extTxNo = tno
+                extMerchantOrderNo = mno
+            },
+            onSaveCustomFields = { extCustomFields = it },
             onSave = { amountCents, currencyCode, type, category, merchant, channel, tail, note, occurredAtMillis ->
                 viewModel.updateTransaction(
                     txId = tx.id,
@@ -1706,7 +1734,14 @@ fun LedgerBooksScreen(
                     cardLastFour = tail,
                     note = note,
                     occurredAtMillis = occurredAtMillis,
-                    confirmed = true
+                    confirmed = true,
+                    tradeType = extTradeType,
+                    productName = extProductName,
+                    tradeStatus = extTradeStatus,
+                    transactionNo = extTxNo,
+                    merchantOrderNo = extMerchantOrderNo,
+                    updateExtendedFields = true,
+                    customFields = extCustomFields
                 )
                 editingTx = null
             },

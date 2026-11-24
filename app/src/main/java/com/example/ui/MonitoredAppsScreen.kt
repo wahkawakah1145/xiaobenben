@@ -1,10 +1,6 @@
 package com.example.ui
 
-import android.Manifest
-import android.os.Build
 import android.util.LruCache
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,9 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -72,13 +66,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.BudgetSettings
+import com.example.model.FeatureTipsCatalog
 import com.example.service.InstalledAppEntry
 import com.example.service.InstalledAppsCatalog
 import com.example.service.NotificationBridge
-import com.example.ui.theme.AppIcons
-import com.example.ui.theme.ExpenseCoral
-import com.example.ui.theme.IncomeJade
+import com.example.ui.components.FeatureTipBanner
 import com.example.viewmodel.LedgerViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -104,6 +98,7 @@ fun MonitoredAppsScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val density = LocalDensity.current
     val iconPx = remember(density) { with(density) { 40.dp.roundToPx().coerceIn(48, 128) } }
+    val appearance by viewModel.appearanceState.collectAsStateWithLifecycle()
 
     // Bounded small icon cache strictly scoped to this screen; evicted immediately on exit -> 0 KB background RAM.
     val iconCache = remember { LruCache<String, ImageBitmap>(48) }
@@ -111,9 +106,6 @@ fun MonitoredAppsScreen(
         onDispose { iconCache.evictAll() }
     }
 
-    var hasPostNotifPermission by remember {
-        mutableStateOf(NotificationBridge.hasPostNotificationPermission(context))
-    }
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf(MonitoredAppFilter.ALL) }
@@ -121,20 +113,11 @@ fun MonitoredAppsScreen(
     var installedApps by remember { mutableStateOf<List<InstalledAppEntry>>(emptyList()) }
     var showAddPackageDialog by remember { mutableStateOf(false) }
     var manualPackageInput by remember { mutableStateOf("") }
-    var showEnableListenerPrompt by remember { mutableStateOf(false) }
 
-    val postNotifLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasPostNotifPermission = granted
-        onShowMessage(if (granted) "已授予通知发送权限" else "未授予通知发送权限")
-    }
-
-    // Reload permissions and installed app list whenever user returns from system settings
+    // Reload installed app list whenever user returns from system settings
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                hasPostNotifPermission = NotificationBridge.hasPostNotificationPermission(context)
                 refreshTrigger += 1
             }
         }
@@ -162,7 +145,7 @@ fun MonitoredAppsScreen(
         }
     }
 
-    fun updateCustomMonitoredPackages(nextPackages: Set<String>, promptIfPermissionMissing: Boolean) {
+    fun updateCustomMonitoredPackages(nextPackages: Set<String>) {
         val sortedList = nextPackages.map { it.trim() }.filter { it.isNotEmpty() }.distinct().sorted()
         viewModel.saveSettings(
             settings.copy(
@@ -170,9 +153,6 @@ fun MonitoredAppsScreen(
                 monitoredAppPackages = sortedList
             )
         )
-        if (promptIfPermissionMissing && !isListenerEnabled) {
-            showEnableListenerPrompt = true
-        }
     }
 
     val filteredApps = remember(installedApps, searchQuery, selectedFilter, effectiveSelectedSet) {
@@ -197,36 +177,6 @@ fun MonitoredAppsScreen(
                     .thenByDescending { it.isSmsApp }
                     .thenBy { it.label.lowercase() }
             )
-    }
-
-    val installedCount = remember(installedApps) { installedApps.count { it.isInstalled } }
-    val mayBeRestrictedByOem = !appsLoading && installedCount <= 2
-
-    if (showEnableListenerPrompt) {
-        AlertDialog(
-            onDismissRequest = { showEnableListenerPrompt = false },
-            icon = { Icon(AppIcons.NotificationsActive, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-            title = { Text("需要开启通知读取权限") },
-            text = {
-                Text("已保存你勾选的监听应用，但系统“通知使用权”尚未开启。前往系统设置授予权限后，小本本才能实时读取这些应用的消费与动账通知。")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showEnableListenerPrompt = false
-                        NotificationBridge.openNotificationListenerSettings(context)
-                    },
-                    modifier = Modifier.testTag("monitored_apps_dialog_open_listener")
-                ) {
-                    Text("立即去开启")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showEnableListenerPrompt = false }) {
-                    Text("稍后再说")
-                }
-            }
-        )
     }
 
     if (showAddPackageDialog) {
@@ -260,7 +210,7 @@ fun MonitoredAppsScreen(
                             onShowMessage("请输入合法的应用包名（包含点号，如 com.example.app）")
                         } else {
                             val next = effectiveSelectedSet + pkg
-                            updateCustomMonitoredPackages(next, promptIfPermissionMissing = true)
+                            updateCustomMonitoredPackages(next)
                             manualPackageInput = ""
                             showAddPackageDialog = false
                             onShowMessage("已添加监听包名：$pkg")
@@ -294,166 +244,31 @@ fun MonitoredAppsScreen(
                 )
             }
 
-            // 1. Permission readiness card (proactive guidance & one-tap grant)
-            item(key = "permission_status_card") {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isListenerEnabled) {
-                            MaterialTheme.colorScheme.surfaceContainerLow
-                        } else {
-                            ExpenseCoral.copy(alpha = 0.10f)
-                        }
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .settingsHighlightSection(ROUTE_SETTINGS_MONITORED_APPS, "monitored_apps_card")
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = if (isListenerEnabled) Icons.Rounded.CheckCircle else AppIcons.WarningAmber,
-                                    contentDescription = null,
-                                    tint = if (isListenerEnabled) IncomeJade else ExpenseCoral
-                                )
-                                Column {
-                                    Text(
-                                        text = settingsHighlightedText(
-                                            if (isListenerEnabled) "通知读取权限已开启" else "尚未开启通知读取权限",
-                                            ROUTE_SETTINGS_MONITORED_APPS
-                                        ),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = if (settings.monitoredAppsCustomized) {
-                                            "自定义监听模式 · 已选 ${settings.monitoredAppPackages.size} 款应用"
-                                        } else {
-                                            "默认智能监听 · 自动监听常见支付、银行与短信应用"
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            if (!isListenerEnabled) {
-                                Button(
-                                    onClick = { NotificationBridge.openNotificationListenerSettings(context) },
-                                    modifier = Modifier
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("monitored_apps_open_listener_button")
-                                ) {
-                                    Text("去开启")
-                                }
-                            }
-                        }
-
-                        val needPostNotif = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPostNotifPermission
-                        if (needPostNotif || !isIgnoringBattery) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                if (needPostNotif) {
-                                    OutlinedButton(
-                                        onClick = { postNotifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .minimumInteractiveComponentSize()
-                                            .testTag("monitored_apps_request_post_notif")
-                                    ) {
-                                        Text("授权记账提醒", maxLines = 1)
-                                    }
-                                }
-                                if (!isIgnoringBattery) {
-                                    OutlinedButton(
-                                        onClick = { NotificationBridge.requestIgnoreBatteryOptimizations(context) },
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .minimumInteractiveComponentSize()
-                                            .testTag("monitored_apps_battery_button")
-                                    ) {
-                                        Text("加入电池白名单", maxLines = 1)
-                                    }
-                                }
-                            }
+            // Dismissible app-list permission tip banner (tap to open system permission management)
+            item(key = "app_list_permission_tip") {
+                FeatureTipBanner(
+                    tipId = FeatureTipsCatalog.APP_LIST_PERMISSION,
+                    text = "若手机应用列表显示不全，点击此处前往系统权限管理页开启「读取应用列表」权限。",
+                    appearance = appearance,
+                    onDismiss = { viewModel.dismissFeatureTip(it) },
+                    actionLabel = "去开启",
+                    onClick = {
+                        val opened = NotificationBridge.openAppSystemPermissionSettings(context)
+                        if (!opened) {
+                            NotificationBridge.openAppDetailsSettings(context)
                         }
                     }
-                }
+                )
             }
 
-            // 2. OEM app-list restriction hint (if device ROM hides launcher apps)
-            if (mayBeRestrictedByOem) {
-                item(key = "oem_restriction_hint") {
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = "当前系统仅返回了 $installedCount 款应用",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "部分手机系统（如 MIUI/HyperOS、OriginOS、ColorOS、HarmonyOS）默认拦截“读取应用列表”权限。请前往系统权限页开启后返回刷新，或手动输入包名添加。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Button(
-                                    onClick = {
-                                        val opened = NotificationBridge.openAppSystemPermissionSettings(context)
-                                        if (!opened) {
-                                            NotificationBridge.openAppDetailsSettings(context)
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("monitored_apps_open_oem_perm_button")
-                                ) {
-                                    Text("开启应用列表权限", maxLines = 1)
-                                }
-                                OutlinedButton(
-                                    onClick = { refreshTrigger += 1 },
-                                    modifier = Modifier.minimumInteractiveComponentSize()
-                                ) {
-                                    Icon(Icons.Rounded.Refresh, contentDescription = "刷新列表", modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 3. Controls & Quick Actions Card
+            // Controls & Quick Actions Card
             item(key = "controls_card") {
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_MONITORED_APPS, "monitored_apps_card")
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -502,7 +317,7 @@ fun MonitoredAppsScreen(
                                     if (recommended.isEmpty()) {
                                         onShowMessage("当前未扫描到可勾选的金融或短信应用，可手动添加包名")
                                     } else {
-                                        updateCustomMonitoredPackages(recommended, promptIfPermissionMissing = true)
+                                        updateCustomMonitoredPackages(recommended)
                                         onShowMessage("已勾选 ${recommended.size} 款金融与短信应用")
                                     }
                                 },
@@ -644,7 +459,7 @@ fun MonitoredAppsScreen(
                             } else {
                                 effectiveSelectedSet - app.packageName
                             }
-                            updateCustomMonitoredPackages(nextSet, promptIfPermissionMissing = nextChecked)
+                            updateCustomMonitoredPackages(nextSet)
                         }
                     )
                 }

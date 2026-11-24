@@ -1587,8 +1587,12 @@ fun AppearanceSettingsScreen(
         append(" · ${appearance.homeHeaderOrder.label} · ${appearance.fabPlacement.label} (+) 按钮")
     }
     val interactionSummary = buildString {
-        append("全局提示：${appearance.globalSnackbarDuration.label}")
-        append(" · 删除提示：${appearance.deleteUndoDuration.label}")
+        append(if (appearance.hapticEnabled) {
+            if (appearance.hapticFollowSystem) "触感：跟随系统" else "触感：自定义 ${(appearance.hapticIntensity * 100).roundToInt()}%"
+        } else {
+            "触感：已关闭"
+        })
+        append(" · 全局提示：${appearance.globalSnackbarDuration.label}")
     }
     val iconSummary = "当前图标：$iconStyleLabel · 支持相册自定义桌面快捷方式"
 
@@ -1643,7 +1647,7 @@ fun AppearanceSettingsScreen(
                     Column(modifier = Modifier.padding(vertical = 6.dp)) {
                         AppearanceMenuRow(
                             icon = AppIcons.TouchApp,
-                            title = "动画、手势与提示横栏",
+                            title = "触感反馈、动画与手势",
                             subtitle = interactionSummary,
                             testTag = "appearance_menu_interaction",
                             onClick = onOpenInteraction
@@ -2942,10 +2946,11 @@ fun AppearanceInteractionSettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val interactionListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val haptics = com.example.ui.theme.LocalAppHaptics.current
     SettingsAutoScrollEffect(
         listState = interactionListState,
         route = ROUTE_SETTINGS_APPEARANCE_INTERACTION,
-        sectionKeysInOrder = listOf("bottom_banner_durations", "navigation_and_gestures")
+        sectionKeysInOrder = listOf("haptic_feedback_card", "bottom_banner_durations", "navigation_and_gestures")
     )
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -2957,6 +2962,181 @@ fun AppearanceInteractionSettingsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            item(key = "haptic_feedback_card") {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .settingsHighlightSection(ROUTE_SETTINGS_APPEARANCE_INTERACTION, "haptic_feedback_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        SettingsSearchArrivalBanner(
+                            route = ROUTE_SETTINGS_APPEARANCE_INTERACTION,
+                            onDismiss = { viewModel.clearSettingsHighlight() }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = settingsHighlightedText("触感反馈", ROUTE_SETTINGS_APPEARANCE_INTERACTION),
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = "为点击、开关、长按、拖动排序与手势提供细腻振动反馈",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = appearance.hapticEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.saveAppearanceSettings(appearance.copy(hapticEnabled = enabled))
+                                    if (enabled) haptics?.perform(com.example.ui.theme.AppHapticAction.TOGGLE, forcePreview = true)
+                                },
+                                modifier = Modifier.testTag("toggle_haptic_enabled")
+                            )
+                        }
+
+                        if (appearance.hapticEnabled) {
+                            HorizontalDivider()
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = settingsHighlightedText("跟随系统触感", ROUTE_SETTINGS_APPEARANCE_INTERACTION),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = "开启时调用系统原生触感波形，关闭后可自定义振动强度",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = appearance.hapticFollowSystem,
+                                    onCheckedChange = { follow ->
+                                        viewModel.saveAppearanceSettings(appearance.copy(hapticFollowSystem = follow))
+                                        haptics?.perform(com.example.ui.theme.AppHapticAction.TOGGLE, forcePreview = true)
+                                    },
+                                    modifier = Modifier.testTag("toggle_haptic_follow_system")
+                                )
+                            }
+
+                            if (!appearance.hapticFollowSystem) {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("自定义振动强度", style = MaterialTheme.typography.labelLarge)
+                                        Text(
+                                            text = "${(appearance.hapticIntensity * 100).roundToInt()}%",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                    Slider(
+                                        value = appearance.hapticIntensity.coerceIn(0.15f, 1.0f),
+                                        onValueChange = { next ->
+                                            viewModel.saveAppearanceSettings(
+                                                appearance.copy(hapticIntensity = next.coerceIn(0.15f, 1.0f))
+                                            )
+                                        },
+                                        onValueChangeFinished = {
+                                            haptics?.perform(com.example.ui.theme.AppHapticAction.CLICK, forcePreview = true)
+                                        },
+                                        valueRange = 0.15f..1.0f,
+                                        modifier = Modifier.testTag("slider_haptic_intensity")
+                                    )
+                                    val presets = listOf(
+                                        0.25f to "轻柔",
+                                        0.55f to "标准",
+                                        0.80f to "清脆",
+                                        1.00f to "强烈"
+                                    )
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        presets.forEach { (level, label) ->
+                                            FilterChip(
+                                                selected = kotlin.math.abs(appearance.hapticIntensity - level) < 0.08f,
+                                                onClick = {
+                                                    viewModel.saveAppearanceSettings(appearance.copy(hapticIntensity = level))
+                                                    haptics?.perform(com.example.ui.theme.AppHapticAction.CLICK, forcePreview = true)
+                                                },
+                                                label = { Text(label) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider()
+                            Text("分场景细粒度控制", style = MaterialTheme.typography.labelLarge)
+                            val sceneItems = listOf(
+                                Triple("点击按钮与芯片", appearance.hapticOnClick, { v: Boolean -> appearance.copy(hapticOnClick = v) }),
+                                Triple("开关与选项切换", appearance.hapticOnToggle, { v: Boolean -> appearance.copy(hapticOnToggle = v) }),
+                                Triple("长按唤起操作", appearance.hapticOnLongPress, { v: Boolean -> appearance.copy(hapticOnLongPress = v) }),
+                                Triple("拖动排序与归属高亮", appearance.hapticOnDragReorder, { v: Boolean -> appearance.copy(hapticOnDragReorder = v) }),
+                                Triple("删除与危险操作", appearance.hapticOnDestructive, { v: Boolean -> appearance.copy(hapticOnDestructive = v) }),
+                                Triple("滑动与缩放手势", appearance.hapticOnGesture, { v: Boolean -> appearance.copy(hapticOnGesture = v) })
+                            )
+                            sceneItems.forEachIndexed { idx, (label, checked, updater) ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                                    Switch(
+                                        checked = checked,
+                                        onCheckedChange = { next ->
+                                            viewModel.saveAppearanceSettings(updater(next))
+                                            if (next) {
+                                                val action = com.example.ui.theme.AppHapticAction.entries.getOrElse(idx) {
+                                                    com.example.ui.theme.AppHapticAction.CLICK
+                                                }
+                                                haptics?.perform(action, forcePreview = true)
+                                            }
+                                        },
+                                        modifier = Modifier.testTag("toggle_haptic_scene_$idx")
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider()
+                            Text("触感实时体验", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                com.example.ui.theme.AppHapticAction.entries.forEach { action ->
+                                    OutlinedButton(
+                                        onClick = { haptics?.perform(action, forcePreview = true) },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        Text(action.label, style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             item(key = "bottom_banner_durations") {
                 Card(
                     shape = RoundedCornerShape(20.dp),

@@ -71,6 +71,7 @@ fun BillToolsMenuScreen(
     onOpenBooks: () -> Unit = {},
     onOpenCategories: () -> Unit = {},
     onOpenChannels: () -> Unit = {},
+    onOpenBillFields: () -> Unit = {},
     onOpenManualImport: () -> Unit = {},
     onOpenBehaviorBudget: () -> Unit,
     onOpenCurrencyRates: () -> Unit,
@@ -188,18 +189,28 @@ fun BillToolsMenuScreen(
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         BillToolMenuRow(
                             icon = AppIcons.ViewQuilt,
-                            title = "分类管理（同步规则与 AI）",
-                            subtitle = "当前共 $totalCategoryCount 个分类 · 支持新增/改名/图标并同步账单、规则与 AI 提示词",
+                            title = "分类管理（排序、归属与 AI）",
+                            subtitle = "当前共 $totalCategoryCount 个分类 · 长按排序/拖放归属，支持仅显示父类与一键整合",
                             testTag = "bill_tool_categories",
                             onClick = onOpenCategories
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         BillToolMenuRow(
                             icon = AppIcons.Payments,
-                            title = "渠道管理（同步规则与 AI）",
-                            subtitle = "当前共 $totalChannelCount 个渠道 · 花呗/余额宝归属支付宝，零钱/零钱通归属微信支付",
+                            title = "渠道管理（排序、归属与 AI）",
+                            subtitle = "当前共 $totalChannelCount 个渠道 · 花呗/余额宝归属支付宝，支持拖放归属与整合",
                             testTag = "bill_tool_channels",
                             onClick = onOpenChannels
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        val customFieldCount = com.example.model.BillFieldCatalog.customFields(settings.billFieldsConfig).size
+                        val foldedFieldCount = com.example.model.BillFieldCatalog.normalizeFields(settings.billFieldsConfig).count { it.enabled && it.foldedInMore }
+                        BillToolMenuRow(
+                            icon = AppIcons.Tune,
+                            title = "账单信息与可选字段",
+                            subtitle = "长按排序各大项 · ${customFieldCount} 项自定义字段 · ${foldedFieldCount} 项折叠在更多信息 · 全字段可搜索",
+                            testTag = "bill_tool_bill_fields",
+                            onClick = onOpenBillFields
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         BillToolMenuRow(
