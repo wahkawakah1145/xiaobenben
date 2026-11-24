@@ -1,5 +1,10 @@
 package com.example.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +32,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -66,6 +74,7 @@ import com.example.model.LedgerTransaction
 import com.example.model.TransactionType
 import com.example.ui.components.CategoryIconCatalog
 import com.example.ui.components.DraggableHierarchyColumn
+import com.example.ui.components.LinkedTransactionsDialog
 import com.example.ui.components.categoryIcon
 import com.example.ui.components.transactionTypeColor
 import com.example.ui.theme.AppIcons
@@ -92,8 +101,11 @@ fun CategoryManagementScreen(
     var editingIconCategory by remember { mutableStateOf<String?>(null) }
     var renamingCategory by remember { mutableStateOf<String?>(null) }
     var deletingCategory by remember { mutableStateOf<String?>(null) }
+    var inspectingBillsCategory by remember { mutableStateOf<String?>(null) }
     var showResetConfirm by remember { mutableStateOf(false) }
-    var showConsolidateDialog by remember { mutableStateOf(false) }
+
+    // Expanded parent categories (default collapsed; clicking parent card or arrow toggles smoothly)
+    var expandedParents by remember(selectedType) { mutableStateOf(emptySet<String>()) }
 
     // Multi-select batch attribution state
     var multiSelectMode by remember { mutableStateOf(false) }
@@ -111,30 +123,40 @@ fun CategoryManagementScreen(
             rules = allRules
         )
     }
-    val visibleCategories = remember(allDisplayedCategories, settings.categoryParentMap, settings.categoryShowChildren) {
-        if (settings.categoryShowChildren) {
-            allDisplayedCategories
-        } else {
-            CategoryCatalog.topLevelCategories(allDisplayedCategories, settings.categoryParentMap)
+    val topLevelCategories = remember(allDisplayedCategories, settings.categoryParentMap) {
+        CategoryCatalog.topLevelCategories(allDisplayedCategories, settings.categoryParentMap)
+    }
+    val childrenByParent = remember(topLevelCategories, allDisplayedCategories, settings.categoryParentMap) {
+        topLevelCategories.associateWith { parent ->
+            CategoryCatalog.descendantsOf(parent, allDisplayedCategories, settings.categoryParentMap)
         }
     }
-    val hasAnyHierarchy = remember(allDisplayedCategories, settings.categoryParentMap) {
-        allDisplayedCategories.any { CategoryCatalog.resolveDirectParent(it, settings.categoryParentMap) != null }
-    }
 
-    val txCountByCategory = remember(allTransactions) {
-        allTransactions.groupingBy { it.category }.eachCount()
+    val txListByCategory = remember(allTransactions, selectedType) {
+        allTransactions
+            .filter { it.type == selectedType.name }
+            .groupBy { it.category }
     }
     val ruleCountByCategory = remember(allRules) {
         allRules.filterNot { it.isIgnoreRule }.groupingBy { it.defaultCategory }.eachCount()
     }
     val accentColor = transactionTypeColor(selectedType)
+    val listState = rememberLazyListState()
+
+    fun spliceFullCategoryOrder(updatedSubset: List<String>): List<String> {
+        val subsetSet = updatedSubset.toHashSet()
+        val iterator = updatedSubset.iterator()
+        return allDisplayedCategories.map { item ->
+            if (item in subsetSet && iterator.hasNext()) iterator.next() else item
+        }
+    }
 
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
     ) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = 720.dp)
                 .fillMaxSize(),
@@ -164,7 +186,7 @@ fun CategoryManagementScreen(
                         )
                         Text(
                             text = settingsHighlightedText(
-                                "长按拖动排序；将 A 拖放到 B 上且 B 高光时松手即可归属进 B。轻点左侧图标可更换图标。",
+                                "长按拖动排序；将 A 拖到 B 上稍作停顿待 B 高光后松手即可归属进 B。点击含子类项可展开/收起，各项修改均可撤回。",
                                 ROUTE_SETTINGS_CATEGORIES
                             ),
                             style = MaterialTheme.typography.bodySmall,
@@ -198,32 +220,39 @@ fun CategoryManagementScreen(
                             }
                         }
 
-                        // Display mode switch: show all children vs parent-only
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (settings.categoryShowChildren) "显示全部子类" else "仅显示父类",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = if (settings.categoryShowChildren) {
-                                        "列表与选择项展示所有分类及其归属关系"
-                                    } else {
-                                        "已归属的子类将折叠归并到其父类展示"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                        // Non-destructive bill display mode: show child name vs parent name (never alters raw bills)
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "账单中分类显示方式（不改动账单原始内容）",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                SegmentedButton(
+                                    selected = settings.categoryShowChildren,
+                                    onClick = { viewModel.setCategoryShowChildren(true) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                    modifier = Modifier.testTag("category_display_child_mode")
+                                ) {
+                                    Text("账单显示子类名")
+                                }
+                                SegmentedButton(
+                                    selected = !settings.categoryShowChildren,
+                                    onClick = { viewModel.setCategoryShowChildren(false) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                    modifier = Modifier.testTag("category_display_parent_mode")
+                                ) {
+                                    Text("账单显示父类名")
+                                }
                             }
-                            Switch(
-                                checked = settings.categoryShowChildren,
-                                onCheckedChange = { viewModel.setCategoryShowChildren(it) },
-                                modifier = Modifier.testTag("category_show_children_switch")
+                            Text(
+                                text = if (settings.categoryShowChildren) {
+                                    "账单列表、详情与统计按子类原名显示，不修改原始账单数据"
+                                } else {
+                                    "账单列表、详情与统计自动按所属父类名归并显示，原始账单保持不变且可随时切回"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
 
@@ -252,16 +281,6 @@ fun CategoryManagementScreen(
                                     .testTag("category_multiselect_toggle")
                             ) {
                                 Text(if (multiSelectMode) "退出多选" else "多选归属")
-                            }
-                            if (hasAnyHierarchy) {
-                                OutlinedButton(
-                                    onClick = { showConsolidateDialog = true },
-                                    modifier = Modifier
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("category_consolidate_button")
-                                ) {
-                                    Text("一键整合子类到父类")
-                                }
                             }
                             OutlinedButton(
                                 onClick = { showResetConfirm = true },
@@ -302,7 +321,7 @@ fun CategoryManagementScreen(
                                             multiSelectMode = false
                                         }
                                     ) {
-                                        Text("解除归属")
+                                        Text("移出父类")
                                     }
                                     Button(
                                         enabled = selectedNames.isNotEmpty(),
@@ -320,35 +339,38 @@ fun CategoryManagementScreen(
 
             item(key = "category_drag_list_${selectedType.name}") {
                 DraggableHierarchyColumn(
-                    items = visibleCategories,
+                    items = topLevelCategories,
                     key = { "${selectedType.name}_$it" },
                     spacing = 10.dp,
                     dragEnabled = !multiSelectMode,
                     enableNesting = !multiSelectMode,
+                    lazyListState = listState,
                     canNest = { dragged, target ->
                         CategoryCatalog.canAssignParent(dragged, target, settings.categoryParentMap)
                     },
-                    onReorder = { reordered ->
-                        viewModel.reorderCategories(selectedType, reordered)
+                    onReorder = { reorderedTop ->
+                        viewModel.reorderCategories(selectedType, spliceFullCategoryOrder(reorderedTop))
                     },
                     onNestInto = { dragged, target ->
+                        expandedParents = expandedParents + target
                         viewModel.setCategoryParent(dragged, target)
                     }
                 ) { catName, isDragging, isNestTarget, dragModifier ->
-                    val txCount = txCountByCategory[catName] ?: 0
+                    val children = childrenByParent[catName].orEmpty()
+                    val isExpanded = catName in expandedParents
+                    val exactTxCount = txListByCategory[catName]?.size ?: 0
+                    val totalTxCount = exactTxCount + children.sumOf { txListByCategory[it]?.size ?: 0 }
                     val ruleCount = ruleCountByCategory[catName] ?: 0
                     val isDiscoveredOnly = catName !in configuredForType
                     val customIconKey = settings.categoryIcons[catName]
                     val iconVec = categoryIcon(catName, settings.categoryIcons)
-                    val directParent = CategoryCatalog.resolveDirectParent(catName, settings.categoryParentMap)
-                    val childCount = CategoryCatalog.childrenOf(catName, allDisplayedCategories, settings.categoryParentMap).size
                     val isSelected = catName in selectedNames
 
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = when {
-                            isNestTarget -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
-                            isDragging -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f)
+                            isNestTarget -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f)
+                            isDragging -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.78f)
                             isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.40f)
                             else -> MaterialTheme.colorScheme.surfaceContainerLow
                         },
@@ -363,17 +385,7 @@ fun CategoryManagementScreen(
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = if (directParent != null && settings.categoryShowChildren) 18.dp else 0.dp)
                             .then(dragModifier)
-                            .let { mod ->
-                                if (multiSelectMode) {
-                                    mod.clickable {
-                                        selectedNames = if (isSelected) selectedNames - catName else selectedNames + catName
-                                    }
-                                } else {
-                                    mod
-                                }
-                            }
                             .testTag("category_item_$catName")
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
@@ -391,9 +403,17 @@ fun CategoryManagementScreen(
                                     )
                                 }
                             }
+
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .clickable {
+                                        if (multiSelectMode) {
+                                            selectedNames = if (isSelected) selectedNames - catName else selectedNames + catName
+                                        } else if (children.isNotEmpty()) {
+                                            expandedParents = if (isExpanded) expandedParents - catName else expandedParents + catName
+                                        }
+                                    }
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -435,41 +455,46 @@ fun CategoryManagementScreen(
                                             style = MaterialTheme.typography.titleSmall,
                                             fontWeight = FontWeight.SemiBold
                                         )
-                                        if (directParent != null) {
-                                            Surface(
-                                                color = MaterialTheme.colorScheme.tertiaryContainer,
-                                                shape = RoundedCornerShape(6.dp)
-                                            ) {
-                                                Text(
-                                                    text = "归属「$directParent」",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                                                )
-                                            }
-                                        }
-                                        if (childCount > 0) {
+                                        if (children.isNotEmpty()) {
                                             Surface(
                                                 color = MaterialTheme.colorScheme.primaryContainer,
-                                                shape = RoundedCornerShape(6.dp)
+                                                shape = RoundedCornerShape(8.dp),
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .clickable {
+                                                        expandedParents = if (isExpanded) expandedParents - catName else expandedParents + catName
+                                                    }
+                                                    .testTag("category_expand_toggle_$catName")
                                             ) {
-                                                Text(
-                                                    text = "含 $childCount 子类",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                                                )
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "含 ${children.size} 子类",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                        fontWeight = FontWeight.Medium
+                                                    )
+                                                    Icon(
+                                                        imageVector = if (isExpanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                                                        contentDescription = if (isExpanded) "收起子类" else "展开子类",
+                                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                         if (isDiscoveredOnly) {
                                             Surface(
-                                                color = MaterialTheme.colorScheme.primaryContainer,
+                                                color = MaterialTheme.colorScheme.secondaryContainer,
                                                 shape = RoundedCornerShape(6.dp)
                                             ) {
                                                 Text(
                                                     text = "历史/规则",
                                                     style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
                                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                                                 )
                                             }
@@ -487,29 +512,42 @@ fun CategoryManagementScreen(
                                             }
                                         }
                                     }
-                                    Text(
-                                        text = "关联 $txCount 笔账单 · $ruleCount 条规则",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
 
-                                if (!multiSelectMode) {
-                                    if (directParent != null) {
-                                        IconButton(
-                                            onClick = { viewModel.setCategoryParent(catName, null) },
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
                                             modifier = Modifier
-                                                .minimumInteractiveComponentSize()
-                                                .testTag("category_unparent_$catName")
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .clickable { inspectingBillsCategory = catName }
+                                                .testTag("category_bills_button_$catName")
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Close,
-                                                contentDescription = "解除归属",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(18.dp)
+                                            Text(
+                                                text = if (children.isNotEmpty() && totalTxCount != exactTxCount) {
+                                                    "查看账单 $totalTxCount 笔 ›"
+                                                } else {
+                                                    "查看账单 $exactTxCount 笔 ›"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                        if (ruleCount > 0) {
+                                            Text(
+                                                text = "$ruleCount 规则",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                     }
+                                }
+
+                                if (!multiSelectMode) {
                                     IconButton(
                                         onClick = { renamingCategory = catName },
                                         modifier = Modifier
@@ -528,10 +566,162 @@ fun CategoryManagementScreen(
                                     ) {
                                         Icon(
                                             imageVector = AppIcons.DeleteOutline,
-                                            contentDescription = "删除或归属迁移分类",
+                                            contentDescription = "删除分类",
                                             tint = if (canDelete) ExpenseCoral else MaterialTheme.colorScheme.outline,
                                             modifier = Modifier.size(19.dp)
                                         )
+                                    }
+                                }
+                            }
+
+                            // Expandable nested child list inside the parent card
+                            AnimatedVisibility(
+                                visible = children.isNotEmpty() && isExpanded,
+                                enter = expandVertically() + fadeIn(),
+                                exit = shrinkVertically() + fadeOut()
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 14.dp, end = 12.dp, bottom = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                                    DraggableHierarchyColumn(
+                                        items = children,
+                                        key = { "${selectedType.name}_child_${catName}_$it" },
+                                        spacing = 6.dp,
+                                        dragEnabled = !multiSelectMode && children.size > 1,
+                                        enableNesting = false,
+                                        onReorder = { reorderedChildren ->
+                                            viewModel.reorderCategories(selectedType, spliceFullCategoryOrder(reorderedChildren))
+                                        }
+                                    ) { childName, childDragging, _, childDragMod ->
+                                        val childTxCount = txListByCategory[childName]?.size ?: 0
+                                        val childRuleCount = ruleCountByCategory[childName] ?: 0
+                                        val childSelected = childName in selectedNames
+                                        val childIconVec = categoryIcon(childName, settings.categoryIcons)
+
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = when {
+                                                childDragging -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f)
+                                                childSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                                else -> MaterialTheme.colorScheme.surfaceContainer
+                                            },
+                                            border = BorderStroke(
+                                                width = if (childDragging) 1.5.dp else 0.8.dp,
+                                                color = if (childDragging) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .then(childDragMod)
+                                                .let { mod ->
+                                                    if (multiSelectMode) {
+                                                        mod.clickable {
+                                                            selectedNames = if (childSelected) selectedNames - childName else selectedNames + childName
+                                                        }
+                                                    } else mod
+                                                }
+                                                .testTag("category_child_item_$childName")
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                if (multiSelectMode) {
+                                                    Checkbox(
+                                                        checked = childSelected,
+                                                        onCheckedChange = { checked ->
+                                                            selectedNames = if (checked) selectedNames + childName else selectedNames - childName
+                                                        },
+                                                        modifier = Modifier.testTag("category_check_$childName")
+                                                    )
+                                                }
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(34.dp)
+                                                        .clip(CircleShape)
+                                                        .background(accentColor.copy(alpha = 0.12f))
+                                                        .clickable(enabled = !multiSelectMode) { editingIconCategory = childName }
+                                                        .testTag("category_icon_picker_$childName"),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = childIconVec,
+                                                        contentDescription = "修改「$childName」图标",
+                                                        tint = accentColor,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                    Text(
+                                                        text = childName,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.Medium
+                                                    )
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "查看账单 $childTxCount 笔 ›",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier
+                                                                .clickable { inspectingBillsCategory = childName }
+                                                                .testTag("category_bills_button_$childName")
+                                                        )
+                                                        if (childRuleCount > 0) {
+                                                            Text(
+                                                                text = "· $childRuleCount 规则",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                if (!multiSelectMode) {
+                                                    IconButton(
+                                                        onClick = { viewModel.setCategoryParent(childName, null) },
+                                                        modifier = Modifier
+                                                            .size(36.dp)
+                                                            .testTag("category_unparent_$childName")
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Rounded.Close,
+                                                            contentDescription = "移出父类",
+                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier.size(17.dp)
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = { renamingCategory = childName },
+                                                        modifier = Modifier
+                                                            .size(36.dp)
+                                                            .testTag("category_rename_$childName")
+                                                    ) {
+                                                        Icon(Icons.Rounded.Edit, contentDescription = "修改子类名称", modifier = Modifier.size(17.dp))
+                                                    }
+                                                    IconButton(
+                                                        onClick = { deletingCategory = childName },
+                                                        modifier = Modifier
+                                                            .size(36.dp)
+                                                            .testTag("category_delete_$childName")
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = AppIcons.DeleteOutline,
+                                                            contentDescription = "删除子类",
+                                                            tint = ExpenseCoral,
+                                                            modifier = Modifier.size(17.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -540,6 +730,30 @@ fun CategoryManagementScreen(
                 }
             }
         }
+    }
+
+    inspectingBillsCategory?.let { targetCat ->
+        val descendants = remember(targetCat, allDisplayedCategories, settings.categoryParentMap) {
+            CategoryCatalog.descendantsOf(targetCat, allDisplayedCategories, settings.categoryParentMap)
+        }
+        val exactTxs = remember(targetCat, txListByCategory) {
+            txListByCategory[targetCat].orEmpty()
+        }
+        val withChildrenTxs = remember(targetCat, descendants, txListByCategory) {
+            if (descendants.isEmpty()) exactTxs else {
+                val names = (listOf(targetCat) + descendants).toHashSet()
+                allTransactions.filter { it.type == selectedType.name && it.category in names }
+            }
+        }
+        LinkedTransactionsDialog(
+            title = "分类「$targetCat」关联账单",
+            exactTransactions = exactTxs,
+            withChildrenTransactions = withChildrenTxs,
+            hasChildren = descendants.isNotEmpty(),
+            settings = settings,
+            viewModel = viewModel,
+            onDismiss = { inspectingBillsCategory = null }
+        )
     }
 
     if (showBatchParentPicker) {
@@ -574,6 +788,7 @@ fun CategoryManagementScreen(
                                 FilterChip(
                                     selected = false,
                                     onClick = {
+                                        expandedParents = expandedParents + target
                                         viewModel.batchSetCategoryParent(selectedNames, target)
                                         selectedNames = emptySet()
                                         multiSelectMode = false
@@ -592,60 +807,17 @@ fun CategoryManagementScreen(
         )
     }
 
-    if (showConsolidateDialog) {
-        var syncTx by remember { mutableStateOf(true) }
-        var syncRules by remember { mutableStateOf(true) }
-        AlertDialog(
-            onDismissRequest = { showConsolidateDialog = false },
-            title = { Text("一键整合子类到父类？") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "将所有已配置附属关系的子分类账单与规则一键整合归并至对应的根父分类（保留归属关系规则，后续识别仍可自动归属）。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    CategorySyncToggleRow(
-                        title = "整合历史账单",
-                        subtitle = "将子类账单分类更新为其父分类",
-                        checked = syncTx,
-                        onCheckedChange = { syncTx = it }
-                    )
-                    CategorySyncToggleRow(
-                        title = "整合识别规则",
-                        subtitle = "将规则默认分类指向对应父分类",
-                        checked = syncRules,
-                        onCheckedChange = { syncRules = it }
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConsolidateDialog = false }) { Text("取消") }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.consolidateCategoryChildrenToParent(
-                            parentName = null,
-                            syncTransactions = syncTx,
-                            syncRules = syncRules
-                        )
-                        showConsolidateDialog = false
-                    },
-                    modifier = Modifier.testTag("category_consolidate_confirm")
-                ) {
-                    Text("确认整合")
-                }
-            }
-        )
-    }
-
     editingIconCategory?.let { targetName ->
         val currentKey = settings.categoryIcons[targetName]
+        val linkedCount = (txListByCategory[targetName]?.size ?: 0) +
+            CategoryCatalog.descendantsOf(targetName, allDisplayedCategories, settings.categoryParentMap)
+                .sumOf { txListByCategory[it]?.size ?: 0 }
         CategoryIconPickerDialog(
             categoryName = targetName,
             selectedIconKey = currentKey,
+            linkedCount = linkedCount,
             accentColor = accentColor,
+            onInspectBills = { inspectingBillsCategory = targetName },
             onSelectIcon = { key ->
                 viewModel.setCategoryIcon(targetName, key)
                 editingIconCategory = null
@@ -693,7 +865,7 @@ fun CategoryManagementScreen(
                             onClick = { selectedParent = null },
                             label = { Text("独立父类") }
                         )
-                        allDisplayedCategories.forEach { cat ->
+                        topLevelCategories.forEach { cat ->
                             FilterChip(
                                 selected = selectedParent == cat,
                                 onClick = { selectedParent = cat },
@@ -773,15 +945,14 @@ fun CategoryManagementScreen(
                             errorText = "该分类已存在"
                             return@Button
                         }
+                        selectedParent?.let { expandedParents = expandedParents + it }
                         viewModel.addCustomCategory(
                             type = selectedType,
                             name = trimmed,
                             syncAiPrompt = syncAi,
-                            iconKey = selectedIconKey
+                            iconKey = selectedIconKey,
+                            parentName = selectedParent
                         )
-                        if (selectedParent != null && selectedParent != trimmed) {
-                            viewModel.setCategoryParent(trimmed, selectedParent)
-                        }
                         showAddDialog = false
                     },
                     modifier = Modifier.testTag("category_add_confirm_button")
@@ -798,12 +969,12 @@ fun CategoryManagementScreen(
         var syncRules by remember(oldName) { mutableStateOf(true) }
         var syncAi by remember(oldName) { mutableStateOf(true) }
         var errorText by remember(oldName) { mutableStateOf<String?>(null) }
-        val txCount = txCountByCategory[oldName] ?: 0
+        val txCount = txListByCategory[oldName]?.size ?: 0
         val ruleCount = ruleCountByCategory[oldName] ?: 0
 
         AlertDialog(
             onDismissRequest = { renamingCategory = null },
-            title = { Text("修改分类名称") },
+            title = { Text("修改分类「$oldName」") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
@@ -815,6 +986,14 @@ fun CategoryManagementScreen(
                             .fillMaxWidth()
                             .testTag("category_rename_input")
                     )
+                    OutlinedButton(
+                        onClick = { inspectingBillsCategory = oldName },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("category_rename_view_bills")
+                    ) {
+                        Text("快捷查看关联账单（$txCount 笔）")
+                    }
                     HorizontalDivider()
                     CategorySyncToggleRow(
                         title = "同步更新历史账单 ($txCount 笔)",
@@ -888,12 +1067,24 @@ fun CategoryManagementScreen(
         var syncTransactions by remember(targetName) { mutableStateOf(true) }
         var syncRules by remember(targetName) { mutableStateOf(true) }
         var syncAi by remember(targetName) { mutableStateOf(true) }
+        val txCount = txListByCategory[targetName]?.size ?: 0
 
         AlertDialog(
             onDismissRequest = { deletingCategory = null },
             title = { Text("删除分类「$targetName」") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { inspectingBillsCategory = targetName },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("category_delete_view_bills")
+                    ) {
+                        Text("查看关联账单（$txCount 笔）")
+                    }
                     Text(
                         text = "原归属此分类的历史账单与规则将归属到下方目标分类：",
                         style = MaterialTheme.typography.bodySmall,
@@ -964,7 +1155,7 @@ fun CategoryManagementScreen(
             title = { Text("恢复默认分类列表？") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("将把支出、收入与转账分类列表及归属关系恢复为默认，并同步刷新 AI 理解提示词（不会修改已有历史账单记录）。")
+                    Text("将把支出、收入与转账分类列表及归属关系恢复为默认，并同步刷新 AI 理解提示词（不会修改已有历史账单记录，且支持撤回）。")
                     CategorySyncToggleRow(
                         title = "同时重置自定义分类图标",
                         subtitle = "关闭则保留已设置的分类图标",
@@ -996,7 +1187,9 @@ fun CategoryManagementScreen(
 private fun CategoryIconPickerDialog(
     categoryName: String,
     selectedIconKey: String?,
+    linkedCount: Int,
     accentColor: androidx.compose.ui.graphics.Color,
+    onInspectBills: () -> Unit,
     onSelectIcon: (String?) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1019,6 +1212,12 @@ private fun CategoryIconPickerDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                OutlinedButton(
+                    onClick = onInspectBills,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("快捷查看关联账单（$linkedCount 笔）")
+                }
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)

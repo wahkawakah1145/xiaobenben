@@ -72,20 +72,20 @@ object SettingsSearchCatalog {
         SettingsSearchItem(
             id = "category_mgmt",
             title = "分类管理（图标、排序与归属）",
-            subtitle = "自定义分类图标、长按拖动排序与归属父子类、一键整合子类到父类并同步规则与 AI",
+            subtitle = "父子折叠列表管理、长按拖动排序与悬停高光归属、切换账单显示子类/父类名、快捷查看关联账单且均可撤回",
             categoryLabel = "账单工具",
             route = ROUTE_SETTINGS_CATEGORIES,
             sectionKey = "category_header_card",
-            keywords = listOf("分类", "图标", "自定义分类", "分类归属", "子类", "父类", "排序", "整合", "餐饮", "购物")
+            keywords = listOf("分类", "图标", "自定义分类", "分类归属", "子类", "父类", "排序", "关联账单", "撤回", "餐饮", "购物")
         ),
         SettingsSearchItem(
             id = "channel_mgmt",
             title = "渠道管理（排序与归属）",
-            subtitle = "自定义支付渠道附属关系与排序，花呗/余额宝归属支付宝，零钱/零钱通归属微信支付",
+            subtitle = "父子折叠列表管理、长按排序与悬停高光归属、切换账单显示子渠道/父渠道名、快捷查看关联账单且均可撤回",
             categoryLabel = "账单工具",
             route = ROUTE_SETTINGS_CHANNELS,
             sectionKey = "channel_header_info",
-            keywords = listOf("渠道", "渠道归属", "子类", "父类", "排序", "整合", "花呗", "余额宝", "零钱", "零钱通", "支付宝", "微信支付")
+            keywords = listOf("渠道", "渠道归属", "子类", "父类", "排序", "关联账单", "撤回", "花呗", "余额宝", "零钱", "零钱通", "支付宝", "微信支付")
         ),
         SettingsSearchItem(
             id = "bill_fields_mgmt",
@@ -164,7 +164,7 @@ object SettingsSearchCatalog {
         SettingsSearchItem(
             id = "notification_logs",
             title = "通知读取日志与保留策略",
-            subtitle = "记录每一条读取到的通知，可选保存条数与天数，支持无限条数永久保存",
+            subtitle = "仅记录所选监听应用的通知，可选保存条数与天数，支持无限条数永久保存",
             categoryLabel = "通知识别与规则",
             route = ROUTE_SETTINGS_NOTIFICATION_LOGS,
             sectionKey = "notification_log_retention_card",
@@ -296,11 +296,11 @@ object SettingsSearchCatalog {
         SettingsSearchItem(
             id = "icon_and_shortcut",
             title = "图标风格与创建桌面快捷方式",
-            subtitle = "切换应用图标风格（含莫奈徽标）或创建自定义图标与名称的桌面快捷方式",
+            subtitle = "桌面图标动态适配系统亮色/暗色模式（含莫奈徽标），支持自定义桌面快捷方式",
             categoryLabel = "个性化设置 · 图标与快捷方式",
             route = ROUTE_SETTINGS_APPEARANCE_ICON,
             sectionKey = "icon_style_settings",
-            keywords = listOf("个性化", "图标", "桌面图标", "快捷方式", "莫奈图标", "图标风格", "应用图标")
+            keywords = listOf("个性化", "图标", "桌面图标", "暗色图标", "深色图标", "快捷方式", "莫奈图标", "图标风格", "应用图标")
         ),
 
         // 权限管理 & 关于

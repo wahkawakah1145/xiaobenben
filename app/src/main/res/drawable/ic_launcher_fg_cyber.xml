@@ -9,9 +9,9 @@
         android:fillColor="#00000000"
         android:pathData="M54,28 L76,41 L76,67 L54,80 L32,67 L32,41 Z"
         android:strokeWidth="4"
-        android:strokeColor="#38BDF8"
+        android:strokeColor="@color/launcher_cyber_frame"
         android:strokeLineJoin="round" />
     <path
-        android:fillColor="#22D3EE"
+        android:fillColor="@color/launcher_cyber_glyph"
         android:pathData="M45,42 L54,53 L63,42 L67.5,42 L57.5,55 L64,55 L64,58.5 L56.5,58.5 L56.5,66.5 L51.5,66.5 L51.5,58.5 L44,58.5 L44,55 L50.5,55 L40.5,42 Z" />
 </vector>

@@ -3379,7 +3379,7 @@ fun AppearanceIconShortcutSettingsScreen(
                             text = if (hasPendingIconChange) {
                                 "已预选「${pendingStyle.label}」，点选不会立即切换；点击下方「应用并重启」确认后再切换桌面入口图标"
                             } else {
-                                "通过系统 activity-alias 切换桌面图标（含支持壁纸莫奈取色的「莫奈徽标」）；也可通过创建桌面快捷方式自行选择相册图片或自定义配色名称"
+                                "全部桌面图标均自动动态适配系统亮色/暗色模式（含支持壁纸莫奈取色的「莫奈徽标」）；也可创建自定义桌面快捷方式"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = if (hasPendingIconChange) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant

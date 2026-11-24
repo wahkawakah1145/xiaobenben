@@ -1380,6 +1380,21 @@ object CategoryCatalog {
     fun childrenOf(parent: String, allCategories: List<String>, parentMap: Map<String, String>): List<String> =
         allCategories.filter { resolveDirectParent(it, parentMap) == parent }
 
+    fun descendantsOf(parent: String, allCategories: List<String>, parentMap: Map<String, String>): List<String> {
+        val result = ArrayList<String>()
+        val seen = HashSet<String>()
+        fun collect(curParent: String) {
+            for (cat in allCategories) {
+                if (cat != parent && resolveDirectParent(cat, parentMap) == curParent && seen.add(cat)) {
+                    result.add(cat)
+                    collect(cat)
+                }
+            }
+        }
+        collect(parent)
+        return result
+    }
+
     fun topLevelCategories(allCategories: List<String>, parentMap: Map<String, String>): List<String> {
         val validSet = allCategories.toHashSet()
         return allCategories.filter { cat ->
@@ -1470,6 +1485,24 @@ object ChannelCatalog {
         allChannels.filter { ch ->
             resolveDirectParent(ch, parentMap)?.equals(parent, ignoreCase = true) == true
         }
+
+    fun descendantsOf(parent: String, allChannels: List<String>, parentMap: Map<String, String>): List<String> {
+        val result = ArrayList<String>()
+        val seenLower = HashSet<String>()
+        seenLower.add(parent.lowercase())
+        fun collect(curParent: String) {
+            for (ch in allChannels) {
+                if (resolveDirectParent(ch, parentMap)?.equals(curParent, ignoreCase = true) == true &&
+                    seenLower.add(ch.lowercase())
+                ) {
+                    result.add(ch)
+                    collect(ch)
+                }
+            }
+        }
+        collect(parent)
+        return result
+    }
 
     fun topLevelChannels(allChannels: List<String>, parentMap: Map<String, String>): List<String> {
         val validLower = allChannels.mapTo(HashSet()) { it.lowercase() }

@@ -151,7 +151,7 @@ fun NotificationLogScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "已记录 $totalCount 条通知 · 分页查询低内存占用",
+                                        text = "已记录 $totalCount 条通知 · 仅记录已选监听应用",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

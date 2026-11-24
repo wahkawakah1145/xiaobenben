@@ -157,6 +157,7 @@ fun BillFieldsSettingsScreen(
                     spacing = 8.dp,
                     dragEnabled = true,
                     enableNesting = false,
+                    lazyListState = listState,
                     onReorder = { reordered ->
                         viewModel.saveBillFieldsConfig(
                             fields = reordered,

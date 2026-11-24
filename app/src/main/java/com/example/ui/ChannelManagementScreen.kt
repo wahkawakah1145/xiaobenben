@@ -1,5 +1,10 @@
 package com.example.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +27,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -32,11 +39,15 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -49,6 +60,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -56,8 +68,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.ChannelCatalog
 import com.example.model.ChannelSplitter
 import com.example.model.FeatureTipsCatalog
+import com.example.model.LedgerTransaction
 import com.example.ui.components.DraggableHierarchyColumn
 import com.example.ui.components.FeatureTipBanner
+import com.example.ui.components.LinkedTransactionsDialog
 import com.example.ui.theme.AppIcons
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
@@ -88,23 +102,21 @@ fun ChannelManagementScreen(
         )
     }
 
-    val visibleChannels = remember(allChannels, settings.channelParentMap, settings.channelShowChildren) {
-        if (settings.channelShowChildren) {
-            allChannels
-        } else {
-            ChannelCatalog.topLevelChannels(allChannels, settings.channelParentMap)
+    val topLevelChannels = remember(allChannels, settings.channelParentMap) {
+        ChannelCatalog.topLevelChannels(allChannels, settings.channelParentMap)
+    }
+
+    val childrenByParent = remember(topLevelChannels, allChannels, settings.channelParentMap) {
+        topLevelChannels.associateWith { parent ->
+            ChannelCatalog.descendantsOf(parent, allChannels, settings.channelParentMap)
         }
     }
 
-    val hasAnyHierarchy = remember(allChannels, settings.channelParentMap) {
-        allChannels.any { ChannelCatalog.resolveDirectParent(it, settings.channelParentMap) != null }
-    }
-
-    val txCountByChannel = remember(allTransactions) {
-        val map = LinkedHashMap<String, Int>()
+    val txListByChannel = remember(allTransactions) {
+        val map = LinkedHashMap<String, MutableList<LedgerTransaction>>()
         allTransactions.forEach { tx ->
-            ChannelSplitter.splitChannels(tx.channel).forEach { token ->
-                map[token] = (map[token] ?: 0) + 1
+            ChannelSplitter.splitChannels(tx.channel).distinct().forEach { token ->
+                map.getOrPut(token) { ArrayList() }.add(tx)
             }
         }
         map
@@ -120,11 +132,12 @@ fun ChannelManagementScreen(
         map
     }
 
+    var expandedParents by remember { mutableStateOf(emptySet<String>()) }
     var showAddDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
     var deleteTarget by remember { mutableStateOf<String?>(null) }
+    var inspectingBillsChannel by remember { mutableStateOf<String?>(null) }
     var showResetDialog by remember { mutableStateOf(false) }
-    var showConsolidateDialog by remember { mutableStateOf(false) }
 
     var multiSelectMode by remember { mutableStateOf(false) }
     var selectedChannels by remember { mutableStateOf(emptySet<String>()) }
@@ -136,6 +149,14 @@ fun ChannelManagementScreen(
         route = ROUTE_SETTINGS_CHANNELS,
         sectionKeysInOrder = listOf("channel_header_info", "channel_actions_bar", "channel_count_label")
     )
+
+    fun spliceFullChannelOrder(updatedSubset: List<String>): List<String> {
+        val subsetSet = updatedSubset.toHashSet()
+        val iterator = updatedSubset.iterator()
+        return allChannels.map { item ->
+            if (item in subsetSet && iterator.hasNext()) iterator.next() else item
+        }
+    }
 
     LazyColumn(
         state = listState,
@@ -183,7 +204,7 @@ fun ChannelManagementScreen(
                         }
                         Text(
                             text = settingsHighlightedText(
-                                "长按拖动排序；将 A 拖放到 B 上且 B 高光时松手即可归属进 B，也可多选一键归属或整合子类到父渠道。",
+                                "长按拖动排序；将 A 拖到 B 上稍作停顿待 B 高光后松手即可归属进 B。点击含子渠道项可展开/收起，各项修改均可撤回。",
                                 ROUTE_SETTINGS_CHANNELS
                             ),
                             style = MaterialTheme.typography.bodySmall,
@@ -191,7 +212,7 @@ fun ChannelManagementScreen(
                         )
                         FeatureTipBanner(
                             tipId = FeatureTipsCatalog.CHANNEL_ATTRIBUTION,
-                            text = "默认归属：花呗 / 余额宝归属「支付宝」，零钱 / 零钱通归属「微信支付」，支持自定义任意渠道附属关系。",
+                            text = "默认归属：花呗 / 余额宝归属「支付宝」，零钱 / 零钱通归属「微信支付」，点击对应父渠道即可展开查看与管理。",
                             appearance = appearance,
                             onDismiss = { viewModel.dismissFeatureTip(it) }
                         )
@@ -210,31 +231,39 @@ fun ChannelManagementScreen(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (settings.channelShowChildren) "显示全部子渠道" else "仅显示父渠道",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = if (settings.channelShowChildren) {
-                                    "展示所有独立渠道与子渠道（如花呗、零钱等）"
-                                } else {
-                                    "自动将子渠道归并至对应父渠道显示与识别"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    // Non-destructive bill display mode: child name vs parent name (never alters raw bills)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "账单中渠道显示方式（不改动账单原始内容）",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            SegmentedButton(
+                                selected = settings.channelShowChildren,
+                                onClick = { viewModel.setChannelShowChildren(true) },
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                modifier = Modifier.testTag("channel_display_child_mode")
+                            ) {
+                                Text("账单显示子渠道名")
+                            }
+                            SegmentedButton(
+                                selected = !settings.channelShowChildren,
+                                onClick = { viewModel.setChannelShowChildren(false) },
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                modifier = Modifier.testTag("channel_display_parent_mode")
+                            ) {
+                                Text("账单显示父渠道名")
+                            }
                         }
-                        Switch(
-                            checked = settings.channelShowChildren,
-                            onCheckedChange = { viewModel.setChannelShowChildren(it) },
-                            modifier = Modifier.testTag("channel_show_children_switch")
+                        Text(
+                            text = if (settings.channelShowChildren) {
+                                "账单列表、详情与统计按子渠道原名显示（如「花呗」「零钱通」），不修改原始账单"
+                            } else {
+                                "账单列表、详情与统计自动归并显示为父渠道名（如「支付宝」「微信支付」），原始账单保持不变且可随时切回"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
@@ -263,16 +292,6 @@ fun ChannelManagementScreen(
                                 .testTag("channel_multiselect_toggle")
                         ) {
                             Text(if (multiSelectMode) "退出多选" else "多选归属")
-                        }
-                        if (hasAnyHierarchy) {
-                            OutlinedButton(
-                                onClick = { showConsolidateDialog = true },
-                                modifier = Modifier
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("channel_consolidate_button")
-                            ) {
-                                Text("一键整合子类到父类")
-                            }
                         }
                         OutlinedButton(
                             onClick = { showResetDialog = true },
@@ -313,7 +332,7 @@ fun ChannelManagementScreen(
                                         multiSelectMode = false
                                     }
                                 ) {
-                                    Text("解除归属")
+                                    Text("移出父渠道")
                                 }
                                 Button(
                                     enabled = selectedChannels.isNotEmpty(),
@@ -331,7 +350,7 @@ fun ChannelManagementScreen(
 
         item(key = "channel_count_label") {
             Text(
-                text = "当前展示渠道（共 ${visibleChannels.size} / ${allChannels.size} 个）",
+                text = "渠道分组列表（${topLevelChannels.size} 个主渠道 · 共 ${allChannels.size} 个）",
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -341,33 +360,43 @@ fun ChannelManagementScreen(
 
         item(key = "channel_drag_list") {
             DraggableHierarchyColumn(
-                items = visibleChannels,
+                items = topLevelChannels,
                 key = { it },
                 spacing = 10.dp,
                 dragEnabled = !multiSelectMode,
                 enableNesting = !multiSelectMode,
+                lazyListState = listState,
                 canNest = { dragged, target ->
                     ChannelCatalog.canAssignParent(dragged, target, settings.channelParentMap)
                 },
-                onReorder = { reordered ->
-                    viewModel.reorderChannels(reordered)
+                onReorder = { reorderedTop ->
+                    viewModel.reorderChannels(spliceFullChannelOrder(reorderedTop))
                 },
                 onNestInto = { dragged, target ->
+                    expandedParents = expandedParents + target
                     viewModel.setChannelParent(dragged, target)
                 }
             ) { channel, isDragging, isNestTarget, dragModifier ->
-                val txCount = txCountByChannel[channel] ?: 0
+                val children = childrenByParent[channel].orEmpty()
+                val isExpanded = channel in expandedParents
+                val exactTxCount = txListByChannel[channel]?.size ?: 0
+                val totalTxCount = remember(channel, children, allTransactions) {
+                    if (children.isEmpty()) exactTxCount else {
+                        val targets = (listOf(channel) + children).mapTo(HashSet()) { it.lowercase() }
+                        allTransactions.count { tx ->
+                            ChannelSplitter.splitChannels(tx.channel).any { it.lowercase() in targets }
+                        }
+                    }
+                }
                 val ruleCount = ruleCountByChannel[channel] ?: 0
                 val isFromHistoryOnly = channel !in configuredSet
-                val directParent = ChannelCatalog.resolveDirectParent(channel, settings.channelParentMap)
-                val childCount = ChannelCatalog.childrenOf(channel, allChannels, settings.channelParentMap).size
                 val isSelected = channel in selectedChannels
 
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = when {
-                        isNestTarget -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
-                        isDragging -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f)
+                        isNestTarget -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f)
+                        isDragging -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.78f)
                         isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.40f)
                         else -> MaterialTheme.colorScheme.surfaceContainerLow
                     },
@@ -381,17 +410,7 @@ fun ChannelManagementScreen(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = if (directParent != null && settings.channelShowChildren) 18.dp else 0.dp)
                         .then(dragModifier)
-                        .let { mod ->
-                            if (multiSelectMode) {
-                                mod.clickable {
-                                    selectedChannels = if (isSelected) selectedChannels - channel else selectedChannels + channel
-                                }
-                            } else {
-                                mod
-                            }
-                        }
                         .testTag("channel_item_$channel")
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -409,9 +428,17 @@ fun ChannelManagementScreen(
                                 )
                             }
                         }
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clickable {
+                                    if (multiSelectMode) {
+                                        selectedChannels = if (isSelected) selectedChannels - channel else selectedChannels + channel
+                                    } else if (children.isNotEmpty()) {
+                                        expandedParents = if (isExpanded) expandedParents - channel else expandedParents + channel
+                                    }
+                                }
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -426,7 +453,7 @@ fun ChannelManagementScreen(
                             }
                             Column(
                                 modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -437,30 +464,35 @@ fun ChannelManagementScreen(
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.SemiBold
                                     )
-                                    if (directParent != null) {
+                                    if (children.isNotEmpty()) {
                                         Surface(
                                             shape = RoundedCornerShape(8.dp),
-                                            color = MaterialTheme.colorScheme.tertiaryContainer
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable {
+                                                    expandedParents = if (isExpanded) expandedParents - channel else expandedParents + channel
+                                                }
+                                                .testTag("channel_expand_toggle_$channel")
                                         ) {
-                                            Text(
-                                                text = "归属「$directParent」",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                            )
-                                        }
-                                    }
-                                    if (childCount > 0) {
-                                        Surface(
-                                            shape = RoundedCornerShape(8.dp),
-                                            color = MaterialTheme.colorScheme.primaryContainer
-                                        ) {
-                                            Text(
-                                                text = "含 $childCount 子渠道",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                            )
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                            ) {
+                                                Text(
+                                                    text = "含 ${children.size} 子渠道",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Icon(
+                                                    imageVector = if (isExpanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                                                    contentDescription = if (isExpanded) "收起子渠道" else "展开子渠道",
+                                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
                                         }
                                     }
                                     if (isFromHistoryOnly) {
@@ -477,26 +509,40 @@ fun ChannelManagementScreen(
                                         }
                                     }
                                 }
-                                Text(
-                                    text = "关联 $txCount 笔账单 · $ruleCount 条规则",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (!multiSelectMode) {
-                                if (directParent != null) {
-                                    IconButton(
-                                        onClick = { viewModel.setChannelParent(channel, null) },
-                                        modifier = Modifier.testTag("channel_unparent_$channel")
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { inspectingBillsChannel = channel }
+                                            .testTag("channel_bills_button_$channel")
                                     ) {
-                                        Icon(
-                                            Icons.Rounded.Close,
-                                            contentDescription = "解除渠道归属",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(18.dp)
+                                        Text(
+                                            text = if (children.isNotEmpty() && totalTxCount != exactTxCount) {
+                                                "查看账单 $totalTxCount 笔 ›"
+                                            } else {
+                                                "查看账单 $exactTxCount 笔 ›"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                    if (ruleCount > 0) {
+                                        Text(
+                                            text = "$ruleCount 规则",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
+                            }
+                            if (!multiSelectMode) {
                                 IconButton(
                                     onClick = { renameTarget = channel },
                                     modifier = Modifier.testTag("channel_edit_$channel")
@@ -524,10 +570,177 @@ fun ChannelManagementScreen(
                                 }
                             }
                         }
+
+                        // Expandable nested child channels inside parent card
+                        AnimatedVisibility(
+                            visible = children.isNotEmpty() && isExpanded,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 14.dp, end = 12.dp, bottom = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                                DraggableHierarchyColumn(
+                                    items = children,
+                                    key = { "channel_child_${channel}_$it" },
+                                    spacing = 6.dp,
+                                    dragEnabled = !multiSelectMode && children.size > 1,
+                                    enableNesting = false,
+                                    onReorder = { reorderedChildren ->
+                                        viewModel.reorderChannels(spliceFullChannelOrder(reorderedChildren))
+                                    }
+                                ) { childName, childDragging, _, childDragMod ->
+                                    val childTxCount = txListByChannel[childName]?.size ?: 0
+                                    val childRuleCount = ruleCountByChannel[childName] ?: 0
+                                    val childSelected = childName in selectedChannels
+
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = when {
+                                            childDragging -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f)
+                                            childSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                            else -> MaterialTheme.colorScheme.surfaceContainer
+                                        },
+                                        border = BorderStroke(
+                                            width = if (childDragging) 1.5.dp else 0.8.dp,
+                                            color = if (childDragging) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .then(childDragMod)
+                                            .let { mod ->
+                                                if (multiSelectMode) {
+                                                    mod.clickable {
+                                                        selectedChannels = if (childSelected) selectedChannels - childName else selectedChannels + childName
+                                                    }
+                                                } else mod
+                                            }
+                                            .testTag("channel_child_item_$childName")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            if (multiSelectMode) {
+                                                Checkbox(
+                                                    checked = childSelected,
+                                                    onCheckedChange = { checked ->
+                                                        selectedChannels = if (checked) selectedChannels + childName else selectedChannels - childName
+                                                    },
+                                                    modifier = Modifier.testTag("channel_check_$childName")
+                                                )
+                                            }
+                                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                Text(
+                                                    text = childName,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "查看账单 $childTxCount 笔 ›",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier
+                                                            .clickable { inspectingBillsChannel = childName }
+                                                            .testTag("channel_bills_button_$childName")
+                                                    )
+                                                    if (childRuleCount > 0) {
+                                                        Text(
+                                                            text = "· $childRuleCount 规则",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            if (!multiSelectMode) {
+                                                IconButton(
+                                                    onClick = { viewModel.setChannelParent(childName, null) },
+                                                    modifier = Modifier
+                                                        .size(36.dp)
+                                                        .testTag("channel_unparent_$childName")
+                                                ) {
+                                                    Icon(
+                                                        Icons.Rounded.Close,
+                                                        contentDescription = "移出父渠道",
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(17.dp)
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick = { renameTarget = childName },
+                                                    modifier = Modifier
+                                                        .size(36.dp)
+                                                        .testTag("channel_edit_$childName")
+                                                ) {
+                                                    Icon(
+                                                        Icons.Rounded.Edit,
+                                                        contentDescription = "编辑子渠道名称",
+                                                        tint = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.size(17.dp)
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick = { deleteTarget = childName },
+                                                    enabled = allChannels.size > 1,
+                                                    modifier = Modifier
+                                                        .size(36.dp)
+                                                        .testTag("channel_delete_$childName")
+                                                ) {
+                                                    Icon(
+                                                        AppIcons.DeleteOutline,
+                                                        contentDescription = "删除子渠道",
+                                                        tint = MaterialTheme.colorScheme.error,
+                                                        modifier = Modifier.size(17.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    inspectingBillsChannel?.let { targetCh ->
+        val descendants = remember(targetCh, allChannels, settings.channelParentMap) {
+            ChannelCatalog.descendantsOf(targetCh, allChannels, settings.channelParentMap)
+        }
+        val exactTxs = remember(targetCh, txListByChannel) {
+            txListByChannel[targetCh].orEmpty()
+        }
+        val withChildrenTxs = remember(targetCh, descendants, allTransactions) {
+            if (descendants.isEmpty()) exactTxs else {
+                val targetSet = (listOf(targetCh) + descendants).mapTo(HashSet()) { it.lowercase() }
+                allTransactions.filter { tx ->
+                    ChannelSplitter.splitChannels(tx.channel).any { it.lowercase() in targetSet }
+                }
+            }
+        }
+        LinkedTransactionsDialog(
+            title = "渠道「$targetCh」关联账单",
+            exactTransactions = exactTxs,
+            withChildrenTransactions = withChildrenTxs,
+            hasChildren = descendants.isNotEmpty(),
+            settings = settings,
+            viewModel = viewModel,
+            onDismiss = { inspectingBillsChannel = null }
+        )
     }
 
     if (showBatchParentPicker) {
@@ -562,6 +775,7 @@ fun ChannelManagementScreen(
                                 FilterChip(
                                     selected = false,
                                     onClick = {
+                                        expandedParents = expandedParents + target
                                         viewModel.batchSetChannelParent(selectedChannels, target)
                                         selectedChannels = emptySet()
                                         multiSelectMode = false
@@ -576,58 +790,6 @@ fun ChannelManagementScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showBatchParentPicker = false }) { Text("关闭") }
-            }
-        )
-    }
-
-    if (showConsolidateDialog) {
-        var syncTx by remember { mutableStateOf(true) }
-        var syncRules by remember { mutableStateOf(true) }
-        AlertDialog(
-            onDismissRequest = { showConsolidateDialog = false },
-            title = { Text("一键整合子渠道到父渠道？") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "将所有已配置附属关系的子渠道账单与规则一键归并至其根父渠道（如将「花呗」「余额宝」整合至「支付宝」）。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("整合历史账单渠道", style = MaterialTheme.typography.bodySmall)
-                        Switch(checked = syncTx, onCheckedChange = { syncTx = it })
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("整合识别规则渠道", style = MaterialTheme.typography.bodySmall)
-                        Switch(checked = syncRules, onCheckedChange = { syncRules = it })
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConsolidateDialog = false }) { Text("取消") }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.consolidateChannelChildrenToParent(
-                            parentName = null,
-                            syncTransactions = syncTx,
-                            syncRules = syncRules
-                        )
-                        showConsolidateDialog = false
-                    },
-                    modifier = Modifier.testTag("channel_consolidate_confirm")
-                ) {
-                    Text("确认整合")
-                }
             }
         )
     }
@@ -667,7 +829,7 @@ fun ChannelManagementScreen(
                             onClick = { selectedParent = null },
                             label = { Text("独立父渠道") }
                         )
-                        allChannels.take(12).forEach { ch ->
+                        topLevelChannels.take(12).forEach { ch ->
                             FilterChip(
                                 selected = selectedParent == ch,
                                 onClick = { selectedParent = ch },
@@ -689,10 +851,12 @@ fun ChannelManagementScreen(
                 Button(
                     onClick = {
                         val trimmed = newName.trim()
-                        viewModel.addCustomChannel(name = trimmed, syncAiPrompt = syncAi)
-                        if (selectedParent != null && !selectedParent.equals(trimmed, ignoreCase = true)) {
-                            viewModel.setChannelParent(trimmed, selectedParent)
-                        }
+                        selectedParent?.let { expandedParents = expandedParents + it }
+                        viewModel.addCustomChannel(
+                            name = trimmed,
+                            syncAiPrompt = syncAi,
+                            parentName = selectedParent
+                        )
                         showAddDialog = false
                     },
                     enabled = newName.trim().isNotEmpty(),
@@ -712,7 +876,7 @@ fun ChannelManagementScreen(
         var syncTx by remember(oldName) { mutableStateOf(true) }
         var syncRules by remember(oldName) { mutableStateOf(true) }
         var syncAi by remember(oldName) { mutableStateOf(true) }
-        val txCount = txCountByChannel[oldName] ?: 0
+        val txCount = txListByChannel[oldName]?.size ?: 0
         val ruleCount = ruleCountByChannel[oldName] ?: 0
         AlertDialog(
             onDismissRequest = { renameTarget = null },
@@ -728,6 +892,14 @@ fun ChannelManagementScreen(
                             .fillMaxWidth()
                             .testTag("channel_rename_input")
                     )
+                    OutlinedButton(
+                        onClick = { inspectingBillsChannel = oldName },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("channel_rename_view_bills")
+                    ) {
+                        Text("快捷查看关联账单（$txCount 笔）")
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -793,12 +965,21 @@ fun ChannelManagementScreen(
         var syncTx by remember(target) { mutableStateOf(true) }
         var syncRules by remember(target) { mutableStateOf(true) }
         var syncAi by remember(target) { mutableStateOf(true) }
+        val txCount = txListByChannel[target]?.size ?: 0
 
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("删除渠道「$target」") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick = { inspectingBillsChannel = target },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("channel_delete_view_bills")
+                    ) {
+                        Text("查看关联账单（$txCount 笔）")
+                    }
                     Text(
                         text = "删除后，已关联该渠道的历史账单与规则将自动归属到以下渠道：",
                         style = MaterialTheme.typography.bodySmall,
@@ -884,7 +1065,7 @@ fun ChannelManagementScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "将把常用渠道列表与默认归属关系恢复为内置默认集合（不会删除历史账单记录）。",
+                        text = "将把常用渠道列表与默认归属关系恢复为内置默认集合（不会删除历史账单记录，且支持撤回）。",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Row(

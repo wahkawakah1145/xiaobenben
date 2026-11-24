@@ -6,19 +6,19 @@
     android:viewportHeight="108">
     <!-- Ink ridge horizon + minimalist sun circle -->
     <path
-        android:fillColor="#E9E2D0"
+        android:fillColor="@color/launcher_ink_sun"
         android:pathData="M65,41 m-6.5,0 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0" />
     <path
         android:fillColor="#00000000"
         android:pathData="M29,69 L44,50 L56,63 L64,54 L79,69"
         android:strokeWidth="4.5"
-        android:strokeColor="#F4EFE6"
+        android:strokeColor="@color/launcher_ink_ridge"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
     <path
         android:fillColor="#00000000"
         android:pathData="M34,76 L74,76"
         android:strokeWidth="3.5"
-        android:strokeColor="#A7C4BC"
+        android:strokeColor="@color/launcher_ink_line"
         android:strokeLineCap="round" />
 </vector>

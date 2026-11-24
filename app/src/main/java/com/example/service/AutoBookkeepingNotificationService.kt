@@ -119,20 +119,10 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         val policy = monitoredPolicy
         val isLikelyFinancial = ChinaNotificationParser.isLikelyFinancialNotification(sbn.packageName, title, content)
         val shouldProcess = shouldProcessNotificationPackage(sbn.packageName, isSelfTestNotification, policy, isLikelyFinancial)
+        val shouldWriteLog = shouldLogNotificationPackage(sbn.packageName, isSelfTestNotification, policy)
         val occurredAt = sbn.postTime.takeIf { it > 0L } ?: now
 
         if (!shouldProcess) {
-            serviceScope.launch {
-                recordLogBoth(
-                    packageName = sbn.packageName,
-                    appLabel = appLabel,
-                    title = title,
-                    content = content,
-                    status = "非监听范围已忽略",
-                    summary = "不在已选监听应用列表内",
-                    capturedAtMillis = now
-                )
-            }
             return
         }
 
@@ -142,7 +132,8 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 appLabel = appLabel,
                 title = title,
                 content = content,
-                occurredAt = occurredAt
+                occurredAt = occurredAt,
+                shouldWriteLog = shouldWriteLog
             )
         }
     }
@@ -158,6 +149,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
     }
 
     private suspend fun recordLogBoth(
+        shouldWriteLog: Boolean,
         packageName: String,
         appLabel: String,
         title: String,
@@ -166,6 +158,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         summary: String,
         capturedAtMillis: Long = System.currentTimeMillis()
     ) {
+        if (!shouldWriteLog) return
         NotificationBridge.appendLog(
             packageName = packageName,
             appLabel = appLabel,
@@ -192,12 +185,14 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         appLabel: String,
         title: String,
         content: String,
-        occurredAt: Long
+        occurredAt: Long,
+        shouldWriteLog: Boolean
     ) {
         repository.ensureDefaultRulesSeeded()
         val settings = repository.getSettingsOnce()
         if (!settings.autoRecordEnabled) {
             recordLogBoth(
+                shouldWriteLog = shouldWriteLog,
                 packageName = packageName,
                 appLabel = appLabel,
                 title = title,
@@ -217,6 +212,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         )
         if (ignoreRule != null) {
             recordLogBoth(
+                shouldWriteLog = shouldWriteLog,
                 packageName = packageName,
                 appLabel = appLabel,
                 title = title,
@@ -278,6 +274,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         // Notifications without a valid financial amount are automatically ignored (never prompt inquiry)
         if (parsed == null || !parsed.isFinancialTransaction || parsed.amountCents <= 0L) {
             recordLogBoth(
+                shouldWriteLog = shouldWriteLog,
                 packageName = packageName,
                 appLabel = appLabel,
                 title = title,
@@ -308,6 +305,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             val currencySymbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
             val formattedAmount = "$currencySymbol%.2f".format(parsed.amountCents / 100.0)
             recordLogBoth(
+                shouldWriteLog = shouldWriteLog,
                 packageName = packageName,
                 appLabel = parsed.channel,
                 title = title,
@@ -355,6 +353,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             val methodTag = if (parsed.parseMethod == ParseMethod.LOCAL_NLP) "AI理解" else "规则匹配"
             val stateLabel = if (needsManualConfirm) "待进软件确认" else "已自动入账"
             recordLogBoth(
+                shouldWriteLog = shouldWriteLog,
                 packageName = packageName,
                 appLabel = parsed.channel,
                 title = title,
@@ -376,6 +375,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             }
         }.onFailure { error ->
             recordLogBoth(
+                shouldWriteLog = shouldWriteLog,
                 packageName = packageName,
                 appLabel = parsed.channel,
                 title = title,
@@ -396,6 +396,23 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
         private const val TAG = "AutoBookkeepingSvc"
         private const val DEDUP_WINDOW_MS = 15_000L
 
+        /**
+         * Notification logs strictly record notifications from user-selected monitored apps
+         * (or default watched payment/SMS apps when not yet customized) plus explicit self-test alerts.
+         */
+        fun shouldLogNotificationPackage(
+            packageName: String,
+            isSelfTest: Boolean,
+            policy: MonitoredAppPolicy
+        ): Boolean {
+            if (isSelfTest) return true
+            return if (policy.customized) {
+                packageName in policy.packages
+            } else {
+                ChinaPaymentCatalog.isWatchedPackage(packageName)
+            }
+        }
+
         fun shouldProcessNotificationPackage(
             packageName: String,
             isSelfTest: Boolean,
@@ -403,12 +420,7 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
             isLikelyFinancial: Boolean
         ): Boolean {
             if (isSelfTest) return true
-            val isWatched = if (policy.customized) {
-                packageName in policy.packages
-            } else {
-                ChinaPaymentCatalog.isWatchedPackage(packageName)
-            }
-            if (isWatched) return true
+            if (shouldLogNotificationPackage(packageName, isSelfTest = false, policy = policy)) return true
             return policy.allowOtherFinancialAppsFallback && isLikelyFinancial
         }
 

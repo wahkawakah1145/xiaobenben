@@ -1019,9 +1019,14 @@ class LedgerViewModel(
         type: TransactionType,
         name: String,
         syncAiPrompt: Boolean = true,
-        iconKey: String? = null
+        iconKey: String? = null,
+        parentName: String? = null
     ) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
+            val prevAiConfig = if (syncAiPrompt) repository.getAiConfigOnce() else null
+            val cleanName = name.trim()
+            val cleanParent = parentName?.trim()?.takeIf { it.isNotEmpty() && it != cleanName }
             repository.addCustomCategory(
                 type = type,
                 rawName = name,
@@ -1029,8 +1034,17 @@ class LedgerViewModel(
                 iconKey = iconKey
             )
                 .onSuccess { res ->
-                    val aiSuffix = if (res.aiPromptSynced) "，已同步 AI 理解提示词" else ""
-                    _actionMessage.value = "已添加${type.label}分类「${name.trim()}」$aiSuffix"
+                    if (cleanParent != null) {
+                        repository.setCategoryParent(cleanName, cleanParent)
+                    }
+                    val parentSuffix = if (cleanParent != null) "并归属到「$cleanParent」" else ""
+                    val aiSuffix = if (res.aiPromptSynced) "，已同步 AI 提示词" else ""
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = "已添加${type.label}分类「$cleanName」$parentSuffix$aiSuffix",
+                        restoredBudgetSettings = prevSettings,
+                        restoredAiConfig = if (res.aiPromptSynced) prevAiConfig else null,
+                        customUndoSuccessMessage = "已撤回新增分类「$cleanName」"
+                    )
                 }
                 .onFailure { err ->
                     _actionMessage.value = err.message ?: "添加分类失败"
@@ -1047,6 +1061,22 @@ class LedgerViewModel(
         syncAiPrompt: Boolean = true
     ) {
         viewModelScope.launch {
+            val cleanOld = oldName.trim()
+            val cleanNew = newName.trim()
+            val prevSettings = repository.getSettingsOnce()
+            val prevAiConfig = if (syncAiPrompt) repository.getAiConfigOnce() else null
+            val affectedTransactions = if (syncTransactions) {
+                repository.getAllTransactionsOnce().filter {
+                    it.type == type.name && it.category == cleanOld
+                }
+            } else {
+                emptyList()
+            }
+            val affectedRules = if (syncRules) {
+                repository.getRulesOnce().filter { it.defaultCategory == cleanOld }
+            } else {
+                emptyList()
+            }
             repository.renameCategory(
                 type = type,
                 oldName = oldName,
@@ -1062,7 +1092,14 @@ class LedgerViewModel(
                         if (res.aiPromptSynced) add("AI 提示词")
                     }.joinToString("、")
                     val suffix = if (details.isNotEmpty()) "（已同步 $details）" else ""
-                    _actionMessage.value = "已将「$oldName」改为「${newName.trim()}」$suffix"
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = "已将「$cleanOld」改为「$cleanNew」$suffix",
+                        deletedItems = affectedTransactions,
+                        deletedRules = affectedRules,
+                        restoredBudgetSettings = prevSettings,
+                        restoredAiConfig = if (res.aiPromptSynced) prevAiConfig else null,
+                        customUndoSuccessMessage = "已撤回修改，恢复分类「$cleanOld」"
+                    )
                 }
                 .onFailure { err ->
                     _actionMessage.value = err.message ?: "修改分类失败"
@@ -1126,13 +1163,19 @@ class LedgerViewModel(
 
     fun setCategoryIcon(categoryName: String, iconKey: String?) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
             repository.setCategoryIcon(categoryName, iconKey)
                 .onSuccess {
-                    _actionMessage.value = if (iconKey.isNullOrBlank()) {
+                    val msg = if (iconKey.isNullOrBlank()) {
                         "已恢复「$categoryName」默认图标"
                     } else {
                         "已更新「$categoryName」图标"
                     }
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = msg,
+                        restoredBudgetSettings = prevSettings,
+                        customUndoSuccessMessage = "已撤回「$categoryName」图标修改"
+                    )
                 }
                 .onFailure { err ->
                     _actionMessage.value = err.message ?: "更新图标失败"
@@ -1142,13 +1185,21 @@ class LedgerViewModel(
 
     fun resetCategoriesToDefault(syncAiPrompt: Boolean = true, resetIcons: Boolean = false) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
+            val prevAiConfig = if (syncAiPrompt) repository.getAiConfigOnce() else null
             repository.resetCategoriesToDefault(syncAiPrompt = syncAiPrompt, resetIcons = resetIcons)
                 .onSuccess {
-                    _actionMessage.value = if (syncAiPrompt) {
+                    val msg = if (syncAiPrompt) {
                         "已恢复默认分类列表并同步 AI 提示词"
                     } else {
                         "已恢复默认分类列表"
                     }
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = msg,
+                        restoredBudgetSettings = prevSettings,
+                        restoredAiConfig = prevAiConfig,
+                        customUndoSuccessMessage = "已撤回恢复默认分类"
+                    )
                 }
                 .onFailure { err ->
                     _actionMessage.value = err.message ?: "恢复默认分类失败"
@@ -1156,12 +1207,29 @@ class LedgerViewModel(
         }
     }
 
-    fun addCustomChannel(name: String, syncAiPrompt: Boolean = true) {
+    fun addCustomChannel(
+        name: String,
+        syncAiPrompt: Boolean = true,
+        parentName: String? = null
+    ) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
+            val prevAiConfig = if (syncAiPrompt) repository.getAiConfigOnce() else null
+            val cleanName = name.trim()
+            val cleanParent = parentName?.trim()?.takeIf { it.isNotEmpty() && !it.equals(cleanName, ignoreCase = true) }
             repository.addCustomChannel(rawName = name, syncAiPrompt = syncAiPrompt)
                 .onSuccess { res ->
-                    val aiSuffix = if (res.aiPromptSynced) "，已同步 AI 理解提示词" else ""
-                    _actionMessage.value = "已添加渠道「${name.trim()}」$aiSuffix"
+                    if (cleanParent != null) {
+                        repository.setChannelParent(cleanName, cleanParent)
+                    }
+                    val parentSuffix = if (cleanParent != null) "并归属到「$cleanParent」" else ""
+                    val aiSuffix = if (res.aiPromptSynced) "，已同步 AI 提示词" else ""
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = "已添加渠道「$cleanName」$parentSuffix$aiSuffix",
+                        restoredBudgetSettings = prevSettings,
+                        restoredAiConfig = if (res.aiPromptSynced) prevAiConfig else null,
+                        customUndoSuccessMessage = "已撤回新增渠道「$cleanName」"
+                    )
                 }
                 .onFailure { err ->
                     _actionMessage.value = err.message ?: "添加渠道失败"
@@ -1177,6 +1245,30 @@ class LedgerViewModel(
         syncAiPrompt: Boolean = true
     ) {
         viewModelScope.launch {
+            val cleanOld = oldName.trim()
+            val cleanNew = newName.trim()
+            val prevSettings = repository.getSettingsOnce()
+            val prevAiConfig = if (syncAiPrompt) repository.getAiConfigOnce() else null
+            val affectedTransactions = if (syncTransactions) {
+                repository.getAllTransactionsOnce().filter { tx ->
+                    tx.channel.equals(cleanOld, ignoreCase = true) ||
+                        com.example.model.ChannelSplitter.splitChannels(tx.channel)
+                            .any { it.equals(cleanOld, ignoreCase = true) }
+                }
+            } else {
+                emptyList()
+            }
+            val affectedRules = if (syncRules) {
+                repository.getRulesOnce().filter { rule ->
+                    !rule.isIgnoreRule && (
+                        rule.channelName.equals(cleanOld, ignoreCase = true) ||
+                            com.example.model.ChannelSplitter.splitChannels(rule.channelName)
+                                .any { it.equals(cleanOld, ignoreCase = true) }
+                        )
+                }
+            } else {
+                emptyList()
+            }
             repository.renameChannel(
                 oldName = oldName,
                 rawNewName = newName,
@@ -1191,7 +1283,14 @@ class LedgerViewModel(
                         if (res.aiPromptSynced) add("AI 提示词")
                     }.joinToString("、")
                     val suffix = if (details.isNotEmpty()) "（已同步 $details）" else ""
-                    _actionMessage.value = "已将渠道「$oldName」改为「${newName.trim()}」$suffix"
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = "已将渠道「$cleanOld」改为「$cleanNew」$suffix",
+                        deletedItems = affectedTransactions,
+                        deletedRules = affectedRules,
+                        restoredBudgetSettings = prevSettings,
+                        restoredAiConfig = if (res.aiPromptSynced) prevAiConfig else null,
+                        customUndoSuccessMessage = "已撤回修改，恢复渠道「$cleanOld」"
+                    )
                 }
                 .onFailure { err ->
                     _actionMessage.value = err.message ?: "修改渠道失败"
@@ -1255,13 +1354,21 @@ class LedgerViewModel(
 
     fun resetChannelsToDefault(syncAiPrompt: Boolean = true) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
+            val prevAiConfig = if (syncAiPrompt) repository.getAiConfigOnce() else null
             repository.resetChannelsToDefault(syncAiPrompt = syncAiPrompt)
                 .onSuccess {
-                    _actionMessage.value = if (syncAiPrompt) {
+                    val msg = if (syncAiPrompt) {
                         "已恢复默认渠道列表并同步 AI 提示词"
                     } else {
                         "已恢复默认渠道列表"
                     }
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = msg,
+                        restoredBudgetSettings = prevSettings,
+                        restoredAiConfig = prevAiConfig,
+                        customUndoSuccessMessage = "已撤回恢复默认渠道"
+                    )
                 }
                 .onFailure { err ->
                     _actionMessage.value = err.message ?: "恢复默认渠道失败"
@@ -1271,20 +1378,34 @@ class LedgerViewModel(
 
     fun reorderCategories(type: TransactionType, orderedNames: List<String>) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
             repository.reorderCategories(type, orderedNames)
+                .onSuccess {
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = "已更新${type.label}分类排序",
+                        restoredBudgetSettings = prevSettings,
+                        customUndoSuccessMessage = "已撤回分类排序修改"
+                    )
+                }
                 .onFailure { err -> _actionMessage.value = err.message ?: "分类排序失败" }
         }
     }
 
     fun setCategoryParent(childName: String, parentName: String?) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
             repository.setCategoryParent(childName, parentName)
                 .onSuccess {
-                    _actionMessage.value = if (parentName.isNullOrBlank()) {
-                        "已解除「$childName」的归属关系"
+                    val msg = if (parentName.isNullOrBlank()) {
+                        "已将「$childName」移出父类"
                     } else {
                         "已将「$childName」归属到「$parentName」"
                     }
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = msg,
+                        restoredBudgetSettings = prevSettings,
+                        customUndoSuccessMessage = "已撤回分类归属修改"
+                    )
                 }
                 .onFailure { err -> _actionMessage.value = err.message ?: "设置分类归属失败" }
         }
@@ -1292,14 +1413,20 @@ class LedgerViewModel(
 
     fun batchSetCategoryParent(childNames: Collection<String>, parentName: String?) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
             repository.batchSetCategoryParent(childNames, parentName)
                 .onSuccess { count ->
                     if (count > 0) {
-                        _actionMessage.value = if (parentName.isNullOrBlank()) {
-                            "已解除 $count 个分类的归属关系"
+                        val msg = if (parentName.isNullOrBlank()) {
+                            "已将 $count 个分类移出父类"
                         } else {
                             "已将 $count 个分类一键归属到「$parentName」"
                         }
+                        _deleteUndoBanner.value = DeleteUndoBanner(
+                            message = msg,
+                            restoredBudgetSettings = prevSettings,
+                            customUndoSuccessMessage = "已撤回批量分类归属修改"
+                        )
                     }
                 }
                 .onFailure { err -> _actionMessage.value = err.message ?: "批量归属分类失败" }
@@ -1308,7 +1435,21 @@ class LedgerViewModel(
 
     fun setCategoryShowChildren(showChildren: Boolean) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
+            if (prevSettings.categoryShowChildren == showChildren) return@launch
             repository.setCategoryShowChildren(showChildren)
+                .onSuccess {
+                    val msg = if (showChildren) {
+                        "账单分类将显示子类名（不改动账单原始内容）"
+                    } else {
+                        "账单分类将显示父类名（不改动账单原始内容）"
+                    }
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = msg,
+                        restoredBudgetSettings = prevSettings,
+                        customUndoSuccessMessage = "已撤回账单分类显示方式切换"
+                    )
+                }
                 .onFailure { err -> _actionMessage.value = err.message ?: "切换分类显示模式失败" }
         }
     }
@@ -1334,20 +1475,34 @@ class LedgerViewModel(
 
     fun reorderChannels(orderedNames: List<String>) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
             repository.reorderChannels(orderedNames)
+                .onSuccess {
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = "已更新渠道排序",
+                        restoredBudgetSettings = prevSettings,
+                        customUndoSuccessMessage = "已撤回渠道排序修改"
+                    )
+                }
                 .onFailure { err -> _actionMessage.value = err.message ?: "渠道排序失败" }
         }
     }
 
     fun setChannelParent(childName: String, parentName: String?) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
             repository.setChannelParent(childName, parentName)
                 .onSuccess {
-                    _actionMessage.value = if (parentName.isNullOrBlank()) {
-                        "已解除「$childName」的归属关系"
+                    val msg = if (parentName.isNullOrBlank()) {
+                        "已将渠道「$childName」移出父渠道"
                     } else {
                         "已将渠道「$childName」归属到「$parentName」"
                     }
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = msg,
+                        restoredBudgetSettings = prevSettings,
+                        customUndoSuccessMessage = "已撤回渠道归属修改"
+                    )
                 }
                 .onFailure { err -> _actionMessage.value = err.message ?: "设置渠道归属失败" }
         }
@@ -1355,14 +1510,20 @@ class LedgerViewModel(
 
     fun batchSetChannelParent(childNames: Collection<String>, parentName: String?) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
             repository.batchSetChannelParent(childNames, parentName)
                 .onSuccess { count ->
                     if (count > 0) {
-                        _actionMessage.value = if (parentName.isNullOrBlank()) {
-                            "已解除 $count 个渠道的归属关系"
+                        val msg = if (parentName.isNullOrBlank()) {
+                            "已将 $count 个渠道移出父渠道"
                         } else {
                             "已将 $count 个渠道一键归属到「$parentName」"
                         }
+                        _deleteUndoBanner.value = DeleteUndoBanner(
+                            message = msg,
+                            restoredBudgetSettings = prevSettings,
+                            customUndoSuccessMessage = "已撤回批量渠道归属修改"
+                        )
                     }
                 }
                 .onFailure { err -> _actionMessage.value = err.message ?: "批量归属渠道失败" }
@@ -1371,7 +1532,21 @@ class LedgerViewModel(
 
     fun setChannelShowChildren(showChildren: Boolean) {
         viewModelScope.launch {
+            val prevSettings = repository.getSettingsOnce()
+            if (prevSettings.channelShowChildren == showChildren) return@launch
             repository.setChannelShowChildren(showChildren)
+                .onSuccess {
+                    val msg = if (showChildren) {
+                        "账单渠道将显示子渠道名（不改动账单原始内容）"
+                    } else {
+                        "账单渠道将显示父渠道名（不改动账单原始内容）"
+                    }
+                    _deleteUndoBanner.value = DeleteUndoBanner(
+                        message = msg,
+                        restoredBudgetSettings = prevSettings,
+                        customUndoSuccessMessage = "已撤回账单渠道显示方式切换"
+                    )
+                }
                 .onFailure { err -> _actionMessage.value = err.message ?: "切换渠道显示模式失败" }
         }
     }

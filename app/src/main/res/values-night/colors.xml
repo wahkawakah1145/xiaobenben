@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fallback dark Monet palette for Android 11 (API 30); Android 12+ uses values-night-v31 -->
+    <color name="monet_icon_bg">#FF14362C</color>
+    <color name="monet_icon_fg">#FF86E5C6</color>
+
+    <!-- Dynamic Light/Dark Adaptive Launcher Icon Tokens (Dark Mode) -->
+    <color name="launcher_default_bg">#FF0F1E1B</color>
+    <color name="launcher_default_card">#FF1B3B34</color>
+    <color name="launcher_default_glyph">#FF6FF7DC</color>
+
+    <color name="launcher_minimal_bg">#FF141918</color>
+    <color name="launcher_minimal_stroke">#FFDCE5E2</color>
+    <color name="launcher_minimal_accent">#FF2DD4BF</color>
+
+    <color name="launcher_ink_bg">#FF0E1F1E</color>
+    <color name="launcher_ink_sun">#FFC8BFA8</color>
+    <color name="launcher_ink_ridge">#FFD8E6E2</color>
+    <color name="launcher_ink_line">#FF5E9E95</color>
+
+    <color name="launcher_cyber_bg">#FF0B1220</color>
+    <color name="launcher_cyber_frame">#FF38BDF8</color>
+    <color name="launcher_cyber_glyph">#FF22D3EE</color>
+
+    <color name="launcher_vintage_bg">#FF231916</color>
+    <color name="launcher_vintage_stroke">#FFDECBB0</color>
+    <color name="launcher_vintage_spine">#FF9E8264</color>
+    <color name="launcher_vintage_clasp">#FFD4A359</color>
+</resources>

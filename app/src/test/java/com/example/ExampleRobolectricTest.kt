@@ -2841,6 +2841,268 @@ class ExampleRobolectricTest {
     // Restore original appearance
     store.saveAppearanceSettings(originalAppearance)
   }
+
+  @Test
+  fun `notification logs strictly record selected monitored apps and exclude unselected packages`() {
+    val customPolicy = com.example.service.AutoBookkeepingNotificationService.MonitoredAppPolicy(
+      customized = true,
+      packages = setOf("com.tencent.mm", "com.eg.android.AlipayGphone"),
+      allowOtherFinancialAppsFallback = true
+    )
+
+    // Selected apps and explicit self-test notifications are logged
+    org.junit.Assert.assertTrue(
+      com.example.service.AutoBookkeepingNotificationService.shouldLogNotificationPackage(
+        packageName = "com.tencent.mm",
+        isSelfTest = false,
+        policy = customPolicy
+      )
+    )
+    org.junit.Assert.assertTrue(
+      com.example.service.AutoBookkeepingNotificationService.shouldLogNotificationPackage(
+        packageName = "com.example",
+        isSelfTest = true,
+        policy = customPolicy
+      )
+    )
+
+    // Unselected app is NOT logged even if financial fallback is enabled
+    org.junit.Assert.assertFalse(
+      com.example.service.AutoBookkeepingNotificationService.shouldLogNotificationPackage(
+        packageName = "com.icbc",
+        isSelfTest = false,
+        policy = customPolicy
+      )
+    )
+    // Unselected financial app may still be processed by fallback without polluting monitored-only log
+    org.junit.Assert.assertTrue(
+      com.example.service.AutoBookkeepingNotificationService.shouldProcessNotificationPackage(
+        packageName = "com.icbc",
+        isSelfTest = false,
+        policy = customPolicy,
+        isLikelyFinancial = true
+      )
+    )
+
+    // Default (uncustomized) policy logs default watched payment apps but not unrelated apps
+    val defaultPolicy = com.example.service.AutoBookkeepingNotificationService.MonitoredAppPolicy(
+      customized = false,
+      packages = emptySet(),
+      allowOtherFinancialAppsFallback = true
+    )
+    org.junit.Assert.assertTrue(
+      com.example.service.AutoBookkeepingNotificationService.shouldLogNotificationPackage(
+        packageName = "com.tencent.mm",
+        isSelfTest = false,
+        policy = defaultPolicy
+      )
+    )
+    org.junit.Assert.assertFalse(
+      com.example.service.AutoBookkeepingNotificationService.shouldLogNotificationPackage(
+        packageName = "com.random.unrelated.game",
+        isSelfTest = false,
+        policy = defaultPolicy
+      )
+    )
+  }
+
+  @Test
+  fun `draggable hierarchy math supports multi-item crossing both ways and middle-band hover dwell for nesting`() {
+    // 4 items of varying heights stacked vertically
+    val bounds = listOf(
+      com.example.ui.components.HierarchyItemBounds(top = 0f, height = 100f),   // idx 0: 0..100
+      com.example.ui.components.HierarchyItemBounds(top = 110f, height = 160f), // idx 1: 110..270 (tall expanded parent)
+      com.example.ui.components.HierarchyItemBounds(top = 280f, height = 100f), // idx 2: 280..380
+      com.example.ui.components.HierarchyItemBounds(top = 390f, height = 100f)  // idx 3: 390..490
+    )
+
+    // 1. Hovering inside middle dwell zone of item 1 returns HoverForNest (does not swap prematurely)
+    val hoverDecision = com.example.ui.components.DraggableHierarchyMath.evaluateDragPosition(
+      draggedIdx = 0,
+      dragCenterY = 190f, // 50% of item 1
+      boundsInOrder = bounds,
+      enableNesting = true,
+      canNestAtIndex = { true },
+      activeNestTargetIdx = null
+    )
+    assertEquals(com.example.ui.components.DragHitDecision.HoverForNest(1), hoverDecision)
+
+    // 2. Dragging downward past item 1's nest zone (bottom edge >= 78%) swaps across item 1 cleanly
+    val crossOneDown = com.example.ui.components.DraggableHierarchyMath.evaluateDragPosition(
+      draggedIdx = 0,
+      dragCenterY = 250f, // > 110 + 160*0.82 = 241.2
+      boundsInOrder = bounds,
+      enableNesting = true,
+      canNestAtIndex = { true },
+      activeNestTargetIdx = null
+    )
+    assertEquals(com.example.ui.components.DragHitDecision.SwapToIndex(1), crossOneDown)
+
+    // 3. Fast drag downward past multiple items jumps directly across to index 3
+    val crossMultiDown = com.example.ui.components.DraggableHierarchyMath.evaluateDragPosition(
+      draggedIdx = 0,
+      dragCenterY = 475f,
+      boundsInOrder = bounds,
+      enableNesting = true,
+      canNestAtIndex = { true },
+      activeNestTargetIdx = null
+    )
+    assertEquals(com.example.ui.components.DragHitDecision.SwapToIndex(3), crossMultiDown)
+
+    // 4. Dragging upward from index 3 across tall item 1 to index 0 succeeds without stalling
+    val crossMultiUp = com.example.ui.components.DraggableHierarchyMath.evaluateDragPosition(
+      draggedIdx = 3,
+      dragCenterY = 15f,
+      boundsInOrder = bounds,
+      enableNesting = true,
+      canNestAtIndex = { true },
+      activeNestTargetIdx = null
+    )
+    assertEquals(com.example.ui.components.DragHitDecision.SwapToIndex(0), crossMultiUp)
+
+    // 5. With nesting disabled (e.g. bill field order or sibling children), midpoint crossing swaps smoothly
+    val noNestSwap = com.example.ui.components.DraggableHierarchyMath.evaluateDragPosition(
+      draggedIdx = 0,
+      dragCenterY = 200f, // past item 1 center (190)
+      boundsInOrder = bounds,
+      enableNesting = false,
+      canNestAtIndex = { false },
+      activeNestTargetIdx = null
+    )
+    assertEquals(com.example.ui.components.DragHitDecision.SwapToIndex(1), noNestSwap)
+    assertEquals(450L, com.example.ui.components.DraggableHierarchyMath.DEFAULT_NEST_DWELL_MS)
+  }
+
+  @Test
+  fun `category and channel hierarchy display toggles non-destructively and viewModel undo restores modifications`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val vm = com.example.viewmodel.LedgerViewModel(repo)
+    val originalSettings = repo.observeSettings().first()
+    val originalAi = repo.observeAiConfig().first()
+
+    val tx = com.example.model.LedgerTransaction(
+      id = "hier-nd-tx-1",
+      amountCents = 2800L,
+      currencyCode = "CNY",
+      type = com.example.model.TransactionType.EXPENSE.name,
+      category = "咖啡茶饮",
+      merchant = "瑞幸咖啡",
+      channel = "花呗子卡",
+      occurredAtMillis = 1_763_750_000_000L,
+      confirmed = true
+    )
+    repo.addTransaction(tx).getOrThrow()
+
+    val parentMap = mapOf("咖啡茶饮" to "餐饮美食")
+    val channelParentMap = mapOf("花呗子卡" to "支付宝")
+    assertEquals(
+      listOf("咖啡茶饮"),
+      com.example.model.CategoryCatalog.descendantsOf("餐饮美食", listOf("餐饮美食", "咖啡茶饮"), parentMap)
+    )
+    assertEquals(
+      listOf("花呗子卡"),
+      com.example.model.ChannelCatalog.descendantsOf("支付宝", listOf("支付宝", "花呗子卡"), channelParentMap)
+    )
+
+    // Non-destructive display mode: toggling categoryShowChildren / channelShowChildren changes displayed label only
+    assertEquals(
+      "咖啡茶饮",
+      com.example.model.CategoryCatalog.resolveDisplayCategory("咖啡茶饮", parentMap, showChildren = true)
+    )
+    assertEquals(
+      "餐饮美食",
+      com.example.model.CategoryCatalog.resolveDisplayCategory("咖啡茶饮", parentMap, showChildren = false)
+    )
+    assertEquals(
+      "花呗子卡",
+      com.example.model.ChannelCatalog.resolveDisplayChannel("花呗子卡", channelParentMap, showChildren = true)
+    )
+    assertEquals(
+      "支付宝",
+      com.example.model.ChannelCatalog.resolveDisplayChannel("花呗子卡", channelParentMap, showChildren = false)
+    )
+
+    // Raw database record stays untouched when toggling display mode via ViewModel
+    vm.setCategoryShowChildren(false)
+    var deadline = System.currentTimeMillis() + 3000L
+    while (vm.deleteUndoBanner.value == null && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+    val storedAfterToggle = repo.getTransactionsByIdsOnce(listOf(tx.id)).first()
+    assertEquals("咖啡茶饮", storedAfterToggle.category)
+    org.junit.Assert.assertFalse(repo.observeSettings().first().categoryShowChildren)
+    org.junit.Assert.assertNotNull(vm.deleteUndoBanner.value)
+
+    // Undo restores previous categoryShowChildren setting
+    vm.undoLastDelete()
+    deadline = System.currentTimeMillis() + 3000L
+    while (!repo.observeSettings().first().categoryShowChildren && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+    org.junit.Assert.assertTrue(repo.observeSettings().first().categoryShowChildren)
+
+    // Adding a custom channel with parent emits undo banner and undo removes it cleanly
+    vm.dismissDeleteUndoBanner()
+    vm.addCustomChannel("测试子渠道X", syncAiPrompt = false, parentName = "支付宝")
+    deadline = System.currentTimeMillis() + 3000L
+    while (vm.deleteUndoBanner.value == null && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+    org.junit.Assert.assertEquals("支付宝", repo.observeSettings().first().channelParentMap["测试子渠道X"])
+
+    vm.undoLastDelete()
+    deadline = System.currentTimeMillis() + 3000L
+    while (repo.observeSettings().first().channelParentMap.containsKey("测试子渠道X") && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+    org.junit.Assert.assertFalse(repo.observeSettings().first().channelParentMap.containsKey("测试子渠道X"))
+
+    // Cleanup
+    repo.deleteTransaction(tx.id)
+    repo.saveSettings(originalSettings)
+    repo.saveAiConfig(originalAi)
+  }
+
+  @Test
+  fun `adaptive launcher icon color resources dynamically differ between light and night modes`() {
+    val baseContext = ApplicationProvider.getApplicationContext<Context>()
+    val lightConfig = android.content.res.Configuration(baseContext.resources.configuration).apply {
+      uiMode = (uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or
+        android.content.res.Configuration.UI_MODE_NIGHT_NO
+    }
+    val nightConfig = android.content.res.Configuration(baseContext.resources.configuration).apply {
+      uiMode = (uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or
+        android.content.res.Configuration.UI_MODE_NIGHT_YES
+    }
+    val lightCtx = baseContext.createConfigurationContext(lightConfig)
+    val nightCtx = baseContext.createConfigurationContext(nightConfig)
+
+    val lightDefaultBg = lightCtx.getColor(R.color.launcher_default_bg)
+    val nightDefaultBg = nightCtx.getColor(R.color.launcher_default_bg)
+    org.junit.Assert.assertNotEquals(lightDefaultBg, nightDefaultBg)
+
+    val lightInkBg = lightCtx.getColor(R.color.launcher_ink_bg)
+    val nightInkBg = nightCtx.getColor(R.color.launcher_ink_bg)
+    org.junit.Assert.assertNotEquals(lightInkBg, nightInkBg)
+
+    val lightMinimalBg = lightCtx.getColor(R.color.launcher_minimal_bg)
+    val nightMinimalBg = nightCtx.getColor(R.color.launcher_minimal_bg)
+    org.junit.Assert.assertNotEquals(lightMinimalBg, nightMinimalBg)
+
+    val lightVintageBg = lightCtx.getColor(R.color.launcher_vintage_bg)
+    val nightVintageBg = nightCtx.getColor(R.color.launcher_vintage_bg)
+    org.junit.Assert.assertNotEquals(lightVintageBg, nightVintageBg)
+  }
 }
 
 

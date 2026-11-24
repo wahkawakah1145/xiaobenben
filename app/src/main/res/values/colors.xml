@@ -9,4 +9,27 @@
     <color name="white">#FFFFFFFF</color>
     <color name="monet_icon_bg">#FFC8F2E2</color>
     <color name="monet_icon_fg">#FF0F6B54</color>
+
+    <!-- Dynamic Light/Dark Adaptive Launcher Icon Tokens (Light Mode) -->
+    <color name="launcher_default_bg">#FF0C6756</color>
+    <color name="launcher_default_card">#FFFFFFFF</color>
+    <color name="launcher_default_glyph">#FF0C6756</color>
+
+    <color name="launcher_minimal_bg">#FFF2F5F4</color>
+    <color name="launcher_minimal_stroke">#FF1E2926</color>
+    <color name="launcher_minimal_accent">#FF0D9488</color>
+
+    <color name="launcher_ink_bg">#FF204A46</color>
+    <color name="launcher_ink_sun">#FFE9E2D0</color>
+    <color name="launcher_ink_ridge">#FFF4EFE6</color>
+    <color name="launcher_ink_line">#FFA7C4BC</color>
+
+    <color name="launcher_cyber_bg">#FFE6F4FE</color>
+    <color name="launcher_cyber_frame">#FF0284C7</color>
+    <color name="launcher_cyber_glyph">#FF0369A1</color>
+
+    <color name="launcher_vintage_bg">#FF6D4C41</color>
+    <color name="launcher_vintage_stroke">#FFFAF3E3</color>
+    <color name="launcher_vintage_spine">#FFE2CCA8</color>
+    <color name="launcher_vintage_clasp">#FFE8BE74</color>
 </resources>

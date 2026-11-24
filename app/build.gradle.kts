@@ -13,7 +13,7 @@ android {
     minSdk = 30
     targetSdk = 37
     versionCode = (project.findProperty("ciVersionCode") as? String)?.toIntOrNull() ?: 1
-    versionName = (project.findProperty("ciVersionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.0"
+    versionName = (project.findProperty("ciVersionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.1.4.529"
     val ciGithubRepo = (project.findProperty("ciGithubRepo") as? String)
       ?.trim()
       ?.takeIf { it.contains("/") }
