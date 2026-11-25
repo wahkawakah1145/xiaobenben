@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag name (e.g. v1.1.4.529)'
+        description: 'Release tag name (e.g. v1.1.4.530)'
         required: true
-        default: 'v1.1.4.529'
+        default: 'v1.1.4.530'
       release_notes:
         description: 'Optional custom release notes'
         required: false
@@ -57,13 +57,13 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            TAG="${INPUT_TAG:-v1.1.4.529}"
+            TAG="${INPUT_TAG:-v1.1.4.530}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
           VERSION_NAME="${TAG#v}"
           if [ -z "${VERSION_NAME}" ]; then
-            VERSION_NAME="1.1.4.529"
+            VERSION_NAME="1.1.4.530"
           fi
           VERSION_CODE="${RUN_NUMBER:-1}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"

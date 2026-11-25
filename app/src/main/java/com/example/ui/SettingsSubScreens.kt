@@ -3751,6 +3751,7 @@ fun AppearanceIconShortcutSettingsScreen(
                 }
             },
             confirmButton = {
+                val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
                 Button(
                     onClick = {
                         showShortcutCustomDialog = false
@@ -3762,7 +3763,9 @@ fun AppearanceIconShortcutSettingsScreen(
                             primaryContainerColor = effectiveContainer,
                             onPrimaryColor = effectiveOnPrimary,
                             tertiaryColor = effectiveTertiary,
-                            customImageBitmap = shortcutCustomPhotoBitmap
+                            customImageBitmap = shortcutCustomPhotoBitmap,
+                            useAdaptiveResource = shortcutUseThemeColor,
+                            isDarkTheme = isDarkTheme
                         )
                         desktopSyncFeedback = msg
                         if (!ok) {

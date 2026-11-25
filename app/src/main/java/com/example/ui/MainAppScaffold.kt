@@ -29,13 +29,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import android.os.SystemClock
@@ -229,7 +233,10 @@ fun AppNavigation(
     val appearance by viewModel.appearanceState.collectAsStateWithLifecycle()
 
     SmartLedgerTheme(appearanceSettings = appearance) {
-        Surface {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
             val context = LocalContext.current
             val lifecycleOwner = LocalLifecycleOwner.current
             var isListenerEnabled by remember {
@@ -827,7 +834,7 @@ fun AppNavigation(
                 Box(modifier = Modifier.fillMaxSize()) {
                 Scaffold(
                     containerColor = MaterialTheme.colorScheme.background,
-                    contentWindowInsets = WindowInsets.safeDrawing,
+                    contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout),
                     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                     topBar = {
                         if (isHomeBrandTopBar) {
@@ -934,6 +941,8 @@ fun AppNavigation(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding)
+                            .consumeWindowInsets(innerPadding)
+                            .imePadding()
                     ) {
                         if (useNavigationRail && isTopLevelRoute) {
                             NavigationRail(

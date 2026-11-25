@@ -43,6 +43,8 @@ object LocalModelCatalog {
         "dex", "jar", "so", "apk", "aab", "exe", "dll", "sh", "bat", "elf"
     )
 
+    const val DEFAULT_LOCAL_MODEL_ID = "lfm25-350m-q4km"
+
     val presets: List<LocalModelPreset> = listOf(
         LocalModelPreset(
             id = "ernie-3.0-nano-zh",
@@ -50,36 +52,34 @@ object LocalModelCatalog {
             repoId = "nghuyong/ernie-3.0-nano-zh",
             license = "Apache-2.0",
             sizeHint = "约 130 KB（超小体积 · 极速按需下载）",
-            summary = "第一档超轻量中文核，毫秒级离线分词并匹配消费/收入/退款意图，几乎不占存储空间。",
+            summary = "超轻量中文分词核，毫秒级离线切词并匹配消费/收入/退款意图，几乎不占存储空间。",
             files = listOf(
                 LocalModelFileSpec("config.json", "resolve/main/config.json"),
                 LocalModelFileSpec("vocab.txt", "resolve/main/vocab.txt")
             )
         ),
         LocalModelPreset(
-            id = "bge-small-zh-v15",
-            name = "均衡推荐档 · BGE-Small-Zh v1.5",
-            repoId = "BAAI/bge-small-zh-v15",
-            license = "MIT License",
-            sizeHint = "约 560 KB（中等体积 · 词表 + 分词 + 配置）",
-            summary = "第二档智源开源中文平衡核，兼顾体积与理解精度，适合日常消费分类、商户切分与意图评分。",
-            files = listOf(
-                LocalModelFileSpec("config.json", "resolve/main/config.json"),
-                LocalModelFileSpec("vocab.txt", "resolve/main/vocab.txt"),
-                LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
-            )
-        ),
-        LocalModelPreset(
             id = "qwen25-0.5b-instruct",
-            name = "增强全量档 · Qwen2.5-0.5B-Instruct",
+            name = "轻量全词表档 · Qwen2.5-0.5B-Instruct",
             repoId = "Qwen/Qwen2.5-0.5B-Instruct",
             license = "Apache-2.0",
-            sizeHint = "约 7.1 MB（大词表体积 · BPE 全量词表 + 配置）",
-            summary = "第三档通义轻量全量词表增强核，覆盖复杂账单长文本、外币符号及多语言混合商户解析。",
+            sizeHint = "约 7.1 MB（BPE 全量词表 + 配置）",
+            summary = "通义千问 0.5B BPE 全量词表增强核，覆盖复杂账单长文本、外币符号及多语言混合商户解析。",
             files = listOf(
                 LocalModelFileSpec("config.json", "resolve/main/config.json"),
                 LocalModelFileSpec("tokenizer_config.json", "resolve/main/tokenizer_config.json"),
                 LocalModelFileSpec("tokenizer.json", "resolve/main/tokenizer.json")
+            )
+        ),
+        LocalModelPreset(
+            id = "lfm25-350m-q4km",
+            name = "端侧大模型 · LFM2.5-350M (Q4_K_M)",
+            repoId = "LiquidAI/LFM2.5-350M-GGUF",
+            license = "LFM Open License v1.0",
+            sizeHint = "约 229 MB（350M 端侧大模型 · Q4_K_M 量化 GGUF）",
+            summary = "Liquid AI 新一代 350M 混合架构端侧大模型（Q4_K_M 量化权重，32K 上下文），体积低于 350 MB，强项在于结构化账单信息抽取、复杂多币种银行通知与离线语义归类。",
+            files = listOf(
+                LocalModelFileSpec("LFM2.5-350M-Q4_K_M.gguf", "resolve/main/LFM2.5-350M-Q4_K_M.gguf")
             )
         )
     )
@@ -88,7 +88,7 @@ object LocalModelCatalog {
         presets.firstOrNull { it.id == modelId } ?: resolveDefaultPreset()
 
     private fun resolveDefaultPreset(): LocalModelPreset =
-        presets.firstOrNull { it.id == "bge-small-zh-v15" } ?: presets.first()
+        presets.firstOrNull { it.id == DEFAULT_LOCAL_MODEL_ID } ?: presets.first()
 
     fun modelRepoUrl(mirrorBase: String, repoId: String): String {
         val cleanBase = mirrorBase.trim().trimEnd('/').ifBlank { "https://hf-mirror.com" }
@@ -314,8 +314,10 @@ class AiUnderstandingManager {
         val installed = expectedFiles.all { it.exists() && it.length() > 16L }
         val bytes = expectedFiles.sumOf { if (it.exists()) it.length() else 0L }
         val vocabFile = File(dir, "vocab.txt")
+        val hasGguf = expectedFiles.any { it.name.endsWith(".gguf", ignoreCase = true) && it.exists() }
         val vocabCount = when {
             vocabFile.exists() -> vocabFile.useLines { it.count() }
+            hasGguf && installed -> 65_536
             installed -> 150_000
             else -> 0
         }
@@ -337,6 +339,14 @@ class AiUnderstandingManager {
         return if (dir.exists()) dir.deleteRecursively() else true
     }
 
+    private fun formatTransferBytes(bytes: Long): String {
+        return when {
+            bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+            bytes >= 1024L -> "${bytes / 1024L} KB"
+            else -> "$bytes B"
+        }
+    }
+
     suspend fun downloadLocalModel(
         context: Context,
         modelId: String,
@@ -348,6 +358,10 @@ class AiUnderstandingManager {
         if (!dir.exists()) dir.mkdirs()
 
         val cleanMirror = mirrorBaseUrl.trim().trimEnd('/').ifBlank { "https://hf-mirror.com" }
+        val downloadClient = client.newBuilder()
+            .connectTimeout(25, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .build()
         try {
             val totalFiles = preset.files.size
             preset.files.forEachIndexed { idx, spec ->
@@ -360,7 +374,7 @@ class AiUnderstandingManager {
                     .get()
                     .build()
 
-                client.newCall(request).execute().use { response ->
+                downloadClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         return@withContext Result.failure(
                             IllegalStateException("下载 ${spec.fileName} 失败 (HTTP ${response.code})，可尝试切换镜像源")
@@ -375,22 +389,32 @@ class AiUnderstandingManager {
 
                     body.byteStream().use { input ->
                         FileOutputStream(tmpFile).use { output ->
-                            val buffer = ByteArray(8192)
+                            val buffer = ByteArray(64 * 1024)
                             var fileBytesRead = 0L
+                            var lastEmitMs = 0L
                             var n: Int
                             while (input.read(buffer).also { n = it } != -1) {
                                 output.write(buffer, 0, n)
                                 fileBytesRead += n
-                                val fileFrac = if (contentLength > 0L) {
-                                    (fileBytesRead.toFloat() / contentLength.toFloat()).coerceIn(0f, 1f)
-                                } else {
-                                    0.5f
+                                val nowMs = System.currentTimeMillis()
+                                if (nowMs - lastEmitMs >= 180L) {
+                                    lastEmitMs = nowMs
+                                    val fileFrac = if (contentLength > 0L) {
+                                        (fileBytesRead.toFloat() / contentLength.toFloat()).coerceIn(0f, 1f)
+                                    } else {
+                                        0.5f
+                                    }
+                                    val overall = (idx + fileFrac) / totalFiles.toFloat()
+                                    val sizeProgress = if (contentLength > 0L) {
+                                        "${formatTransferBytes(fileBytesRead)} / ${formatTransferBytes(contentLength)}"
+                                    } else {
+                                        formatTransferBytes(fileBytesRead)
+                                    }
+                                    onProgress(
+                                        overall.coerceIn(0f, 0.99f),
+                                        "正在下载 ${spec.fileName} ($sizeProgress)"
+                                    )
                                 }
-                                val overall = (idx + fileFrac) / totalFiles.toFloat()
-                                onProgress(
-                                    overall.coerceIn(0f, 0.99f),
-                                    "正在下载 ${spec.fileName} (${fileBytesRead / 1024} KB)"
-                                )
                             }
                             output.flush()
                         }
@@ -429,7 +453,8 @@ class AiUnderstandingManager {
         billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
         categoryParentMap: Map<String, String> = emptyMap(),
         channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap,
-        collapseChannelToParent: Boolean = true
+        collapseChannelToParent: Boolean = true,
+        bypassAmountUnitGate: Boolean = false
     ): Result<ParsedNotificationResult> {
         val selectedRules = resolveSelectedRules(config, availableRules)
         return when (config.providerMode) {
@@ -449,7 +474,8 @@ class AiUnderstandingManager {
                     billFieldsConfig = billFieldsConfig,
                     categoryParentMap = categoryParentMap,
                     channelParentMap = channelParentMap,
-                    collapseChannelToParent = collapseChannelToParent
+                    collapseChannelToParent = collapseChannelToParent,
+                    bypassAmountUnitGate = bypassAmountUnitGate
                 )
             }
             AiProviderMode.LOCAL_SMALL_MODEL -> {
@@ -463,7 +489,8 @@ class AiUnderstandingManager {
                     customPrompt = config.customSystemPrompt,
                     activeChannels = activeChannels,
                     channelParentMap = channelParentMap,
-                    collapseChannelToParent = collapseChannelToParent
+                    collapseChannelToParent = collapseChannelToParent,
+                    bypassAmountUnitGate = bypassAmountUnitGate
                 )
             }
         }
@@ -479,13 +506,14 @@ class AiUnderstandingManager {
         customPrompt: String = "",
         activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
         channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap,
-        collapseChannelToParent: Boolean = true
+        collapseChannelToParent: Boolean = true,
+        bypassAmountUnitGate: Boolean = false
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.Default) {
         val combined = "$title\n$content".trim()
         if (combined.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("通知内容为空"))
         }
-        if (!ChinaNotificationParser.hasExplicitAmountUnit(combined)) {
+        if (!bypassAmountUnitGate && !ChinaNotificationParser.hasExplicitAmountUnit(combined)) {
             return@withContext Result.failure(
                 IllegalStateException("通知中未检测到前后带金额单位的数字，已跳过 AI 理解")
             )
@@ -504,8 +532,17 @@ class AiUnderstandingManager {
         val dir = modelDirectory(context, resolvedId)
         val primaryMention = ChinaNotificationParser.extractPrimaryAmountAndCurrency(
             text = combined,
-            requireExplicitUnit = true
-        ) ?: return@withContext Result.failure(IllegalStateException("本地小模型未能在文本中检测到带金额单位的有效金额"))
+            allowLooseStandaloneNumber = bypassAmountUnitGate,
+            requireExplicitUnit = !bypassAmountUnitGate
+        ) ?: return@withContext Result.failure(
+            IllegalStateException(
+                if (bypassAmountUnitGate) {
+                    "端侧本地模型未能在该通知文本中提取到有效金额数字"
+                } else {
+                    "本地模型未能在文本中检测到带金额单位的有效金额"
+                }
+            )
+        )
         val amountCents = primaryMention.amountCents
 
         val (matchedVocabHits, totalVocabCount) = scanVocabMatchesStreaming(dir, combined)
@@ -608,7 +645,8 @@ class AiUnderstandingManager {
         billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
         categoryParentMap: Map<String, String> = emptyMap(),
         channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap,
-        collapseChannelToParent: Boolean = true
+        collapseChannelToParent: Boolean = true,
+        bypassAmountUnitGate: Boolean = false
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.IO) {
         val rawEndpoint = config.apiBaseUrl.trim()
         val apiKey = config.apiKey.trim()
@@ -617,7 +655,7 @@ class AiUnderstandingManager {
             return@withContext Result.failure(IllegalArgumentException("请完整填写在线 API 地址、API Key 与模型名称"))
         }
         val combined = "$title\n$content".trim()
-        if (!ChinaNotificationParser.hasExplicitAmountUnit(combined)) {
+        if (!bypassAmountUnitGate && !ChinaNotificationParser.hasExplicitAmountUnit(combined)) {
             return@withContext Result.failure(
                 IllegalStateException("通知中未检测到前后带金额单位的数字，已跳过在线 AI 理解")
             )
@@ -638,6 +676,9 @@ class AiUnderstandingManager {
             appendLine("应用包名: ${packageName.ifBlank { "unknown" }}")
             appendLine("通知标题: $title")
             appendLine("通知正文: $content")
+            if (bypassAmountUnitGate) {
+                appendLine("补充说明: 用户已在通知日志中手动强制调用 AI 识别，请尽力结合语义识别真实动账金额、币种、交易对方与渠道（即使金额附近未出现常见货币符号或单位）。")
+            }
         }
 
         val payload = JSONObject().apply {
@@ -801,6 +842,10 @@ class AiUnderstandingManager {
 
         val vocabTxt = File(modelDir, "vocab.txt")
         val tokenizerJson = File(modelDir, "tokenizer.json")
+        val hasGgufWeight = modelDir.listFiles()?.any { it.isFile && it.name.endsWith(".gguf", true) } == true
+        if (hasGgufWeight && !vocabTxt.exists() && !tokenizerJson.exists()) {
+            return emptyList<String>() to 65_536
+        }
         when {
             vocabTxt.exists() -> {
                 totalCount = scanVocabLines(vocabTxt, candidates, matchedSet)

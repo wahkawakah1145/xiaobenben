@@ -4,21 +4,21 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Ink ridge horizon + minimalist sun circle -->
+    <!-- Crisp ink-jade landscape ridge + luminous sun disc -->
     <path
         android:fillColor="@color/launcher_ink_sun"
-        android:pathData="M65,41 m-6.5,0 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0" />
+        android:pathData="M66,40 m-7.2,0 a7.2,7.2 0 1,0 14.4,0 a7.2,7.2 0 1,0 -14.4,0" />
     <path
         android:fillColor="#00000000"
-        android:pathData="M29,69 L44,50 L56,63 L64,54 L79,69"
-        android:strokeWidth="4.5"
+        android:pathData="M27,69 L43.5,48.5 L56,62.5 L64.5,53 L81,69"
+        android:strokeWidth="5.2"
         android:strokeColor="@color/launcher_ink_ridge"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
     <path
         android:fillColor="#00000000"
-        android:pathData="M34,76 L74,76"
-        android:strokeWidth="3.5"
+        android:pathData="M33,77 L75,77"
+        android:strokeWidth="4.2"
         android:strokeColor="@color/launcher_ink_line"
         android:strokeLineCap="round" />
 </vector>

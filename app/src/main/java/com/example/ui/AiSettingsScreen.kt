@@ -278,9 +278,9 @@ fun AiSettingsScreen(
                             modifier = Modifier.padding(18.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text("本地开源小模型（按需下载）", style = MaterialTheme.typography.titleMedium)
+                            Text("本地端侧大模型与开源小模型（按需下载）", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                text = "选择适合的开源中文模型词表与配置包按需下载，下载后纯离线运行（零额外可执行代码加载，合规安全）。",
+                                text = "内置轻量词表模型与 ≤350MB 端侧 GGUF 大模型（如 LiquidAI LFM2.5-350M Q4_K_M），按需下载后纯离线运行（零额外可执行代码加载，合规安全）。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -444,7 +444,7 @@ fun AiSettingsScreen(
                                 HorizontalDivider()
                             }
 
-                            Text("内置推荐开源小模型（${LocalModelCatalog.presets.size} 档体积由小到大）", style = MaterialTheme.typography.labelLarge)
+                            Text("内置推荐端侧与轻量模型（${LocalModelCatalog.presets.size} 档由轻到强）", style = MaterialTheme.typography.labelLarge)
 
                             LocalModelCatalog.presets.forEach { preset ->
                                 val status = remember(preset.id, downloadState, selectedLocalModelId, customModels) {

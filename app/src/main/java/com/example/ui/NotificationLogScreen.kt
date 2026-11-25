@@ -36,6 +36,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -80,6 +81,7 @@ fun NotificationLogScreen(
     val context = LocalContext.current
     val logsState by viewModel.notificationLogsState.collectAsStateWithLifecycle()
     val totalCount by viewModel.notificationLogCountState.collectAsStateWithLifecycle()
+    val forcingAiLogId by viewModel.forcingAiLogId.collectAsStateWithLifecycle()
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedLog by remember { mutableStateOf<CapturedNotificationLog?>(null) }
@@ -379,6 +381,42 @@ fun NotificationLogScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
+                            val canForceAi = !log.status.contains("已入账") && !log.status.contains("自动入账")
+                            if (canForceAi) {
+                                val isForcingThis = forcingAiLogId == log.id
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 4.dp),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    FilledTonalButton(
+                                        enabled = forcingAiLogId == null,
+                                        onClick = {
+                                            viewModel.forceAiRecognizeNotificationLog(context, log)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                        modifier = Modifier.testTag("notification_log_force_ai_${log.id}")
+                                    ) {
+                                        if (isForcingThis) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(14.dp),
+                                                strokeWidth = 2.dp
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("AI 识别中...", style = MaterialTheme.typography.labelMedium)
+                                        } else {
+                                            Icon(
+                                                imageVector = AppIcons.AutoAwesome,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("强制 AI 识别", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -446,24 +484,58 @@ fun NotificationLogScreen(
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = {
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                        val clip = buildString {
-                            append(log.title)
-                            if (log.title.isNotBlank() && log.content.isNotBlank()) append("\n")
-                            append(log.content)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            val clip = buildString {
+                                append(log.title)
+                                if (log.title.isNotBlank() && log.content.isNotBlank()) append("\n")
+                                append(log.content)
+                            }
+                            cm?.setPrimaryClip(ClipData.newPlainText("notification_log", clip))
+                            onShowMessage("已复制通知原文")
                         }
-                        cm?.setPrimaryClip(ClipData.newPlainText("notification_log", clip))
-                        onShowMessage("已复制通知原文")
+                    ) {
+                        Text("复制原文")
                     }
-                ) {
-                    Text("复制原文")
+                    TextButton(
+                        onClick = { selectedLog = null }
+                    ) {
+                        Text("关闭")
+                    }
                 }
             },
             confirmButton = {
-                Button(onClick = { selectedLog = null }) {
-                    Text("关闭")
+                val isForcingThis = forcingAiLogId == log.id
+                Button(
+                    enabled = forcingAiLogId == null,
+                    onClick = {
+                        viewModel.forceAiRecognizeNotificationLog(context, log) { result ->
+                            if (result.isSuccess) {
+                                selectedLog = null
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("notification_log_dialog_force_ai")
+                ) {
+                    if (isForcingThis) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(15.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("识别中...")
+                    } else {
+                        Icon(
+                            imageVector = AppIcons.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("强制 AI 识别")
+                    }
                 }
             }
         )

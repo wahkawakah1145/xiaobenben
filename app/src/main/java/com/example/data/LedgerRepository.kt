@@ -2048,6 +2048,25 @@ class LedgerRepository(
 
     fun observeNotificationLogsCount(): Flow<Int> = dao.observeNotificationLogsCount()
 
+    suspend fun updateNotificationLogStatus(
+        id: String,
+        status: String,
+        summary: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            dao.updateNotificationLogStatus(
+                id = id,
+                status = status.take(48),
+                summary = summary.take(180)
+            )
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun clearAllNotificationLogs(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             dao.clearAllNotificationLogs()

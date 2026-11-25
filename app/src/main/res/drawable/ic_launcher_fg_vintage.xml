@@ -4,19 +4,19 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Minimalist vintage stitched booklet + brass clasp -->
+    <!-- Crisp vintage stitched ledger booklet + polished brass clasp -->
     <path
         android:fillColor="#00000000"
-        android:pathData="M34,30 L70,30 C73.3,30 76,32.7 76,36 L76,72 C76,75.3 73.3,78 70,78 L34,78 Z"
-        android:strokeWidth="4"
+        android:pathData="M33,29 L70,29 C73.3,29 76,31.7 76,35 L76,73 C76,76.3 73.3,79 70,79 L33,79 Z"
+        android:strokeWidth="4.8"
         android:strokeColor="@color/launcher_vintage_stroke"
         android:strokeLineJoin="round" />
     <path
         android:fillColor="#00000000"
-        android:pathData="M42,30 L42,78"
-        android:strokeWidth="3.5"
+        android:pathData="M42.5,29 L42.5,79"
+        android:strokeWidth="4.2"
         android:strokeColor="@color/launcher_vintage_spine" />
     <path
         android:fillColor="@color/launcher_vintage_clasp"
-        android:pathData="M62,48 L78,48 C79.66,48 81,49.34 81,51 L81,57 C81,58.66 79.66,60 78,60 L62,60 C60.34,60 59,58.66 59,57 L59,51 C59,49.34 60.34,48 62,48 Z" />
+        android:pathData="M61,47 L78.5,47 C80.43,47 82,48.57 82,50.5 L82,57.5 C82,59.43 80.43,61 78.5,61 L61,61 C59.07,61 57.5,59.43 57.5,57.5 L57.5,50.5 C57.5,48.57 59.07,47 61,47 Z" />
 </vector>

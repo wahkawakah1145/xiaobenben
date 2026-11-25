@@ -19,22 +19,30 @@ object ChinaNotificationParser {
 
     private val financialTriggerKeywords = listOf(
         "付款", "消费", "支出", "扣款", "扣费", "支付", "刷卡", "支取", "转出", "缴费", "代扣",
-        "收款", "入账", "到账", "转入", "存入", "工资", "退款", "返现", "收益", "红包",
-        "转账", "还款", "提现", "动账", "交易", "金额", "人民币", "RMB", "CNY", "USD", "HKD", "EUR",
+        "汇款", "汇出", "汇入", "电汇", "扣划", "划扣", "划转", "出账", "进账", "出款", "入款",
+        "打款", "续费", "充值", "还贷", "放款", "借款", "申购", "赎回", "定投", "清算", "结算",
+        "收款", "入账", "到账", "转入", "存入", "工资", "发薪", "代发", "退款", "退费", "退税",
+        "返现", "返利", "报销", "理赔", "赔付", "补贴", "收益", "分红", "结息", "红包",
+        "转账", "还款", "提现", "动账", "交易", "金额", "交易额", "发生额", "款项", "货款",
+        "尾款", "押金", "定金", "房租", "租金", "实付", "实扣", "实收", "应付", "共计", "合计",
+        "人民币", "RMB", "CNY", "CNH", "USD", "HKD", "EUR",
         "JPY", "GBP", "SGD", "AUD", "CAD", "KRW", "THB", "MYR", "TWD", "MOP", "CHF", "NZD",
-        "美元", "美金", "港币", "港元", "日元", "日圆", "欧元", "英镑", "新加坡元", "新币",
-        "澳元", "澳币", "加元", "加币", "韩元", "泰铢", "新台币", "台币", "澳门元", "澳门币",
-        "瑞士法郎", "瑞郎", "林吉特", "马币", "新西兰元", "纽元", "卢布", "迪拉姆",
-        "¥", "￥", "$", "€", "£", "₩", "元"
+        "美元", "美金", "港币", "港元", "日元", "日圆", "日币", "欧元", "欧币", "英镑",
+        "新加坡元", "新加坡币", "新币", "澳元", "澳币", "加元", "加币", "韩元", "韩币", "泰铢",
+        "新台币", "台币", "澳门元", "澳门币", "瑞士法郎", "瑞郎", "林吉特", "马币",
+        "新西兰元", "纽元", "卢布", "迪拉姆",
+        "¥", "￥", "$", "€", "£", "₩", "元", "圆"
     )
 
     private val refundKeywords = listOf(
-        "退款", "退回", "退货", "返现", "冲正", "已退款", "退还"
+        "退款", "退回", "退货", "返现", "冲正", "已退款", "退还", "退费", "退税", "返利"
     )
 
     private val incomeKeywords = listOf(
-        "收入", "入账", "到账", "存入", "转入", "工资", "薪资", "奖金", "发薪", "报销",
-        "收益", "分红", "利息", "收到来自", "已收款", "成功收款", "收款", "贷记", "向你转账"
+        "收入", "入账", "到账", "存入", "转入", "汇入", "进账", "入款", "工资", "薪资", "薪金",
+        "奖金", "发薪", "代发", "报销", "补贴", "津贴", "理赔", "赔付", "返利", "佣金",
+        "收益", "分红", "派息", "结息", "利息", "收到来自", "已收款", "成功收款", "收款",
+        "实收", "贷记", "向你转账", "赎回"
     )
 
     private val selfTransferAndWithdrawKeywords = listOf(
@@ -69,22 +77,28 @@ object ChinaNotificationParser {
     }
 
     private val expenseKeywords = listOf(
-        "支出", "扣款", "扣费", "代扣", "刷卡", "消费", "付款", "已支付", "成功支付",
-        "支付", "支取", "转出", "缴费", "买入", "下单", "借记", "汇出"
+        "支出", "扣款", "扣费", "代扣", "扣划", "划扣", "刷卡", "消费", "付款", "已支付", "成功支付",
+        "支付", "支取", "转出", "缴费", "买入", "下单", "借记", "汇出", "汇款", "电汇", "出账",
+        "出款", "打款", "续费", "申购", "认购", "定投", "充值", "还贷", "付息", "付讫", "划转"
     )
 
     private val amountNumberRegexToken =
         """([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{1,3}(?:\s[0-9]{3})+(?:[.,][0-9]{1,2})?|[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]{1,2}|[0-9]+(?:[.,][0-9]{1,2})?)"""
 
-    // Ordered longest-first so multi-char Chinese currency names (e.g. 新加坡元, 人民币, 新台币) match before generic 元
+    // Formatted financial number requiring either decimal digits or thousands grouping (rejects raw integers like 10086 or 3条)
+    private val formattedAmountNumberRegexToken =
+        """([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]{1,2}|[0-9]+\.[0-9]{1,2})"""
+
+    // Ordered longest-first so multi-char Chinese currency names (e.g. 人民币元, 新加坡元, 人民币, 新台币) match before generic 元
     private val prefixCurrencyUnitToken =
-        """(?:人民币|新加坡元|新西兰元|瑞士法郎|菲律宾比索|墨西哥比索|阿根廷比索|沙特里亚尔|卡塔尔里亚尔|土耳其里拉|印度卢比|南非兰特|瑞典克朗|挪威克朗|丹麦克朗|捷克克朗|新台币|澳门元|澳门币|林吉特|迪拉姆|印尼盾|越南盾|兹罗提|雷亚尔|美元|美金|港币|港元|欧元|日元|日圆|英镑|新币|韩元|澳元|澳币|加元|加币|纽元|台币|瑞郎|泰铢|马币|越盾|卢布|福林|谢克尔|MOP\$|HK\$|US\$|NZ\$|MX\$|NT\$|S\$|A\$|C\$|(?<![a-zA-Z])(?:RMB|CNY|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS|RM)(?![a-zA-Z])|[¥￥$€£₩฿₫₱₹₽₺₪]|zł|Kč)"""
+        """(?:人民币元|人民币圆|新加坡元|新加坡币|新西兰元|瑞士法郎|菲律宾比索|墨西哥比索|阿根廷比索|沙特里亚尔|卡塔尔里亚尔|土耳其里拉|印度卢比|南非兰特|瑞典克朗|挪威克朗|丹麦克朗|捷克克朗|人民币|新台币|澳门元|澳门币|港币元|美金元|林吉特|迪拉姆|印尼盾|越南盾|兹罗提|雷亚尔|软妹币|美元|美金|港币|港元|欧元|欧币|日元|日圆|日币|英镑|新币|韩元|韩币|澳元|澳币|加元|加币|纽元|台币|瑞郎|泰铢|马币|越盾|卢布|福林|谢克尔|MOP\$|HK\$|US\$|NZ\$|MX\$|NT\$|CA\$|AU\$|SG\$|JP¥|CN¥|S\$|A\$|C\$|(?<![a-zA-Z])(?:RMB|CNY|CNH|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS|RM)(?![a-zA-Z])|[¥￥$€£₩฿₫₱₹₽₺₪]|zł|Kč)"""
 
     private val suffixCurrencyUnitToken =
-        """(?:新加坡元|新西兰元|瑞士法郎|菲律宾比索|墨西哥比索|阿根廷比索|沙特里亚尔|卡塔尔里亚尔|土耳其里拉|印度卢比|南非兰特|瑞典克朗|挪威克朗|丹麦克朗|捷克克朗|人民币|新台币|澳门元|澳门币|林吉特|迪拉姆|印尼盾|越南盾|兹罗提|雷亚尔|块钱|美元|美金|港币|港元|欧元|日元|日圆|英镑|新币|韩元|澳元|澳币|加元|加币|纽元|台币|瑞郎|泰铢|马币|越盾|卢布|福林|谢克尔|元|块(?![板模区])|圆|円|(?<![a-zA-Z])(?:CNY|RMB|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS)(?![a-zA-Z0-9]))"""
+        """(?:新加坡元|新加坡币|新西兰元|瑞士法郎|菲律宾比索|墨西哥比索|阿根廷比索|沙特里亚尔|卡塔尔里亚尔|土耳其里拉|印度卢比|南非兰特|瑞典克朗|挪威克朗|丹麦克朗|捷克克朗|人民币元|人民币圆|人民币|新台币|澳门元|澳门币|港币元|美金元|林吉特|迪拉姆|印尼盾|越南盾|兹罗提|雷亚尔|软妹币|块钱|元整|圆整|美元|美金|港币|港元|欧元|欧币|日元|日圆|日币|英镑|新币|韩元|韩币|澳元|澳币|加元|加币|纽元|台币|瑞郎|泰铢|马币|越盾|卢布|福林|谢克尔|元|块(?![板模区])|圆|円|(?<![a-zA-Z])(?:CNY|CNH|RMB|USD|HKD|EUR|JPY|GBP|SGD|KRW|AUD|CAD|MOP|TWD|CHF|NZD|THB|MYR|IDR|VND|PHP|INR|RUB|BRL|MXN|ZAR|TRY|SEK|NOK|DKK|PLN|CZK|HUF|AED|SAR|QAR|ILS|ARS)(?![a-zA-Z0-9]))"""
 
+    // Supports: 人民币元 2,000.00 / 人民币(元): 2,000.00 / ¥35.00 / SGD 10.49 / USD$ 9.99 / 人民币55.50元
     private val prefixUnitAmountRegex = Regex(
-        """($prefixCurrencyUnitToken)\s*[+\-]?\s*$amountNumberRegexToken(?:\s*(?:元|圆))?""",
+        """($prefixCurrencyUnitToken)(?:\s*[（(]?(?:元|圆|币)[)）]?)?(?:\s*[:：=])?\s*[+\-]?\s*$amountNumberRegexToken(?:\s*(?:元整|圆整|元|圆|整))?""",
         RegexOption.IGNORE_CASE
     )
 
@@ -93,8 +107,23 @@ object ChinaNotificationParser {
         RegexOption.IGNORE_CASE
     )
 
+    private val financialActionCuePattern =
+        """(?:交易金额|消费金额|支出金额|付款金额|实付金额|实扣金额|扣款金额|入账金额|收款金额|转账金额|汇款金额|退款金额|充值金额|提现金额|还款金额|总金额|交易额|发生额|金额|实付|实扣|实收|付款|消费|支出|扣款|扣费|扣划|划扣|代扣|支付|入账|到账|进账|出账|存入|收款|转入|转出|支取|转账|汇款|汇出|汇入|电汇|划转|还款|提现|退款|退费|退税|返现|报销|打款|续费|充值|缴费|发薪|代发|工资|申购|赎回|定投|放款|借款|共计|合计|总计)"""
+
     private val cueAmountRegex = Regex(
-        """(?:交易金额|消费金额|支出金额|付款金额|实付金额|实扣金额|扣款金额|入账金额|收款金额|转账金额|金额|实付|实扣|付款|消费|支出|扣款|扣费|支付|入账|到账|存入|收款|转入|转出|支取|转账|还款)[为是:：\s]*[+\-]?\s*$amountNumberRegexToken(?:\s*($suffixCurrencyUnitToken))?""",
+        """$financialActionCuePattern(?:\s*[（(]?(?:$prefixCurrencyUnitToken|元|圆)[)）]?)?[为是:：\s]*[+\-]?\s*$amountNumberRegexToken(?:\s*($suffixCurrencyUnitToken))?""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // Strict cue + formatted amount (e.g. "交易金额 2,000.00", "实付：35.80", "汇款 1,500.00")
+    private val strictCueFormattedAmountRegex = Regex(
+        """$financialActionCuePattern(?:\s*[（(]?(?:$prefixCurrencyUnitToken|元|圆)[)）]?)?[为是:：\s]*[+\-]?\s*$formattedAmountNumberRegexToken(?:\s*($suffixCurrencyUnitToken))?""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // Formatted amount directly followed by a strong transaction action verb (e.g. "2,000.00汇款", "150.00转账")
+    private val suffixActionFormattedAmountRegex = Regex(
+        """(?<![0-9a-zA-Z.:/])$formattedAmountNumberRegexToken\s*(?:汇款|汇出|汇入|转账|转出|转入|消费|支出|扣款|扣费|付款|支付|收款|入账|到账|退款|提现|还款|充值|缴费|扣划|划扣)""",
         RegexOption.IGNORE_CASE
     )
 
@@ -109,7 +138,8 @@ object ChinaNotificationParser {
         Regex("""(?:中国移动|中国联通|中国电信|移动|联通|电信|客服热线|客服|热线)?\s*(?:10086|10010|10000|10001|106\d{4,}|123\d{2})\b"""),
         Regex("""(?:验证码|校验码|动态码|确认码)[为是:：\s]*\d{4,8}"""),
         Regex("""(?:尾号|账户|卡号)\s*[（(]?\d{4}[）)]?"""),
-        Regex("""(?<!\d)\d+(?:\.\d+)?\s*(?:分钟|小时|秒钟|秒|GB|MB|KB|TB|Mbps|Gbps|%|‰|分期|积分|分贝)(?![a-zA-Z0-9])""", RegexOption.IGNORE_CASE)
+        Regex("""(?:订单号|交易单号|商户单号|流水号|单号|参考号)[为是:：\s#]*[A-Za-z0-9\-]{6,}"""),
+        Regex("""(?<!\d)\d+(?:\.\d+)?\s*(?:分钟|小时|秒钟|秒|GB|MB|KB|TB|Mbps|Gbps|%|‰|分期|积分|分贝|G套餐|G流量)(?![a-zA-Z0-9])""", RegexOption.IGNORE_CASE)
     )
 
     private val standaloneNumberRegex = Regex("""(?<![0-9a-zA-Z.:/])$amountNumberRegexToken(?![0-9a-zA-Z:/])""")
@@ -135,17 +165,22 @@ object ChinaNotificationParser {
     )
 
     private val strongPrimaryAmountCues = listOf(
-        "实际支出", "实际支付", "实际扣款", "实付", "实扣", "净支出", "最终支付"
+        "实际支出", "实际支付", "实际扣款", "实付", "实扣", "实收", "净支出", "最终支付"
     )
 
     private val primaryTransactionCues = listOf(
         "无卡消费", "刷卡消费", "快捷支付", "扫码支付", "消费交易", "消费支出", "消费",
-        "支出", "扣款", "扣费", "代扣", "付款", "已支付", "成功支付", "支付", "刷卡", "支取", "转出", "缴费",
-        "入账", "到账", "收入", "存入", "收款", "转入", "工资", "退款", "退回", "返现", "提现", "转账", "还款"
+        "支出", "扣款", "扣费", "代扣", "扣划", "划扣", "划转", "付款", "已支付", "成功支付",
+        "支付", "刷卡", "支取", "转出", "出账", "出款", "缴费", "续费", "充值",
+        "跨行汇款", "行内汇款", "跨境汇款", "网银汇款", "电汇", "汇款", "汇出", "汇入", "打款",
+        "入账", "到账", "进账", "入款", "收入", "存入", "收款", "转入", "工资", "发薪", "代发",
+        "退款", "退费", "退税", "退回", "返现", "返利", "报销", "理赔", "赔付",
+        "提现", "转账", "还款", "还贷", "申购", "赎回", "定投", "放款", "借款", "发起"
     )
 
     private val amountLabelCues = listOf(
-        "交易金额", "消费金额", "支出金额", "付款金额", "入账金额", "收款金额", "金额"
+        "交易金额", "消费金额", "支出金额", "付款金额", "入账金额", "收款金额", "转账金额",
+        "汇款金额", "退款金额", "充值金额", "提现金额", "还款金额", "总金额", "交易额", "发生额", "金额"
     )
 
     private val cardTailPatterns = listOf(
@@ -807,16 +842,16 @@ object ChinaNotificationParser {
         if (unit.isEmpty()) return "CNY" to false
         val upper = unit.uppercase()
         return when {
-            upper in setOf("CNY", "RMB") || unit == "人民币" -> "CNY" to true
-            unit in setOf("元", "块钱", "块", "圆") -> "CNY" to false
+            upper in setOf("CNY", "CNH", "RMB", "CN¥") || unit in setOf("人民币", "人民币元", "人民币圆", "软妹币") -> "CNY" to true
+            unit in setOf("元", "元整", "块钱", "块", "圆", "圆整") -> "CNY" to false
             unit in setOf("¥", "￥") -> "CNY" to false
-            upper == "HKD" || upper == "HK$" || unit in setOf("港币", "港元") -> "HKD" to true
+            upper == "HKD" || upper == "HK$" || unit in setOf("港币", "港元", "港币元") -> "HKD" to true
             upper == "MOP" || upper == "MOP$" || unit in setOf("澳门元", "澳门币") -> "MOP" to true
             upper == "TWD" || upper == "NT$" || unit in setOf("新台币", "台币") -> "TWD" to true
-            upper == "SGD" || upper == "S$" || unit in setOf("新加坡元", "新币") -> "SGD" to true
+            upper == "SGD" || upper in setOf("S$", "SG$") || unit in setOf("新加坡元", "新加坡币", "新币") -> "SGD" to true
             upper == "NZD" || upper == "NZ$" || unit in setOf("新西兰元", "纽元") -> "NZD" to true
-            upper == "AUD" || upper == "A$" || unit in setOf("澳元", "澳币") -> "AUD" to true
-            upper == "CAD" || upper == "C$" || unit in setOf("加元", "加币") -> "CAD" to true
+            upper == "AUD" || upper in setOf("A$", "AU$") || unit in setOf("澳元", "澳币") -> "AUD" to true
+            upper == "CAD" || upper in setOf("C$", "CA$") || unit in setOf("加元", "加币") -> "CAD" to true
             upper == "CHF" || unit in setOf("瑞士法郎", "瑞郎") -> "CHF" to true
             upper == "THB" || unit in setOf("泰铢", "฿") -> "THB" to true
             upper in setOf("MYR", "RM") || unit in setOf("林吉特", "马币") -> "MYR" to true
@@ -840,11 +875,11 @@ object ChinaNotificationParser {
             upper == "QAR" || unit == "卡塔尔里亚尔" -> "QAR" to true
             upper == "ILS" || unit in setOf("谢克尔", "₪") -> "ILS" to true
             upper == "ARS" || unit == "阿根廷比索" -> "ARS" to true
-            upper in setOf("USD", "US$", "$") || unit in setOf("美元", "美金") -> "USD" to true
-            upper == "EUR" || unit in setOf("欧元", "€") -> "EUR" to true
+            upper in setOf("USD", "US$", "$") || unit in setOf("美元", "美金", "美金元") -> "USD" to true
+            upper == "EUR" || unit in setOf("欧元", "欧币", "€") -> "EUR" to true
             upper == "GBP" || unit in setOf("英镑", "£") -> "GBP" to true
-            upper == "JPY" || unit in setOf("日元", "日圆", "円") -> "JPY" to true
-            upper == "KRW" || unit in setOf("韩元", "₩") -> "KRW" to true
+            upper in setOf("JPY", "JP¥") || unit in setOf("日元", "日圆", "日币", "円") -> "JPY" to true
+            upper == "KRW" || unit in setOf("韩元", "韩币", "₩") -> "KRW" to true
             else -> "CNY" to false
         }
     }
@@ -964,6 +999,7 @@ object ChinaNotificationParser {
             val contextScore = scoreAmountMentionInContext(
                 maskedText = masked,
                 startIndex = start,
+                endIndex = end,
                 hasExplicitUnit = hasExplicitUnit
             )
             rawCandidates.add(
@@ -979,7 +1015,7 @@ object ChinaNotificationParser {
             )
         }
 
-        // 1) Prefix currency unit + amount (e.g. 人民币55.50元, ¥35.00, SGD 10.49, 新加坡元10.49)
+        // 1) Prefix currency unit + amount (e.g. 人民币元 2,000.00, 人民币55.50元, ¥35.00, SGD 10.49, 新加坡元10.49)
         prefixUnitAmountRegex.findAll(masked).forEach { m ->
             addCandidate(
                 rawNum = m.groupValues[2],
@@ -1001,7 +1037,28 @@ object ChinaNotificationParser {
             )
         }
 
-        // 3) Cue-prefixed amounts (e.g. 消费38.60, 金额10.49) when explicit unit is not strictly required
+        // 3) Strict financial cue + formatted decimal/grouped amount (e.g. 交易金额 2,000.00, 实付：35.80, 2,000.00汇款)
+        strictCueFormattedAmountRegex.findAll(masked).forEach { m ->
+            val suffixUnit = m.groupValues.getOrNull(2)?.takeIf { it.isNotBlank() }
+            addCandidate(
+                rawNum = m.groupValues[1],
+                unitToken = suffixUnit,
+                hasExplicitUnit = true,
+                start = m.range.first,
+                end = m.range.last + 1
+            )
+        }
+        suffixActionFormattedAmountRegex.findAll(masked).forEach { m ->
+            addCandidate(
+                rawNum = m.groupValues[1],
+                unitToken = null,
+                hasExplicitUnit = true,
+                start = m.range.first,
+                end = m.range.last + 1
+            )
+        }
+
+        // 4) Broader cue-prefixed amounts (e.g. 消费38, 金额100) when explicit unit/decimal is not strictly required
         if (!requireExplicitUnit) {
             cueAmountRegex.findAll(masked).forEach { m ->
                 val suffixUnit = m.groupValues.getOrNull(2)?.takeIf { it.isNotBlank() }
@@ -1057,7 +1114,7 @@ object ChinaNotificationParser {
                 if (hasFormatting || raw.length != 4) {
                     val cents = parseNormalizedAmountCents(raw, numberStyle)
                     if (cents != null) {
-                        val score = scoreAmountMentionInContext(sanitizedForLoose, match.range.first, false)
+                        val score = scoreAmountMentionInContext(sanitizedForLoose, match.range.first, match.range.last + 1, false)
                         if (score > -80) {
                             return ExtractedAmountMention(
                                 amountCents = cents,
@@ -1082,12 +1139,18 @@ object ChinaNotificationParser {
     private fun scoreAmountMentionInContext(
         maskedText: String,
         startIndex: Int,
+        endIndex: Int = startIndex,
         hasExplicitUnit: Boolean
     ): Int {
         val clauseDelimiters = charArrayOf('，', ',', '。', ';', '；', '\n', '！', '!', '？', '?')
         val clauseStart = maskedText.lastIndexOfAny(clauseDelimiters, (startIndex - 1).coerceAtLeast(0))
             .let { if (it < 0) 0 else it + 1 }
         val clausePrefix = maskedText.substring(clauseStart, startIndex).trim()
+
+        val safeEnd = endIndex.coerceIn(startIndex, maskedText.length)
+        val clauseEnd = maskedText.indexOfAny(clauseDelimiters, safeEnd)
+            .let { if (it < 0) maskedText.length else it }
+        val clauseSuffix = maskedText.substring(safeEnd, clauseEnd).trim()
 
         val prevClausePrefix = if (clauseStart > 1) {
             val prevDelim = maskedText.lastIndexOfAny(clauseDelimiters, (clauseStart - 2).coerceAtLeast(0))
@@ -1114,6 +1177,8 @@ object ChinaNotificationParser {
             .maxOrNull() ?: -1
 
         val nearestPrimaryPos = maxOf(latestStrongPrimaryPos, latestPrimaryPos)
+        val suffixHasPrimary = primaryTransactionCues.any { clauseSuffix.contains(it) } ||
+            strongPrimaryAmountCues.any { clauseSuffix.contains(it) }
 
         when {
             latestSecondaryPos > nearestPrimaryPos && latestSecondaryPos > latestAmountLabelPos -> {
@@ -1132,10 +1197,14 @@ object ChinaNotificationParser {
                     strongPrimaryAmountCues.any { prevClausePrefix.contains(it) }
                 val prevHasSecondary = secondaryAmountCues.any { prevClausePrefix.contains(it) }
                 score += when {
-                    prevHasPrimary -> 40
+                    prevHasPrimary || suffixHasPrimary -> 40
                     prevHasSecondary -> -60
                     else -> 20
                 }
+            }
+            suffixHasPrimary -> {
+                // Clause puts primary transaction verb right after amount, e.g. "人民币元 2,000.00汇款"
+                score += 45
             }
             else -> {
                 // No explicit cue in the same clause; lightly consider preceding clause

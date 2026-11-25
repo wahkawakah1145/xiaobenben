@@ -4,20 +4,20 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Minimalist geometric receipt/fold silhouette -->
+    <!-- Crisp minimalist geometric receipt fold + double-bar ¥ glyph -->
     <path
         android:fillColor="#00000000"
-        android:pathData="M34,30 L64,30 L74,40 L74,78 L34,78 Z"
-        android:strokeWidth="4.2"
+        android:pathData="M33,29 L63,29 L75,41 L75,79 L33,79 Z"
+        android:strokeWidth="4.8"
         android:strokeColor="@color/launcher_minimal_stroke"
         android:strokeLineJoin="round" />
     <path
         android:fillColor="#00000000"
-        android:pathData="M64,30 L64,40 L74,40"
-        android:strokeWidth="4"
+        android:pathData="M63,29 L63,41 L75,41"
+        android:strokeWidth="4.4"
         android:strokeColor="@color/launcher_minimal_stroke"
         android:strokeLineJoin="round" />
     <path
         android:fillColor="@color/launcher_minimal_accent"
-        android:pathData="M45.5,46 L54,56.5 L62.5,46 L67,46 L57,58.5 L63,58.5 L63,62 L56.5,62 L56.5,68.5 L51.5,68.5 L51.5,62 L45,62 L45,58.5 L51,58.5 L41,46 Z" />
+        android:pathData="M46.5,45 L54,55.5 L61.5,45 L66.5,45 L57.2,57.5 L64,57.5 L64,61 L56.5,61 L56.5,64.5 L64,64.5 L64,68 L56.5,68 L56.5,73 L51.5,73 L51.5,68 L44,68 L44,64.5 L51.5,64.5 L51.5,61 L44,61 L44,57.5 L50.8,57.5 L41.5,45 Z" />
 </vector>

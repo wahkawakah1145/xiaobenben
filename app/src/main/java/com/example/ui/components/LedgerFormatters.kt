@@ -81,12 +81,17 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import com.example.util.DesktopIconSyncManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -1864,18 +1869,16 @@ fun AppBrandIconAvatar(
     modifier: Modifier = Modifier,
     contentDescription: String = "小本本应用图标"
 ) {
+    val context = LocalContext.current
     val style = AppIconStyle.fromId(styleId)
     val shape = RoundedCornerShape(cornerDp.coerceAtLeast(0.dp))
-    val primary = MaterialTheme.colorScheme.primary
-    val onPrimary = MaterialTheme.colorScheme.onPrimary
-    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
-    val tertiary = MaterialTheme.colorScheme.tertiary
-    val tertiaryContainer = MaterialTheme.colorScheme.tertiaryContainer
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val borderColor = MaterialTheme.colorScheme.outline.copy(alpha = if (isDark) 0.42f else 0.22f)
 
     Surface(
         shape = shape,
         shadowElevation = 2.dp,
-        border = BorderStroke(0.8.dp, primary.copy(alpha = 0.24f)),
+        border = BorderStroke(0.9.dp, borderColor),
         modifier = modifier
             .size(size)
             .semantics { this.contentDescription = contentDescription }
@@ -1887,151 +1890,26 @@ fun AppBrandIconAvatar(
         ) {
             val w = this.size.width
             val h = this.size.height
-            when (style) {
-                AppIconStyle.EMERALD -> {
-                    drawRect(
-                        brush = Brush.linearGradient(
-                            colors = listOf(primary, lerp(primary, Color.Black, 0.18f))
-                        )
-                    )
-                    drawRoundRect(
-                        color = onPrimary,
-                        topLeft = Offset(w * 0.27f, h * 0.22f),
-                        size = Size(w * 0.46f, h * 0.56f),
-                        cornerRadius = CornerRadius(w * 0.09f, w * 0.09f)
-                    )
-                    drawLine(
-                        color = primary.copy(alpha = 0.45f),
-                        start = Offset(w * 0.34f, h * 0.34f),
-                        end = Offset(w * 0.34f, h * 0.66f),
-                        strokeWidth = w * 0.035f,
-                        cap = StrokeCap.Round
-                    )
+            drawIntoCanvas { composeCanvas ->
+                val native = composeCanvas.nativeCanvas
+                native.save()
+                val rendered = DesktopIconSyncManager.drawAdaptiveIconLayers(
+                    context = context,
+                    style = style,
+                    isDark = isDark,
+                    canvas = native,
+                    widthPx = w,
+                    heightPx = h
+                )
+                native.restore()
+                if (!rendered) {
+                    drawRect(color = Color(0xFF086350))
                     drawMinimalYenSymbol(
-                        cx = w * 0.53f,
-                        cy = h * 0.50f,
-                        scale = w * 0.26f,
-                        color = primary,
-                        strokeWidth = w * 0.044f
-                    )
-                }
-                AppIconStyle.MINIMAL -> {
-                    drawRect(color = primaryContainer)
-                    val fold = Path().apply {
-                        moveTo(w * 0.29f, h * 0.23f)
-                        lineTo(w * 0.60f, h * 0.23f)
-                        lineTo(w * 0.72f, h * 0.35f)
-                        lineTo(w * 0.72f, h * 0.77f)
-                        lineTo(w * 0.29f, h * 0.77f)
-                        close()
-                    }
-                    drawPath(
-                        path = fold,
-                        color = primary,
-                        style = Stroke(width = w * 0.046f, join = StrokeJoin.Round)
-                    )
-                    drawMinimalYenSymbol(
-                        cx = w * 0.505f,
-                        cy = h * 0.535f,
-                        scale = w * 0.23f,
-                        color = primary,
-                        strokeWidth = w * 0.042f
-                    )
-                }
-                AppIconStyle.INK -> {
-                    val inkBg = lerp(primary, Color(0xFF10211F), 0.62f)
-                    drawRect(color = inkBg)
-                    drawCircle(
-                        color = primaryContainer,
-                        radius = w * 0.075f,
-                        center = Offset(w * 0.65f, h * 0.34f)
-                    )
-                    val ridge = Path().apply {
-                        moveTo(w * 0.20f, h * 0.68f)
-                        lineTo(w * 0.39f, h * 0.44f)
-                        lineTo(w * 0.54f, h * 0.60f)
-                        lineTo(w * 0.64f, h * 0.49f)
-                        lineTo(w * 0.80f, h * 0.68f)
-                    }
-                    drawPath(
-                        path = ridge,
-                        color = lerp(primaryContainer, Color.White, 0.5f),
-                        style = Stroke(width = w * 0.05f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                    )
-                    drawLine(
-                        color = primaryContainer.copy(alpha = 0.65f),
-                        start = Offset(w * 0.28f, h * 0.77f),
-                        end = Offset(w * 0.72f, h * 0.77f),
-                        strokeWidth = w * 0.032f,
-                        cap = StrokeCap.Round
-                    )
-                }
-                AppIconStyle.CYBER -> {
-                    val slate = lerp(primary, Color(0xFF0F172A), 0.78f)
-                    drawRect(color = slate)
-                    val hex = Path().apply {
-                        moveTo(w * 0.50f, h * 0.20f)
-                        lineTo(w * 0.76f, h * 0.35f)
-                        lineTo(w * 0.76f, h * 0.65f)
-                        lineTo(w * 0.50f, h * 0.80f)
-                        lineTo(w * 0.24f, h * 0.65f)
-                        lineTo(w * 0.24f, h * 0.35f)
-                        close()
-                    }
-                    drawPath(
-                        path = hex,
-                        color = lerp(primary, Color.White, 0.32f),
-                        style = Stroke(width = w * 0.044f, join = StrokeJoin.Round)
-                    )
-                    drawMinimalYenSymbol(
-                        cx = w * 0.50f,
-                        cy = h * 0.50f,
-                        scale = w * 0.23f,
-                        color = tertiary,
-                        strokeWidth = w * 0.042f
-                    )
-                }
-                AppIconStyle.VINTAGE -> {
-                    val leather = lerp(primary, Color(0xFF5D4037), 0.52f)
-                    val cream = Color(0xFFF5ECD8)
-                    val brass = lerp(tertiary, Color(0xFFE5B96E), 0.45f)
-                    drawRect(color = leather)
-                    drawRoundRect(
-                        color = cream,
-                        topLeft = Offset(w * 0.26f, h * 0.23f),
-                        size = Size(w * 0.48f, h * 0.54f),
-                        cornerRadius = CornerRadius(w * 0.07f, w * 0.07f),
-                        style = Stroke(width = w * 0.044f)
-                    )
-                    drawLine(
-                        color = cream.copy(alpha = 0.85f),
-                        start = Offset(w * 0.37f, h * 0.23f),
-                        end = Offset(w * 0.37f, h * 0.77f),
-                        strokeWidth = w * 0.038f
-                    )
-                    drawRoundRect(
-                        color = brass,
-                        topLeft = Offset(w * 0.57f, h * 0.44f),
-                        size = Size(w * 0.22f, h * 0.12f),
-                        cornerRadius = CornerRadius(w * 0.04f, w * 0.04f)
-                    )
-                }
-                AppIconStyle.MONET_ADAPTIVE -> {
-                    drawRect(
-                        brush = Brush.linearGradient(
-                            colors = listOf(primaryContainer, tertiaryContainer.copy(alpha = 0.85f))
-                        )
-                    )
-                    drawRoundRect(
-                        color = primary,
-                        topLeft = Offset(w * 0.24f, h * 0.30f),
-                        size = Size(w * 0.52f, h * 0.40f),
-                        cornerRadius = CornerRadius(w * 0.11f, w * 0.11f)
-                    )
-                    drawCircle(
-                        color = primaryContainer,
-                        radius = w * 0.055f,
-                        center = Offset(w * 0.63f, h * 0.50f)
+                        cx = w * 0.5f,
+                        cy = h * 0.5f,
+                        scale = w * 0.34f,
+                        color = Color.White,
+                        strokeWidth = w * 0.055f
                     )
                 }
             }

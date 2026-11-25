@@ -473,7 +473,7 @@ data class LocalModelPreset(
 
 data class AiConfig(
     val providerMode: AiProviderMode = AiProviderMode.DISABLED,
-    val localModelId: String = "bge-small-zh-v15",
+    val localModelId: String = "lfm25-350m-q4km",
     val localModelMirror: String = "https://hf-mirror.com",
     val apiBaseUrl: String = "",
     val apiKey: String = "",

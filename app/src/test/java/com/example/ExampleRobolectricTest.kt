@@ -168,12 +168,12 @@ class ExampleRobolectricTest {
     assertEquals("Qwen/Qwen2.5-0.5B-Instruct", preset.repoId)
     org.junit.Assert.assertTrue(preset.files.isNotEmpty())
     assertEquals(
-      listOf("ernie-3.0-nano-zh", "bge-small-zh-v15", "qwen25-0.5b-instruct"),
+      listOf("ernie-3.0-nano-zh", "qwen25-0.5b-instruct", "lfm25-350m-q4km"),
       com.example.data.LocalModelCatalog.presets.map { it.id }
     )
     assertEquals(
-      "https://hf-mirror.com/BAAI/bge-small-zh-v15",
-      com.example.data.LocalModelCatalog.modelRepoUrl("https://hf-mirror.com", "BAAI/bge-small-zh-v15")
+      "https://hf-mirror.com/LiquidAI/LFM2.5-350M-GGUF",
+      com.example.data.LocalModelCatalog.modelRepoUrl("https://hf-mirror.com", "LiquidAI/LFM2.5-350M-GGUF")
     )
     assertEquals(
       "https://huggingface.co/models?sort=trending",
@@ -1473,7 +1473,7 @@ class ExampleRobolectricTest {
     val aiManager = com.example.data.AiUnderstandingManager()
     val blockedLocal = aiManager.parseWithLocalModel(
       context = context,
-      modelId = "bge-small-zh-v15",
+      modelId = "lfm25-350m-q4km",
       packageName = "com.android.mms",
       title = "中国移动10086",
       content = "[2条] 您的套餐流量剩余 10086MB"
@@ -3103,7 +3103,160 @@ class ExampleRobolectricTest {
     val nightVintageBg = nightCtx.getColor(R.color.launcher_vintage_bg)
     org.junit.Assert.assertNotEquals(lightVintageBg, nightVintageBg)
   }
+
+  @Test
+  fun `expanded amount vocabulary detects remittance notifications like 发起人民币元 2,000_00汇款 while ignoring noise`() {
+    val remittanceMsg = "您尾号1234账户向张三发起人民币元 2,000.00汇款【招商银行】"
+    org.junit.Assert.assertTrue(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit(remittanceMsg)
+    )
+    val parsedRemit = com.example.parser.ChinaNotificationParser.parse(
+      packageName = "cmb.pb",
+      title = "招商银行",
+      content = remittanceMsg,
+      enableLocalSemanticPass = true
+    )
+    org.junit.Assert.assertNotNull(parsedRemit)
+    assertEquals(200_000L, parsedRemit!!.amountCents)
+    assertEquals("CNY", parsedRemit.currencyCode)
+    assertEquals(com.example.model.TransactionType.EXPENSE, parsedRemit.type)
+
+    // Parenthesized currency unit and cue-labeled formatted decimal amounts
+    org.junit.Assert.assertTrue(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("账户划扣人民币(元)：1,500.50")
+    )
+    org.junit.Assert.assertTrue(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("尾号8899交易金额 350.00")
+    )
+    org.junit.Assert.assertTrue(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("电汇出账 港币元 880.00")
+    )
+
+    // Unitless non-financial noise must remain rejected
+    org.junit.Assert.assertFalse(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("[3条] 中国移动10086：您的话费套餐剩余12.5GB")
+    )
+    org.junit.Assert.assertFalse(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("您的验证码为 482910，5分钟内有效")
+    )
+    org.junit.Assert.assertFalse(
+      com.example.parser.ChinaNotificationParser.hasExplicitAmountUnit("订单号 20261125009911 已发货")
+    )
+  }
+
+  @Test
+  fun `local model catalog removes 404 bge model and provides LFM2_5 350M Q4_K_M under 350MB`() {
+    val ids = com.example.data.LocalModelCatalog.presets.map { it.id }
+    org.junit.Assert.assertFalse(ids.contains("bge-small-zh-v15"))
+    org.junit.Assert.assertTrue(ids.contains("lfm25-350m-q4km"))
+
+    val lfm = com.example.data.LocalModelCatalog.resolve("lfm25-350m-q4km")
+    assertEquals("LiquidAI/LFM2.5-350M-GGUF", lfm.repoId)
+    org.junit.Assert.assertTrue(lfm.files.any { it.fileName.endsWith("LFM2.5-350M-Q4_K_M.gguf") })
+
+    // Legacy removed id falls back gracefully to default LFM2.5-350M
+    val migrated = com.example.data.LocalModelCatalog.resolve("bge-small-zh-v15")
+    assertEquals(com.example.data.LocalModelCatalog.DEFAULT_LOCAL_MODEL_ID, migrated.id)
+    assertEquals("lfm25-350m-q4km", com.example.model.AiConfig().localModelId)
+  }
+
+  @Test
+  fun `manual forced AI recognition bypasses unit gate and updates notification log status`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val aiManager = com.example.data.AiUnderstandingManager()
+    val repo = com.example.data.LedgerRepository(context)
+    val originalAi = repo.observeAiConfig().first()
+
+    // Prepare a tiny stub local model file for ernie-3.0-nano-zh so local parsing runs offline
+    val modelDir = aiManager.modelDirectory(context, "ernie-3.0-nano-zh").apply { mkdirs() }
+    val configFile = java.io.File(modelDir, "config.json").apply { writeText("""{"vocab_size":18000}""") }
+    val vocabFile = java.io.File(modelDir, "vocab.txt").apply { writeText("消费\n汇款\n支付宝\n") }
+
+    try {
+      // Without bypass, unitless amount text is rejected by amount-unit gate
+      val blocked = aiManager.parseWithLocalModel(
+        context = context,
+        modelId = "ernie-3.0-nano-zh",
+        packageName = "com.eg.android.AlipayGphone",
+        title = "账单提醒",
+        content = "特殊通知 88.50",
+        bypassAmountUnitGate = false
+      )
+      org.junit.Assert.assertTrue(blocked.isFailure)
+      org.junit.Assert.assertTrue(blocked.exceptionOrNull()?.message?.contains("金额单位") == true)
+
+      // With bypassAmountUnitGate = true, manual forced AI bypasses the unit gate (never fails with unit gate error)
+      val forcedUnitless = aiManager.parseWithLocalModel(
+        context = context,
+        modelId = "ernie-3.0-nano-zh",
+        packageName = "com.eg.android.AlipayGphone",
+        title = "账单提醒",
+        content = "特殊通知 88.50",
+        bypassAmountUnitGate = true
+      )
+      org.junit.Assert.assertTrue(forcedUnitless.isSuccess)
+
+      val forced = aiManager.parseWithLocalModel(
+        context = context,
+        modelId = "ernie-3.0-nano-zh",
+        packageName = "com.eg.android.AlipayGphone",
+        title = "账单提醒",
+        content = "发起人民币元 2,000.00汇款",
+        bypassAmountUnitGate = true
+      )
+      org.junit.Assert.assertTrue(forced.isSuccess)
+      assertEquals(200_000L, forced.getOrThrow().amountCents)
+
+      // Verify repository notification log status update persists cleanly
+      repo.recordNotificationLog(
+        packageName = "cmb.pb",
+        appLabel = "招商银行",
+        title = "动账提醒",
+        content = "发起人民币元 2,000.00汇款",
+        status = "不含有效金额，已自动忽略",
+        summary = "未检测到有效动账金额"
+      )
+      val logs = repo.loadNotificationLogsPage(query = "发起人民币元", limit = 10, offset = 0)
+      org.junit.Assert.assertTrue(logs.isNotEmpty())
+      val logId = logs.first().id
+      repo.updateNotificationLogStatus(logId, "手动AI已入账", "支出 ¥2000.00 · 招商银行").getOrThrow()
+      val updated = repo.loadNotificationLogsPage(query = "手动AI已入账", limit = 10, offset = 0)
+      org.junit.Assert.assertTrue(updated.any { it.id == logId && it.status == "手动AI已入账" })
+    } finally {
+      configFile.delete()
+      vocabFile.delete()
+      modelDir.delete()
+      repo.saveAiConfig(originalAi)
+    }
+  }
+
+  @Test
+  fun `unified adaptive icon resources resolve and render non-empty bitmaps for every AppIconStyle`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    com.example.model.AppIconStyle.entries.forEach { style ->
+      val res = com.example.util.DesktopIconSyncManager.adaptiveIconResourcesFor(style)
+      org.junit.Assert.assertTrue(res.backgroundRes != 0)
+      org.junit.Assert.assertTrue(res.foregroundRes != 0)
+      val lightBmp = com.example.util.DesktopIconSyncManager.renderAdaptiveResourceBitmap(
+        context = context,
+        styleId = style.id,
+        isDark = false,
+        sizePx = 96
+      )
+      val darkBmp = com.example.util.DesktopIconSyncManager.renderAdaptiveResourceBitmap(
+        context = context,
+        styleId = style.id,
+        isDark = true,
+        sizePx = 96
+      )
+      assertEquals(96, lightBmp.width)
+      assertEquals(96, darkBmp.width)
+      lightBmp.recycle()
+      darkBmp.recycle()
+    }
+  }
 }
+
 
 
 

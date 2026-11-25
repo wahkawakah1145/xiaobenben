@@ -4,11 +4,12 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Crisp minimalist emerald ledger card with clean bookmark spine and ¥ glyph -->
+    <!-- Crisp minimalist emerald ledger card with clean binder notches and centered double-bar ¥ glyph -->
     <path
         android:fillColor="@color/launcher_default_card"
-        android:pathData="M36,28 C32.69,28 30,30.69 30,34 L30,74 C30,77.31 32.69,80 36,80 L72,80 C75.31,80 78,77.31 78,74 L78,34 C78,30.69 75.31,28 72,28 Z M37,37 L41.5,37 L41.5,43 L37,43 Z M37,51 L41.5,51 L41.5,57 L37,57 Z M37,65 L41.5,65 L41.5,71 L37,71 Z" />
+        android:fillType="evenOdd"
+        android:pathData="M35,27 C31.69,27 29,29.69 29,33 L29,75 C29,78.31 31.69,81 35,81 L73,81 C76.31,81 79,78.31 79,75 L79,33 C79,29.69 76.31,27 73,27 Z M35.5,36.5 L40,36.5 L40,42.5 L35.5,42.5 Z M35.5,51 L40,51 L40,57 L35.5,57 Z M35.5,65.5 L40,65.5 L40,71.5 L35.5,71.5 Z" />
     <path
         android:fillColor="@color/launcher_default_glyph"
-        android:pathData="M48,39 L55,49.5 L62,39 L67,39 L58,52 L65,52 L65,55.5 L57.5,55.5 L57.5,59 L65,59 L65,62.5 L57.5,62.5 L57.5,70 L52.5,70 L52.5,62.5 L45,62.5 L45,59 L52.5,59 L52.5,55.5 L45,55.5 L45,52 L52,52 L43,39 Z" />
+        android:pathData="M50.5,38 L58,49.5 L65.5,38 L71,38 L61.5,51.5 L68.5,51.5 L68.5,55.5 L60.5,55.5 L60.5,59.5 L68.5,59.5 L68.5,63.5 L60.5,63.5 L60.5,71 L55.5,71 L55.5,63.5 L47.5,63.5 L47.5,59.5 L55.5,59.5 L55.5,55.5 L47.5,55.5 L47.5,51.5 L54.5,51.5 L45,38 Z" />
 </vector>

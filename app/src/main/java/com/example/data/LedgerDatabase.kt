@@ -546,6 +546,9 @@ interface LedgerDao {
     )
     suspend fun deleteNotificationLogsExcess(keepCount: Int): Int
 
+    @Query("UPDATE notification_logs SET status = :status, summary = :summary WHERE id = :id")
+    suspend fun updateNotificationLogStatus(id: String, status: String, summary: String)
+
     @Query("DELETE FROM notification_logs")
     suspend fun clearAllNotificationLogs()
 }

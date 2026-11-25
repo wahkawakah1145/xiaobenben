@@ -1,7 +1,10 @@
 package com.example.ui.theme
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Color as AndroidColor
+import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
@@ -12,6 +15,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
@@ -20,6 +24,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import com.example.model.AppearanceSettings
 import com.example.model.CustomPaletteStyle
 import com.example.model.LatinNumberFont
@@ -433,6 +438,21 @@ fun SmartLedgerTheme(
         fontScale = baseDensity.fontScale
     )
 
+    val context = LocalContext.current
+    val backgroundArgb = colorScheme.background.toArgb()
+    SideEffect {
+        runCatching {
+            val activity = context.findHostActivity() ?: return@runCatching
+            val window = activity.window ?: return@runCatching
+            window.setBackgroundDrawable(ColorDrawable(backgroundArgb))
+            window.decorView.setBackgroundColor(backgroundArgb)
+            WindowCompat.getInsetsController(window, window.decorView)?.apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
+    }
+
     CompositionLocalProvider(
         LocalNumberFontFamily provides numberFontFamily,
         LocalDensity provides scaledDensity
@@ -443,4 +463,10 @@ fun SmartLedgerTheme(
             content = content
         )
     }
+}
+
+private tailrec fun Context.findHostActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findHostActivity()
+    else -> null
 }

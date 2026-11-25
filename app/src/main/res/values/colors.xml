@@ -7,29 +7,29 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <color name="monet_icon_bg">#FFC8F2E2</color>
-    <color name="monet_icon_fg">#FF0F6B54</color>
+    <color name="monet_icon_bg">#FFC2F0DF</color>
+    <color name="monet_icon_fg">#FF0A5C47</color>
 
-    <!-- Dynamic Light/Dark Adaptive Launcher Icon Tokens (Light Mode) -->
-    <color name="launcher_default_bg">#FF0C6756</color>
+    <!-- Dynamic Light/Dark Adaptive Launcher Icon Tokens (Light Mode - High Contrast) -->
+    <color name="launcher_default_bg">#FF086350</color>
     <color name="launcher_default_card">#FFFFFFFF</color>
-    <color name="launcher_default_glyph">#FF0C6756</color>
+    <color name="launcher_default_glyph">#FF065645</color>
 
-    <color name="launcher_minimal_bg">#FFF2F5F4</color>
-    <color name="launcher_minimal_stroke">#FF1E2926</color>
-    <color name="launcher_minimal_accent">#FF0D9488</color>
+    <color name="launcher_minimal_bg">#FFF5F8F7</color>
+    <color name="launcher_minimal_stroke">#FF111C1A</color>
+    <color name="launcher_minimal_accent">#FF0A7C6E</color>
 
-    <color name="launcher_ink_bg">#FF204A46</color>
-    <color name="launcher_ink_sun">#FFE9E2D0</color>
-    <color name="launcher_ink_ridge">#FFF4EFE6</color>
-    <color name="launcher_ink_line">#FFA7C4BC</color>
+    <color name="launcher_ink_bg">#FF163D39</color>
+    <color name="launcher_ink_sun">#FFF7E6C4</color>
+    <color name="launcher_ink_ridge">#FFFFFFFF</color>
+    <color name="launcher_ink_line">#FFB7DFD5</color>
 
-    <color name="launcher_cyber_bg">#FFE6F4FE</color>
-    <color name="launcher_cyber_frame">#FF0284C7</color>
-    <color name="launcher_cyber_glyph">#FF0369A1</color>
+    <color name="launcher_cyber_bg">#FFDCF0FF</color>
+    <color name="launcher_cyber_frame">#FF0369A1</color>
+    <color name="launcher_cyber_glyph">#FF074973</color>
 
-    <color name="launcher_vintage_bg">#FF6D4C41</color>
-    <color name="launcher_vintage_stroke">#FFFAF3E3</color>
-    <color name="launcher_vintage_spine">#FFE2CCA8</color>
-    <color name="launcher_vintage_clasp">#FFE8BE74</color>
+    <color name="launcher_vintage_bg">#FF5A392E</color>
+    <color name="launcher_vintage_stroke">#FFFFF8EC</color>
+    <color name="launcher_vintage_spine">#FFE9D3AE</color>
+    <color name="launcher_vintage_clasp">#FFF2C46D</color>
 </resources>

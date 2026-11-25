@@ -273,7 +273,8 @@ class SettingsDataStore(private val context: Context) {
     val aiConfigFlow: Flow<com.example.model.AiConfig> = context.smartLedgerDataStore.data.map { prefs ->
         com.example.model.AiConfig(
             providerMode = com.example.model.AiProviderMode.fromRaw(prefs[Keys.AI_PROVIDER_MODE]),
-            localModelId = prefs[Keys.AI_LOCAL_MODEL_ID] ?: "bge-small-zh-v15",
+            localModelId = prefs[Keys.AI_LOCAL_MODEL_ID]?.takeIf { it.isNotBlank() && it != "bge-small-zh-v15" }
+                ?: com.example.data.LocalModelCatalog.DEFAULT_LOCAL_MODEL_ID,
             localModelMirror = prefs[Keys.AI_LOCAL_MODEL_MIRROR] ?: "https://hf-mirror.com",
             apiBaseUrl = prefs[Keys.AI_API_BASE_URL] ?: "",
             apiKey = prefs[Keys.AI_API_KEY] ?: "",
@@ -476,7 +477,9 @@ class SettingsDataStore(private val context: Context) {
         }.toString()
         context.smartLedgerDataStore.edit { prefs ->
             prefs[Keys.AI_PROVIDER_MODE] = config.providerMode.name
-            prefs[Keys.AI_LOCAL_MODEL_ID] = config.localModelId.trim().ifBlank { "bge-small-zh-v15" }
+            prefs[Keys.AI_LOCAL_MODEL_ID] = config.localModelId.trim()
+                .takeIf { it.isNotEmpty() && it != "bge-small-zh-v15" }
+                ?: com.example.data.LocalModelCatalog.DEFAULT_LOCAL_MODEL_ID
             prefs[Keys.AI_LOCAL_MODEL_MIRROR] = config.localModelMirror.trim().ifBlank { "https://hf-mirror.com" }
             prefs[Keys.AI_API_BASE_URL] = config.apiBaseUrl.trim()
             prefs[Keys.AI_API_KEY] = config.apiKey.trim()

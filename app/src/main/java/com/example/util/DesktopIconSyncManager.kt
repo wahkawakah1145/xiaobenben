@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -15,14 +16,18 @@ import android.graphics.RectF
 import android.net.Uri
 import android.os.Process
 import android.provider.Settings
+import androidx.annotation.DrawableRes
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.core.content.ContextCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.drawable.IconCompat
 import com.example.MainActivity
+import com.example.R
 import com.example.model.AppIconStyle
+import kotlin.math.roundToInt
 
 enum class ShortcutPermissionState {
     GRANTED,
@@ -48,6 +53,132 @@ object DesktopIconSyncManager {
         ALIAS_VINTAGE,
         ALIAS_MONET
     )
+
+    data class AdaptiveIconResources(
+        @DrawableRes val backgroundRes: Int,
+        @DrawableRes val foregroundRes: Int
+    )
+
+    fun adaptiveIconResourcesFor(style: AppIconStyle): AdaptiveIconResources = when (style) {
+        AppIconStyle.EMERALD -> AdaptiveIconResources(
+            backgroundRes = R.drawable.ic_launcher_background,
+            foregroundRes = R.drawable.ic_launcher_foreground
+        )
+        AppIconStyle.MINIMAL -> AdaptiveIconResources(
+            backgroundRes = R.drawable.ic_launcher_bg_minimal,
+            foregroundRes = R.drawable.ic_launcher_fg_minimal
+        )
+        AppIconStyle.INK -> AdaptiveIconResources(
+            backgroundRes = R.drawable.ic_launcher_bg_ink,
+            foregroundRes = R.drawable.ic_launcher_fg_ink
+        )
+        AppIconStyle.CYBER -> AdaptiveIconResources(
+            backgroundRes = R.drawable.ic_launcher_bg_cyber,
+            foregroundRes = R.drawable.ic_launcher_fg_cyber
+        )
+        AppIconStyle.VINTAGE -> AdaptiveIconResources(
+            backgroundRes = R.drawable.ic_launcher_bg_vintage,
+            foregroundRes = R.drawable.ic_launcher_fg_vintage
+        )
+        AppIconStyle.MONET_ADAPTIVE -> AdaptiveIconResources(
+            backgroundRes = R.drawable.ic_launcher_bg_monet,
+            foregroundRes = R.drawable.ic_launcher_fg_monet
+        )
+    }
+
+    /**
+     * Builds a lightweight configuration-scoped Context matching [isDark] so vector drawables
+     * resolve the exact same light/night color tokens used by the Android launcher.
+     */
+    fun createThemedIconContext(context: Context, isDark: Boolean): Context {
+        val baseConfig = context.resources.configuration
+        val targetNight = if (isDark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+        val currentNight = baseConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        if (currentNight == targetNight) return context
+        val config = Configuration(baseConfig).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or targetNight
+        }
+        return runCatching { context.createConfigurationContext(config) }.getOrDefault(context)
+    }
+
+    /**
+     * Draws the exact adaptive launcher background + foreground vector layers onto [canvas]
+     * using Android's standard 72dp/108dp safe-zone crop (-25%..+125%) for pixel-accurate parity
+     * between desktop launcher icons and in-app previews.
+     */
+    fun drawAdaptiveIconLayers(
+        context: Context,
+        style: AppIconStyle,
+        isDark: Boolean,
+        canvas: Canvas,
+        widthPx: Float,
+        heightPx: Float
+    ): Boolean {
+        if (widthPx <= 0f || heightPx <= 0f) return false
+        val themedCtx = createThemedIconContext(context, isDark)
+        val resIds = adaptiveIconResourcesFor(style)
+        val bgDrawable = runCatching { ContextCompat.getDrawable(themedCtx, resIds.backgroundRes)?.mutate() }.getOrNull()
+        val fgDrawable = runCatching { ContextCompat.getDrawable(themedCtx, resIds.foregroundRes)?.mutate() }.getOrNull()
+        if (bgDrawable == null && fgDrawable == null) return false
+
+        // Standard Android adaptive icon viewport is 108dp while the masked icon shows the inner 72dp (108 / 72 = 1.5x).
+        val left = (-widthPx * 0.25f).roundToInt()
+        val top = (-heightPx * 0.25f).roundToInt()
+        val right = (widthPx * 1.25f).roundToInt()
+        val bottom = (heightPx * 1.25f).roundToInt()
+
+        bgDrawable?.let {
+            it.setBounds(left, top, right, bottom)
+            it.draw(canvas)
+        }
+        fgDrawable?.let {
+            it.setBounds(left, top, right, bottom)
+            it.draw(canvas)
+        }
+        return true
+    }
+
+    /**
+     * Renders the unified adaptive launcher vector resources directly to a rounded-square [Bitmap].
+     */
+    fun renderAdaptiveResourceBitmap(
+        context: Context,
+        styleId: String,
+        isDark: Boolean,
+        sizePx: Int = 192,
+        cornerRadiusRatio: Float = 0.24f
+    ): Bitmap {
+        val targetSize = sizePx.coerceIn(64, 512)
+        val bitmap = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val w = targetSize.toFloat()
+        val clipPath = Path().apply {
+            val radius = w * cornerRadiusRatio.coerceIn(0f, 0.5f)
+            addRoundRect(RectF(0f, 0f, w, w), radius, radius, Path.Direction.CW)
+        }
+        canvas.save()
+        canvas.clipPath(clipPath)
+        val drawn = drawAdaptiveIconLayers(
+            context = context,
+            style = AppIconStyle.fromId(styleId),
+            isDark = isDark,
+            canvas = canvas,
+            widthPx = w,
+            heightPx = w
+        )
+        canvas.restore()
+        if (!drawn) {
+            return renderThemedSvgBitmap(
+                styleId = styleId,
+                primaryArgb = 0xFF086350.toInt(),
+                primaryContainerArgb = 0xFFC2F0DF.toInt(),
+                onPrimaryArgb = 0xFFFFFFFF.toInt(),
+                tertiaryArgb = 0xFF0A7C6E.toInt(),
+                sizePx = targetSize
+            )
+        }
+        return bitmap
+    }
 
     fun aliasClassNameFor(style: AppIconStyle): String = when (style) {
         AppIconStyle.EMERALD -> ALIAS_EMERALD
@@ -372,19 +503,30 @@ object DesktopIconSyncManager {
         onPrimaryColor: Color,
         tertiaryColor: Color,
         customImageBitmap: Bitmap? = null,
-        shortcutIdSuffix: String? = null
+        shortcutIdSuffix: String? = null,
+        useAdaptiveResource: Boolean = false,
+        isDarkTheme: Boolean = false
     ): Pair<Boolean, String> {
         val label = customName.trim().ifBlank { "小本本" }
         val style = AppIconStyle.fromId(styleId)
         val bitmap = customImageBitmap?.let { cropCenterSquareBitmap(it, 192) }
-            ?: renderThemedSvgBitmap(
-                styleId = style.id,
-                primaryArgb = primaryColor.toArgb(),
-                primaryContainerArgb = primaryContainerColor.toArgb(),
-                onPrimaryArgb = onPrimaryColor.toArgb(),
-                tertiaryArgb = tertiaryColor.toArgb(),
-                sizePx = 192
-            )
+            ?: if (useAdaptiveResource) {
+                renderAdaptiveResourceBitmap(
+                    context = context,
+                    styleId = style.id,
+                    isDark = isDarkTheme,
+                    sizePx = 192
+                )
+            } else {
+                renderThemedSvgBitmap(
+                    styleId = style.id,
+                    primaryArgb = primaryColor.toArgb(),
+                    primaryContainerArgb = primaryContainerColor.toArgb(),
+                    onPrimaryArgb = onPrimaryColor.toArgb(),
+                    tertiaryArgb = tertiaryColor.toArgb(),
+                    sizePx = 192
+                )
+            }
         if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
             return false to "当前系统桌面不支持直接创建快捷方式，请检查桌面权限设置"
         }

@@ -361,6 +361,9 @@ class LedgerViewModel(
     private val _notificationLogsState = MutableStateFlow(NotificationLogsUiState())
     val notificationLogsState: StateFlow<NotificationLogsUiState> = _notificationLogsState.asStateFlow()
 
+    private val _forcingAiLogId = MutableStateFlow<String?>(null)
+    val forcingAiLogId: StateFlow<String?> = _forcingAiLogId.asStateFlow()
+
     val notificationLogCountState: StateFlow<Int> =
         repository.observeNotificationLogsCount()
             .catch { error ->
@@ -1665,6 +1668,128 @@ class LedgerViewModel(
                     _actionMessage.value = "已更新日志保留策略：$countDesc · $daysDesc"
                 }
                 .onFailure { err -> _actionMessage.value = err.message ?: "更新保留策略失败" }
+        }
+    }
+
+    /**
+     * Manually forces AI recognition on any captured notification log entry (even if auto-filtered
+     * as lacking an explicit amount unit) and records the resulting transaction when valid.
+     */
+    fun forceAiRecognizeNotificationLog(
+        context: android.content.Context,
+        log: com.example.model.CapturedNotificationLog,
+        onResult: (Result<String>) -> Unit = {}
+    ) {
+        if (_forcingAiLogId.value != null) return
+        viewModelScope.launch {
+            _forcingAiLogId.value = log.id
+            try {
+                val aiConfig = repository.getAiConfigOnce()
+                if (aiConfig.providerMode == AiProviderMode.DISABLED) {
+                    val msg = "请先在「设置 → AI 理解与模型设置」启用本地模型或在线 AI 接口"
+                    _actionMessage.value = msg
+                    onResult(Result.failure(IllegalStateException(msg)))
+                    return@launch
+                }
+                val settings = repository.getSettingsOnce()
+                val customRules = repository.getRulesOnce()
+                val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settings)
+                val activeChannels = com.example.model.ChannelCatalog.activeChannels(settings)
+                val collapseChannel = !settings.channelShowChildren
+
+                val fallbackParsed = ChinaNotificationParser.parse(
+                    packageName = log.packageName,
+                    title = log.title,
+                    content = log.content,
+                    customRules = customRules,
+                    enableLocalSemanticPass = false,
+                    referenceTimeMillis = log.capturedAtMillis,
+                    customChannels = activeChannels,
+                    channelParentMap = settings.channelParentMap,
+                    collapseChannelToParent = collapseChannel
+                )
+
+                val aiResult = aiManager.enhanceOrParseNotification(
+                    context = context.applicationContext,
+                    config = aiConfig,
+                    packageName = log.packageName,
+                    title = log.title,
+                    content = log.content,
+                    fallbackParsed = fallbackParsed,
+                    availableRules = customRules,
+                    activeCategories = activeCategories,
+                    activeChannels = activeChannels,
+                    billFieldsConfig = settings.billFieldsConfig,
+                    categoryParentMap = settings.categoryParentMap,
+                    channelParentMap = settings.channelParentMap,
+                    collapseChannelToParent = collapseChannel,
+                    bypassAmountUnitGate = true
+                )
+
+                val parsed = aiResult.getOrElse { err ->
+                    val errMsg = err.localizedMessage ?: "AI 识别失败，请检查模型安装或接口配置"
+                    _actionMessage.value = errMsg
+                    onResult(Result.failure(err))
+                    return@launch
+                }
+
+                if (!parsed.isFinancialTransaction || parsed.amountCents <= 0L) {
+                    val reason = parsed.reasoning.ifBlank { "AI 判断该通知不含可入账金额" }
+                    repository.updateNotificationLogStatus(
+                        id = log.id,
+                        status = "手动AI未识别到金额",
+                        summary = reason.take(120)
+                    )
+                    loadNotificationLogs(_notificationLogsState.value.query)
+                    _actionMessage.value = reason
+                    onResult(Result.failure(IllegalStateException(reason)))
+                    return@launch
+                }
+
+                val resolvedOccurredAt = parsed.occurredAtMillis ?: log.capturedAtMillis
+                val needsManualConfirm = settings.requireManualConfirm
+                val compactRaw = "${log.title}: ${log.content}"
+                    .replace(Regex("""\s+"""), " ")
+                    .trim()
+                    .take(220)
+                val tx = LedgerTransaction(
+                    amountCents = parsed.amountCents,
+                    currencyCode = parsed.currencyCode,
+                    type = parsed.type.name,
+                    category = parsed.category,
+                    merchant = parsed.merchant,
+                    channel = parsed.channel,
+                    cardLastFour = parsed.cardLastFour,
+                    sourceApp = parsed.sourceApp.name,
+                    parseMethod = ParseMethod.LOCAL_NLP.name,
+                    rawNotification = compactRaw,
+                    note = parsed.reasoning.ifBlank { "通知日志手动强制 AI 识别" }.take(120),
+                    customFields = parsed.customFields,
+                    occurredAtMillis = resolvedOccurredAt,
+                    confirmed = !needsManualConfirm
+                )
+                repository.addTransaction(tx).getOrThrow()
+
+                val symbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
+                val formattedAmount = "$symbol%.2f".format(parsed.amountCents / 100.0)
+                val newStatus = if (needsManualConfirm) "手动AI待确认" else "手动AI已入账"
+                val newSummary = "${parsed.type.label} $formattedAmount · ${parsed.merchant} · ${parsed.category}"
+                repository.updateNotificationLogStatus(
+                    id = log.id,
+                    status = newStatus,
+                    summary = newSummary
+                )
+                loadNotificationLogs(_notificationLogsState.value.query)
+                val okMsg = "强制 AI 识别成功：$newSummary"
+                _actionMessage.value = okMsg
+                onResult(Result.success(okMsg))
+            } catch (err: Exception) {
+                val errMsg = err.localizedMessage ?: "强制 AI 识别失败"
+                _actionMessage.value = errMsg
+                onResult(Result.failure(err))
+            } finally {
+                _forcingAiLogId.value = null
+            }
         }
     }
 
