@@ -184,11 +184,20 @@ object SettingsSearchCatalog {
         SettingsSearchItem(
             id = "ai_system_prompt",
             title = "AI 理解提示词与参考规则",
-            subtitle = "查看、编辑或重置 AI 系统提示词，勾选参考识别规则",
+            subtitle = "查看、编辑或重置 AI 系统提示词，折叠/勾选参考识别规则",
             categoryLabel = "AI理解",
             route = ROUTE_SETTINGS_AI,
             sectionKey = "ai_prompt_card",
             keywords = listOf("提示词", "prompt", "系统提示词", "参考规则", "ai提示词")
+        ),
+        SettingsSearchItem(
+            id = "ai_tuning_and_test",
+            title = "AI 大模型调参与对话测试",
+            subtitle = "调节温度、Top-P/Top-K、上下文、线程与空闲自动释放，支持多轮对话与账单解析测试",
+            categoryLabel = "AI理解 · 调参与测试",
+            route = ROUTE_SETTINGS_AI_TUNING,
+            sectionKey = "ai_tuning_params_card",
+            keywords = listOf("调参", "温度", "temperature", "top_p", "top_k", "上下文", "对话测试", "gguf", "释放内存", "模型测试")
         ),
 
         // 备份与恢复

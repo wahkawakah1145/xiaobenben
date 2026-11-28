@@ -10,6 +10,10 @@
 -keep class com.example.service.BootCompletedReceiver { *; }
 -keep class com.example.service.BackupReminderReceiver { *; }
 
+# Native GGUF / llama.cpp JNI bindings
+-keep class dev.ffmpegkit.llama.** { *; }
+-dontwarn dev.ffmpegkit.llama.**
+
 # Coroutines & OkHttp warnings
 -dontwarn kotlinx.coroutines.debug.**
 -dontwarn okhttp3.**

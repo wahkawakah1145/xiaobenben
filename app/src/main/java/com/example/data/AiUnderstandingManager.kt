@@ -114,7 +114,19 @@ data class LocalModelInstallStatus(
     val modelId: String,
     val installed: Boolean,
     val totalBytes: Long,
-    val vocabCountEstimate: Int
+    val vocabCountEstimate: Int,
+    val isGgufModel: Boolean = false,
+    val ggufVersion: Int = 0,
+    val ggufTensorCount: Long = 0L,
+    val validationError: String = ""
+)
+
+data class AiChatReply(
+    val text: String,
+    val engineLabel: String,
+    val tokensGenerated: Int = 0,
+    val tokensPerSecond: Float = 0f,
+    val latencyMs: Long = 0L
 )
 
 class AiUnderstandingManager {
@@ -214,6 +226,16 @@ class AiUnderstandingManager {
                 return@withContext Result.failure(IllegalArgumentException("导入的模型文件过小或为空"))
             }
 
+            if (ext == "gguf") {
+                val ggufHeader = LocalGgufRuntimeManager.inspectGgufFile(targetFile)
+                if (!ggufHeader.valid) {
+                    dir.deleteRecursively()
+                    return@withContext Result.failure(
+                        IllegalArgumentException("导入的 GGUF 权重校验失败：${ggufHeader.errorMessage}")
+                    )
+                }
+            }
+
             val detectedFormat = inspectWeightFormat(targetFile, ext)
             val vocabCount = extractPrintableChineseVocabCount(targetFile, ext)
             val now = System.currentTimeMillis()
@@ -261,6 +283,10 @@ class AiUnderstandingManager {
     }
 
     private fun inspectWeightFormat(file: File, ext: String): String {
+        if (ext == "gguf") {
+            val header = LocalGgufRuntimeManager.inspectGgufFile(file)
+            return if (header.valid) "GGUF 量化权重" else "GGUF 模型文件（校验异常）"
+        }
         val header = ByteArray(16)
         val readCount = runCatching {
             file.inputStream().use { it.read(header) }
@@ -268,7 +294,6 @@ class AiUnderstandingManager {
         val magic = if (readCount >= 4) String(header, 0, 4, Charsets.US_ASCII) else ""
         return when {
             magic == "GGUF" -> "GGUF 量化权重"
-            ext == "gguf" -> "GGUF 模型文件"
             ext == "onnx" -> "ONNX 推理图"
             ext == "tflite" -> "LiteRT / TFLite 权重"
             ext == "safetensors" -> "SafeTensors 安全权重"
@@ -294,12 +319,29 @@ class AiUnderstandingManager {
         if (LocalModelCatalog.isCustomModelId(modelId)) {
             val info = getCustomModelInfo(context, modelId)
             return if (info != null) {
-                LocalModelInstallStatus(
-                    modelId = info.id,
-                    installed = true,
-                    totalBytes = info.sizeBytes,
-                    vocabCountEstimate = info.vocabTokenCount.coerceAtLeast(32_000)
-                )
+                val dir = modelDirectory(context, info.id)
+                val ggufFile = LocalGgufRuntimeManager.findPrimaryGgufFile(dir)
+                if (ggufFile != null) {
+                    val header = LocalGgufRuntimeManager.inspectGgufFile(ggufFile)
+                    LocalModelInstallStatus(
+                        modelId = info.id,
+                        installed = header.valid,
+                        totalBytes = info.sizeBytes,
+                        vocabCountEstimate = info.vocabTokenCount.coerceAtLeast(32_000),
+                        isGgufModel = true,
+                        ggufVersion = header.version,
+                        ggufTensorCount = header.tensorCount,
+                        validationError = if (header.valid) "" else header.errorMessage
+                    )
+                } else {
+                    LocalModelInstallStatus(
+                        modelId = info.id,
+                        installed = true,
+                        totalBytes = info.sizeBytes,
+                        vocabCountEstimate = info.vocabTokenCount.coerceAtLeast(32_000),
+                        isGgufModel = false
+                    )
+                }
             } else {
                 LocalModelInstallStatus(modelId, installed = false, totalBytes = 0L, vocabCountEstimate = 0)
             }
@@ -311,13 +353,20 @@ class AiUnderstandingManager {
             return LocalModelInstallStatus(preset.id, installed = false, totalBytes = 0L, vocabCountEstimate = 0)
         }
         val expectedFiles = preset.files.map { File(dir, it.fileName) }
-        val installed = expectedFiles.all { it.exists() && it.length() > 16L }
+        val filesPresent = expectedFiles.all { it.exists() && it.length() > 16L }
         val bytes = expectedFiles.sumOf { if (it.exists()) it.length() else 0L }
+        val ggufFile = expectedFiles.firstOrNull { it.name.endsWith(".gguf", ignoreCase = true) }
+        val isGguf = ggufFile != null
+        val ggufHeader = if (ggufFile != null && ggufFile.exists()) {
+            LocalGgufRuntimeManager.inspectGgufFile(ggufFile)
+        } else {
+            null
+        }
+        val installed = filesPresent && (!isGguf || (ggufHeader?.valid == true))
         val vocabFile = File(dir, "vocab.txt")
-        val hasGguf = expectedFiles.any { it.name.endsWith(".gguf", ignoreCase = true) && it.exists() }
         val vocabCount = when {
             vocabFile.exists() -> vocabFile.useLines { it.count() }
-            hasGguf && installed -> 65_536
+            isGguf && installed -> 65_536
             installed -> 150_000
             else -> 0
         }
@@ -325,7 +374,15 @@ class AiUnderstandingManager {
             modelId = preset.id,
             installed = installed,
             totalBytes = bytes,
-            vocabCountEstimate = vocabCount
+            vocabCountEstimate = vocabCount,
+            isGgufModel = isGguf,
+            ggufVersion = ggufHeader?.version ?: 0,
+            ggufTensorCount = ggufHeader?.tensorCount ?: 0L,
+            validationError = if (ggufFile != null && ggufFile.exists() && ggufHeader != null && !ggufHeader.valid) {
+                ggufHeader.errorMessage
+            } else {
+                ""
+            }
         )
     }
 
@@ -336,6 +393,10 @@ class AiUnderstandingManager {
             LocalModelCatalog.resolve(modelId).id
         }
         val dir = modelDirectory(context, targetId)
+        val loadedPath = LocalGgufRuntimeManager.status.value.loadedModelPath
+        if (loadedPath != null && loadedPath.startsWith(dir.absolutePath)) {
+            LocalGgufRuntimeManager.releaseModelIfIdle(force = true)
+        }
         return if (dir.exists()) dir.deleteRecursively() else true
     }
 
@@ -424,6 +485,15 @@ class AiUnderstandingManager {
                         tmpFile.delete()
                         return@withContext Result.failure(IllegalStateException("下载文件 ${spec.fileName} 校验失败"))
                     }
+                    if (spec.fileName.endsWith(".gguf", ignoreCase = true)) {
+                        val ggufHeader = LocalGgufRuntimeManager.inspectGgufFile(tmpFile)
+                        if (!ggufHeader.valid) {
+                            tmpFile.delete()
+                            return@withContext Result.failure(
+                                IllegalStateException("下载的 GGUF 权重校验失败：${ggufHeader.errorMessage}")
+                            )
+                        }
+                    }
                     if (targetFile.exists()) targetFile.delete()
                     if (!tmpFile.renameTo(targetFile)) {
                         tmpFile.copyTo(targetFile, overwrite = true)
@@ -454,7 +524,8 @@ class AiUnderstandingManager {
         categoryParentMap: Map<String, String> = emptyMap(),
         channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap,
         collapseChannelToParent: Boolean = true,
-        bypassAmountUnitGate: Boolean = false
+        bypassAmountUnitGate: Boolean = false,
+        lowMemoryBackground: Boolean = false
     ): Result<ParsedNotificationResult> {
         val selectedRules = resolveSelectedRules(config, availableRules)
         return when (config.providerMode) {
@@ -490,8 +561,208 @@ class AiUnderstandingManager {
                     activeChannels = activeChannels,
                     channelParentMap = channelParentMap,
                     collapseChannelToParent = collapseChannelToParent,
-                    bypassAmountUnitGate = bypassAmountUnitGate
+                    bypassAmountUnitGate = bypassAmountUnitGate,
+                    aiConfig = config,
+                    activeCategories = activeCategories,
+                    billFieldsConfig = billFieldsConfig,
+                    categoryParentMap = categoryParentMap,
+                    lowMemoryBackground = lowMemoryBackground
                 )
+            }
+        }
+    }
+
+    suspend fun preloadLocalGgufModel(
+        context: Context,
+        config: AiConfig
+    ): Result<String> {
+        val isCustom = LocalModelCatalog.isCustomModelId(config.localModelId)
+        val resolvedId = if (isCustom) config.localModelId else LocalModelCatalog.resolve(config.localModelId).id
+        val dir = modelDirectory(context, resolvedId)
+        val ggufFile = LocalGgufRuntimeManager.findPrimaryGgufFile(dir)
+            ?: return Result.failure(
+                IllegalStateException("当前所选本地模型不是 .gguf 权重，无需预加载原生大模型引擎")
+            )
+        val header = LocalGgufRuntimeManager.inspectGgufFile(ggufFile)
+        if (!header.valid) {
+            return Result.failure(IllegalArgumentException(header.errorMessage))
+        }
+        val displayName = resolveModelDisplayName(context, resolvedId)
+        val startedAt = System.currentTimeMillis()
+        val loadResult = LocalGgufRuntimeManager.ensureLoaded(
+            modelFile = ggufFile,
+            displayName = displayName,
+            config = config,
+            lowMemoryMode = false
+        )
+        return loadResult.map {
+            val elapsedMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
+            "模型「$displayName」已加载到端侧引擎（GGUF v${header.version} · ${header.tensorCount} 张量 · 上下文 ${config.contextSize} · 耗时 ${elapsedMs}ms）"
+        }
+    }
+
+    suspend fun chatTest(
+        context: Context,
+        config: AiConfig,
+        history: List<com.example.model.AiChatMessage>,
+        userInput: String,
+        useLedgerSystemPrompt: Boolean = false,
+        availableRules: List<CustomParsingRule> = emptyList(),
+        activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
+        activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
+        billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
+        categoryParentMap: Map<String, String> = emptyMap(),
+        channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap
+    ): Result<AiChatReply> = withContext(Dispatchers.IO) {
+        val cleanInput = userInput.trim()
+        if (cleanInput.isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("请输入对话内容"))
+        }
+        val selectedRules = resolveSelectedRules(config, availableRules)
+        val systemPrompt = if (useLedgerSystemPrompt) {
+            buildEffectiveSystemPrompt(
+                config = config,
+                selectedRules = selectedRules,
+                activeCategories = activeCategories,
+                activeChannels = activeChannels,
+                billFieldsConfig = billFieldsConfig,
+                categoryParentMap = categoryParentMap,
+                channelParentMap = channelParentMap
+            )
+        } else {
+            "你是一个简洁、精准、友好的中文 AI 助手，请直接清晰地回答用户问题。"
+        }
+
+        when (config.providerMode) {
+            AiProviderMode.DISABLED -> {
+                Result.failure(IllegalStateException("AI 理解当前已关闭，请先启用「本地开源小模型」或「在线 API 接口」"))
+            }
+            AiProviderMode.LOCAL_SMALL_MODEL -> {
+                val isCustom = LocalModelCatalog.isCustomModelId(config.localModelId)
+                val resolvedId = if (isCustom) config.localModelId else LocalModelCatalog.resolve(config.localModelId).id
+                val status = getInstallStatus(context, resolvedId)
+                val displayName = resolveModelDisplayName(context, resolvedId)
+                if (!status.installed) {
+                    val hint = status.validationError.ifBlank { "尚未下载或导入模型文件" }
+                    return@withContext Result.failure(
+                        IllegalStateException("本地模型「$displayName」未就绪：$hint")
+                    )
+                }
+                val dir = modelDirectory(context, resolvedId)
+                val ggufFile = LocalGgufRuntimeManager.findPrimaryGgufFile(dir)
+                    ?: return@withContext Result.failure(
+                        IllegalStateException("「$displayName」为轻量分词词表包，仅支持通知语义解析；请切换至 LFM2.5-350M (GGUF) 或导入 .gguf 权重以进行端侧对话测试。")
+                    )
+                val recentTurns = history.filter { !it.isError }.takeLast(6)
+                val stitchedPrompt = if (recentTurns.isEmpty()) {
+                    cleanInput
+                } else {
+                    buildString {
+                        appendLine("以下是之前的对话上下文：")
+                        recentTurns.forEach { msg ->
+                            val roleLabel = if (msg.isUser) "用户" else "助手"
+                            appendLine("$roleLabel：${msg.content.take(400)}")
+                        }
+                        append("用户：$cleanInput")
+                    }
+                }
+                val completion = LocalGgufRuntimeManager.complete(
+                    modelFile = ggufFile,
+                    displayName = displayName,
+                    config = config,
+                    systemPrompt = systemPrompt,
+                    userPrompt = stitchedPrompt,
+                    lowMemoryMode = false,
+                    releaseImmediatelyAfter = false
+                ).getOrElse { err ->
+                    return@withContext Result.failure(err)
+                }
+                Result.success(
+                    AiChatReply(
+                        text = completion.text.ifBlank { "（模型未输出文本内容，可适当调大最大输出 Token 或调整温度参数）" },
+                        engineLabel = "端侧 GGUF · ${displayName.substringBefore(" ")}",
+                        tokensGenerated = completion.tokensGenerated,
+                        tokensPerSecond = completion.tokensPerSecond,
+                        latencyMs = (completion.promptEvalTimeMs + completion.generateTimeMs).coerceAtLeast(1L)
+                    )
+                )
+            }
+            AiProviderMode.ONLINE_API -> {
+                val rawEndpoint = config.apiBaseUrl.trim()
+                val apiKey = config.apiKey.trim()
+                val modelName = config.apiModelName.trim()
+                if (rawEndpoint.isEmpty() || apiKey.isEmpty() || modelName.isEmpty()) {
+                    return@withContext Result.failure(IllegalArgumentException("请先在 AI 理解页面填写完整的在线 API 地址、API Key 与模型名称"))
+                }
+                val chatUrl = normalizeChatCompletionsUrl(rawEndpoint)
+                val messagesJson = JSONArray().apply {
+                    put(JSONObject().put("role", "system").put("content", systemPrompt))
+                    history.filter { !it.isError }.takeLast(10).forEach { msg ->
+                        put(
+                            JSONObject()
+                                .put("role", if (msg.isUser) "user" else "assistant")
+                                .put("content", msg.content)
+                        )
+                    }
+                    put(JSONObject().put("role", "user").put("content", cleanInput))
+                }
+                val payload = JSONObject().apply {
+                    put("model", modelName)
+                    put("temperature", config.temperature.coerceIn(0.0f, 1.5f).toDouble())
+                    put("top_p", config.topP.coerceIn(0.1f, 1.0f).toDouble())
+                    put("max_tokens", config.maxTokens.coerceIn(64, 2048))
+                    put("messages", messagesJson)
+                }.toString()
+                val startedAt = System.currentTimeMillis()
+                try {
+                    val request = Request.Builder()
+                        .url(chatUrl)
+                        .header("Authorization", "Bearer $apiKey")
+                        .header("Content-Type", "application/json")
+                        .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                        .build()
+                    val responseBody = client.newCall(request).execute().use { response ->
+                        val text = response.body?.string().orEmpty()
+                        if (!response.isSuccessful) {
+                            val snippet = text.take(180).replace("\n", " ")
+                            return@withContext Result.failure(
+                                IllegalStateException("在线 AI 接口返回 HTTP ${response.code}${if (snippet.isNotBlank()) "：$snippet" else ""}")
+                            )
+                        }
+                        text
+                    }
+                    val latencyMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
+                    val root = JSONObject(responseBody)
+                    val choices = root.optJSONArray("choices")
+                        ?: return@withContext Result.failure(IllegalStateException("在线 API 响应缺少 choices 字段"))
+                    if (choices.length() == 0) {
+                        return@withContext Result.failure(IllegalStateException("在线 API 未返回回复内容"))
+                    }
+                    val replyText = choices.getJSONObject(0)
+                        .optJSONObject("message")
+                        ?.optString("content")
+                        ?.trim()
+                        .orEmpty()
+                    val completionTokens = root.optJSONObject("usage")?.optInt("completion_tokens", 0) ?: 0
+                    val tps = if (completionTokens > 0 && latencyMs > 0L) {
+                        completionTokens * 1000f / latencyMs.toFloat()
+                    } else {
+                        0f
+                    }
+                    Result.success(
+                        AiChatReply(
+                            text = replyText.ifBlank { "（在线模型返回空文本）" },
+                            engineLabel = "在线 API · $modelName",
+                            tokensGenerated = completionTokens,
+                            tokensPerSecond = tps,
+                            latencyMs = latencyMs
+                        )
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Result.failure(IllegalStateException("调用在线对话失败：${e.localizedMessage ?: "网络异常"}", e))
+                }
             }
         }
     }
@@ -507,7 +778,12 @@ class AiUnderstandingManager {
         activeChannels: List<String> = com.example.model.ChannelCatalog.defaultChannels,
         channelParentMap: Map<String, String> = com.example.model.ChannelCatalog.defaultChannelParentMap,
         collapseChannelToParent: Boolean = true,
-        bypassAmountUnitGate: Boolean = false
+        bypassAmountUnitGate: Boolean = false,
+        aiConfig: AiConfig = AiConfig(),
+        activeCategories: List<String> = com.example.model.CategoryCatalog.allCategories,
+        billFieldsConfig: List<com.example.model.BillFieldConfig> = com.example.model.BillFieldCatalog.defaultFields,
+        categoryParentMap: Map<String, String> = emptyMap(),
+        lowMemoryBackground: Boolean = false
     ): Result<ParsedNotificationResult> = withContext(Dispatchers.Default) {
         val combined = "$title\n$content".trim()
         if (combined.isBlank()) {
@@ -524,12 +800,106 @@ class AiUnderstandingManager {
         val status = getInstallStatus(context, resolvedId)
         if (!status.installed) {
             val missingName = if (isCustom) "导入的模型权重" else LocalModelCatalog.resolve(resolvedId).name
+            val detail = status.validationError.takeIf { it.isNotBlank() }?.let { "（$it）" } ?: ""
             return@withContext Result.failure(
-                IllegalStateException("本地模型「$missingName」尚未就绪，请先在「AI理解」中下载或导入")
+                IllegalStateException("本地模型「$missingName」尚未就绪$detail，请先在「AI理解」中下载或导入")
             )
         }
 
         val dir = modelDirectory(context, resolvedId)
+        val modelDisplayName = resolveModelDisplayName(context, resolvedId)
+        val modelTag = modelDisplayName.substringBefore(" ")
+        val matchedPromptRule = matchPromptReferenceRule(selectedRules, packageName, title, content)
+        if (matchedPromptRule != null && matchedPromptRule.isIgnoreRule) {
+            return@withContext Result.failure(
+                IllegalStateException("参考规则「${matchedPromptRule.name}」将其判定为非账单忽略通知")
+            )
+        }
+        val ruleSuffix = buildString {
+            if (matchedPromptRule != null) append(" · 参考规则「${matchedPromptRule.name}」")
+            else if (selectedRules.isNotEmpty()) append(" · 附${selectedRules.size}条规则参考")
+            if (customPrompt.isNotBlank()) append(" · 自定义提示词")
+        }
+
+        // 1. Real on-device llama.cpp inference path whenever a .gguf model weight is installed
+        val ggufFile = LocalGgufRuntimeManager.findPrimaryGgufFile(dir)
+        var ggufFallbackNote = ""
+        if (ggufFile != null) {
+            val effectiveConfig = aiConfig.copy(
+                localModelId = resolvedId,
+                customSystemPrompt = customPrompt.ifBlank { aiConfig.customSystemPrompt }
+            )
+            val systemPrompt = buildEffectiveSystemPrompt(
+                config = effectiveConfig,
+                selectedRules = selectedRules,
+                activeCategories = activeCategories,
+                activeChannels = activeChannels,
+                billFieldsConfig = billFieldsConfig,
+                categoryParentMap = categoryParentMap,
+                channelParentMap = channelParentMap
+            )
+            val userPrompt = buildString {
+                appendLine("应用包名: ${packageName.ifBlank { "unknown" }}")
+                appendLine("通知标题: $title")
+                appendLine("通知正文: $content")
+                if (bypassAmountUnitGate) {
+                    appendLine("补充说明: 用户已在通知日志中手动强制调用 AI 识别，请尽力结合语义识别真实动账金额、币种、交易对方与渠道。")
+                }
+            }
+            val ggufResult = LocalGgufRuntimeManager.complete(
+                modelFile = ggufFile,
+                displayName = modelDisplayName,
+                config = effectiveConfig,
+                systemPrompt = systemPrompt,
+                userPrompt = userPrompt,
+                lowMemoryMode = lowMemoryBackground,
+                releaseImmediatelyAfter = lowMemoryBackground && effectiveConfig.localAutoUnloadSeconds == 0
+            )
+            if (ggufResult.isSuccess) {
+                val completion = ggufResult.getOrThrow()
+                val parsedJson = extractFirstJsonObject(completion.text)
+                if (parsedJson != null) {
+                    val isFinancial = parsedJson.optBoolean("isFinancial", false)
+                    val amountYuan = parsedJson.optDouble("amount", 0.0)
+                    if (isFinancial && amountYuan > 0.0 && amountYuan <= 10_000_000.0) {
+                        val speedLabel = String.format(Locale.US, "%.1f tok/s", completion.tokensPerSecond)
+                        return@withContext Result.success(
+                            buildParsedResultFromAiJson(
+                                parsedJson = parsedJson,
+                                amountYuan = amountYuan,
+                                packageName = packageName,
+                                title = title,
+                                content = content,
+                                selectedRules = selectedRules,
+                                activeChannels = activeChannels,
+                                channelParentMap = channelParentMap,
+                                collapseChannelToParent = collapseChannelToParent,
+                                reasoning = "端侧 GGUF [$modelTag · $speedLabel]$ruleSuffix"
+                            )
+                        )
+                    } else if (!isFinancial && !bypassAmountUnitGate) {
+                        return@withContext Result.failure(
+                            IllegalStateException("端侧 GGUF [$modelTag] 判定该通知非有效动账")
+                        )
+                    }
+                }
+                // Model loaded & ran cleanly, but output wasn't strict JSON — fall through to semantic extraction
+                ggufFallbackNote = "端侧 GGUF [$modelTag · 语义校正]"
+            } else {
+                val err = ggufResult.exceptionOrNull()
+                if (err is NativeGgufUnavailableException) {
+                    // Non-arm64 architecture (e.g. x86_64 emulator / JVM test): gracefully fall back to semantic extractor
+                    ggufFallbackNote = "端侧语义 [$modelTag]"
+                } else {
+                    // Real GGUF load/inference failure: surface directly so the user knows why .gguf failed
+                    return@withContext Result.failure(
+                        err ?: IllegalStateException("端侧 GGUF 模型加载或推理失败")
+                    )
+                }
+            }
+        }
+
+        // 2. Local vocab / semantic extraction path (for vocab-only small packs or GGUF JSON-correction fallback)
         val primaryMention = ChinaNotificationParser.extractPrimaryAmountAndCurrency(
             text = combined,
             allowLooseStandaloneNumber = bypassAmountUnitGate,
@@ -546,12 +916,6 @@ class AiUnderstandingManager {
         val amountCents = primaryMention.amountCents
 
         val (matchedVocabHits, totalVocabCount) = scanVocabMatchesStreaming(dir, combined)
-        val matchedPromptRule = matchPromptReferenceRule(selectedRules, packageName, title, content)
-        if (matchedPromptRule != null && matchedPromptRule.isIgnoreRule) {
-            return@withContext Result.failure(
-                IllegalStateException("参考规则「${matchedPromptRule.name}」将其判定为非账单忽略通知")
-            )
-        }
         val currencyCode = if (primaryMention.hasSpecificCurrency) {
             primaryMention.currencyCode
         } else {
@@ -600,17 +964,11 @@ class AiUnderstandingManager {
         } else {
             0.84f
         }
-        val modelTag = resolveModelDisplayName(context, resolvedId).substringBefore(" ")
         val customInfo = if (isCustom) getCustomModelInfo(context, resolvedId) else null
-        val ruleSuffix = buildString {
-            if (matchedPromptRule != null) append(" · 参考规则「${matchedPromptRule.name}」")
-            else if (selectedRules.isNotEmpty()) append(" · 附${selectedRules.size}条规则参考")
-            if (customPrompt.isNotBlank()) append(" · 自定义提示词")
-        }
-        val modelDesc = if (customInfo != null) {
-            "本地自导权重 [$modelTag · ${customInfo.formatLabel}]$ruleSuffix"
-        } else {
-            "本地模型 [$modelTag · $totalVocabCount 词表]$ruleSuffix"
+        val modelDesc = when {
+            ggufFallbackNote.isNotBlank() -> "$ggufFallbackNote$ruleSuffix"
+            customInfo != null -> "本地自导权重 [$modelTag · ${customInfo.formatLabel}]$ruleSuffix"
+            else -> "本地模型 [$modelTag · $totalVocabCount 词表]$ruleSuffix"
         }
         val occurredAt = ChinaNotificationParser.extractOccurredAtMillis(combined)
         Result.success(
@@ -631,6 +989,90 @@ class AiUnderstandingManager {
                 inquiryReason = "",
                 occurredAtMillis = occurredAt
             )
+        )
+    }
+
+    private fun buildParsedResultFromAiJson(
+        parsedJson: JSONObject,
+        amountYuan: Double,
+        packageName: String,
+        title: String,
+        content: String,
+        selectedRules: List<CustomParsingRule>,
+        activeChannels: List<String>,
+        channelParentMap: Map<String, String>,
+        collapseChannelToParent: Boolean,
+        reasoning: String
+    ): ParsedNotificationResult {
+        val currency = CurrencyCatalog.resolve(parsedJson.optString("currency", "CNY")).code
+        val rawAiType = TransactionType.fromRaw(parsedJson.optString("type", "EXPENSE"))
+        val txType = if (ChinaNotificationParser.isSelfTransferOrWithdraw("$title $content")) {
+            TransactionType.TRANSFER
+        } else {
+            rawAiType
+        }
+        val category = parsedJson.optString("category")
+            .trim()
+            .ifBlank { ChinaNotificationParser.inferCategory("", "$title $content", txType) }
+            .take(40)
+        val rawAiChannel = parsedJson.optString("channel")
+            .trim()
+            .takeIf { it.isNotBlank() && it != "null" && ChinaNotificationParser.isConcreteChannelName(it) }
+            ?.take(40)
+            ?: ChinaNotificationParser.resolveChannelFromRules(packageName, "$title\n$content", selectedRules, content.trim())
+            ?: ChinaNotificationParser.detectChannel(packageName, "$title $content", activeChannels)
+                .takeIf { ChinaNotificationParser.isConcreteChannelName(it) }
+            ?: ChinaPaymentCatalog.watchedPackageMap[packageName]?.name
+            ?: "未知渠道"
+        val channel = com.example.model.ChannelCatalog.normalizeRecognizedChannel(
+            rawChannel = rawAiChannel,
+            parentMap = channelParentMap,
+            collapseToParent = collapseChannelToParent
+        )
+        val merchant = parsedJson.optString("merchant")
+            .trim()
+            .takeIf { it.isNotBlank() && it != "null" }
+            ?.take(80)
+            ?: "${channel}${txType.label}"
+        val cardLastFour = parsedJson.optString("cardLastFour")
+            .trim()
+            .takeIf { it.length == 4 && it.all(Char::isDigit) }
+        val aiTimeText = parsedJson.optString("occurredTime")
+            .trim()
+            .takeIf { it.isNotBlank() && it != "null" }
+        val occurredAtMillis = aiTimeText?.let { ChinaNotificationParser.extractOccurredAtMillis(it) }
+            ?: ChinaNotificationParser.extractOccurredAtMillis("$title\n$content")
+        val confidence = parsedJson.optDouble("confidence", 0.92).toFloat().coerceIn(0.5f, 1.0f)
+        val customFields = buildMap<String, String> {
+            val obj = parsedJson.optJSONObject("customFields")
+            if (obj != null) {
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next().trim().take(40)
+                    val v = obj.optString(k).trim().take(160)
+                    if (k.isNotEmpty() && v.isNotEmpty() && v != "null") {
+                        put(k, v)
+                    }
+                }
+            }
+        }
+        return ParsedNotificationResult(
+            isFinancialTransaction = true,
+            amountCents = (amountYuan * 100.0).roundToLong().coerceAtLeast(1L),
+            currencyCode = currency,
+            type = txType,
+            category = category,
+            merchant = merchant,
+            channel = channel,
+            cardLastFour = cardLastFour,
+            sourceApp = ChinaPaymentCatalog.resolveSourceApp(packageName, "$title $content"),
+            parseMethod = ParseMethod.LOCAL_NLP,
+            confidence = confidence,
+            reasoning = reasoning,
+            needsInquiry = false,
+            inquiryReason = "",
+            occurredAtMillis = occurredAtMillis,
+            customFields = customFields
         )
     }
 
@@ -683,7 +1125,9 @@ class AiUnderstandingManager {
 
         val payload = JSONObject().apply {
             put("model", modelName)
-            put("temperature", 0.1)
+            put("temperature", config.temperature.coerceIn(0.0f, 1.5f).toDouble())
+            put("top_p", config.topP.coerceIn(0.1f, 1.0f).toDouble())
+            put("max_tokens", config.maxTokens.coerceIn(64, 2048))
             put(
                 "messages",
                 JSONArray().apply {

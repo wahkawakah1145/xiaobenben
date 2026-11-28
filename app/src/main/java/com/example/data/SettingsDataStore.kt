@@ -147,6 +147,15 @@ class SettingsDataStore(private val context: Context) {
         val AI_FALLBACK_ONLY = booleanPreferencesKey("ai_fallback_only")
         val AI_CUSTOM_SYSTEM_PROMPT = stringPreferencesKey("ai_custom_system_prompt")
         val AI_PROMPT_RULE_IDS_JSON = stringPreferencesKey("ai_prompt_rule_ids_json")
+        val AI_TEMPERATURE = floatPreferencesKey("ai_temperature")
+        val AI_TOP_P = floatPreferencesKey("ai_top_p")
+        val AI_TOP_K = intPreferencesKey("ai_top_k")
+        val AI_MAX_TOKENS = intPreferencesKey("ai_max_tokens")
+        val AI_CONTEXT_SIZE = intPreferencesKey("ai_context_size")
+        val AI_THREADS = intPreferencesKey("ai_threads")
+        val AI_REPEAT_PENALTY = floatPreferencesKey("ai_repeat_penalty")
+        val AI_SEED = intPreferencesKey("ai_seed")
+        val AI_LOCAL_AUTO_UNLOAD_SECONDS = intPreferencesKey("ai_local_auto_unload_seconds")
     }
 
     val budgetSettingsFlow: Flow<BudgetSettings> = context.smartLedgerDataStore.data.map { prefs ->
@@ -281,7 +290,16 @@ class SettingsDataStore(private val context: Context) {
             apiModelName = prefs[Keys.AI_API_MODEL_NAME] ?: "",
             useAiAsFallbackOnly = prefs[Keys.AI_FALLBACK_ONLY] ?: true,
             customSystemPrompt = AiUnderstandingManager.sanitizeStoredCustomPrompt(prefs[Keys.AI_CUSTOM_SYSTEM_PROMPT] ?: ""),
-            selectedPromptRuleIds = decodeStringListJson(prefs[Keys.AI_PROMPT_RULE_IDS_JSON])
+            selectedPromptRuleIds = decodeStringListJson(prefs[Keys.AI_PROMPT_RULE_IDS_JSON]),
+            temperature = (prefs[Keys.AI_TEMPERATURE] ?: 0.2f).coerceIn(0.0f, 1.5f),
+            topP = (prefs[Keys.AI_TOP_P] ?: 0.9f).coerceIn(0.1f, 1.0f),
+            topK = (prefs[Keys.AI_TOP_K] ?: 40).coerceIn(1, 100),
+            maxTokens = (prefs[Keys.AI_MAX_TOKENS] ?: 384).coerceIn(64, 2048),
+            contextSize = (prefs[Keys.AI_CONTEXT_SIZE] ?: 1024).coerceIn(512, 4096),
+            threads = (prefs[Keys.AI_THREADS] ?: 4).coerceIn(1, 8),
+            repeatPenalty = (prefs[Keys.AI_REPEAT_PENALTY] ?: 1.1f).coerceIn(1.0f, 1.5f),
+            seed = prefs[Keys.AI_SEED] ?: -1,
+            localAutoUnloadSeconds = (prefs[Keys.AI_LOCAL_AUTO_UNLOAD_SECONDS] ?: 45).coerceIn(-1, 600)
         )
     }
 
@@ -487,6 +505,15 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.AI_FALLBACK_ONLY] = config.useAiAsFallbackOnly
             prefs[Keys.AI_CUSTOM_SYSTEM_PROMPT] = AiUnderstandingManager.sanitizeStoredCustomPrompt(config.customSystemPrompt).take(4000)
             prefs[Keys.AI_PROMPT_RULE_IDS_JSON] = ruleIdsJson
+            prefs[Keys.AI_TEMPERATURE] = config.temperature.coerceIn(0.0f, 1.5f)
+            prefs[Keys.AI_TOP_P] = config.topP.coerceIn(0.1f, 1.0f)
+            prefs[Keys.AI_TOP_K] = config.topK.coerceIn(1, 100)
+            prefs[Keys.AI_MAX_TOKENS] = config.maxTokens.coerceIn(64, 2048)
+            prefs[Keys.AI_CONTEXT_SIZE] = config.contextSize.coerceIn(512, 4096)
+            prefs[Keys.AI_THREADS] = config.threads.coerceIn(1, 8)
+            prefs[Keys.AI_REPEAT_PENALTY] = config.repeatPenalty.coerceIn(1.0f, 1.5f)
+            prefs[Keys.AI_SEED] = config.seed
+            prefs[Keys.AI_LOCAL_AUTO_UNLOAD_SECONDS] = config.localAutoUnloadSeconds.coerceIn(-1, 600)
         }
     }
 

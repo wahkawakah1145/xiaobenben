@@ -5,6 +5,7 @@ import android.content.ComponentCallbacks2
 import com.example.data.AiUnderstandingManager
 import com.example.data.AppHttpClient
 import com.example.data.LedgerDatabase
+import com.example.data.LocalGgufRuntimeManager
 import com.example.service.NotificationBridge
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -37,6 +38,7 @@ class LedgerApplication : Application() {
         val keepLogs = if (aggressive) 0 else 4
         NotificationBridge.trimMemoryCaches(keepRecentLogs = keepLogs)
         AiUnderstandingManager.trimMemory(evictConnections = true)
+        LocalGgufRuntimeManager.releaseModelIfIdle(force = aggressive)
         AppHttpClient.trimIdleResources()
         runCatching {
             trimExecutor.execute {

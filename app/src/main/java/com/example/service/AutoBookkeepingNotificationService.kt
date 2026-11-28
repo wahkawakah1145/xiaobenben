@@ -260,7 +260,8 @@ class AutoBookkeepingNotificationService : NotificationListenerService() {
                 billFieldsConfig = settings.billFieldsConfig,
                 categoryParentMap = settings.categoryParentMap,
                 channelParentMap = settings.channelParentMap,
-                collapseChannelToParent = collapseChannel
+                collapseChannelToParent = collapseChannel,
+                lowMemoryBackground = true
             ).getOrNull()
             aiResult ?: ruleParsed
         } else {

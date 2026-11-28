@@ -480,7 +480,25 @@ data class AiConfig(
     val apiModelName: String = "",
     val useAiAsFallbackOnly: Boolean = true,
     val customSystemPrompt: String = "",
-    val selectedPromptRuleIds: List<String> = emptyList()
+    val selectedPromptRuleIds: List<String> = emptyList(),
+    val temperature: Float = 0.2f,
+    val topP: Float = 0.9f,
+    val topK: Int = 40,
+    val maxTokens: Int = 384,
+    val contextSize: Int = 1024,
+    val threads: Int = 4,
+    val repeatPenalty: Float = 1.1f,
+    val seed: Int = -1,
+    val localAutoUnloadSeconds: Int = 45
+)
+
+data class AiChatMessage(
+    val id: String,
+    val isUser: Boolean,
+    val content: String,
+    val meta: String = "",
+    val isError: Boolean = false,
+    val timestampMillis: Long = System.currentTimeMillis()
 )
 
 enum class TabClickAnimationStyle(val label: String) {

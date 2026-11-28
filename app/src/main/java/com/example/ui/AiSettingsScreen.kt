@@ -4,7 +4,9 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,7 +25,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import com.example.ui.theme.AppIcons
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -51,9 +56,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +68,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import java.util.Locale
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.AiUnderstandingManager
 import com.example.data.LocalModelCatalog
@@ -69,11 +77,9 @@ import com.example.model.AiProviderMode
 import com.example.model.CategoryCatalog
 import com.example.model.FeatureTipsCatalog
 import com.example.ui.components.FeatureTipBanner
-import com.example.ui.components.formatCurrency
 import com.example.ui.theme.ExpenseCoral
 import com.example.ui.theme.IncomeJade
 import com.example.viewmodel.AiModelDownloadState
-import com.example.viewmodel.AiTestState
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
 
@@ -82,13 +88,14 @@ import com.example.viewmodel.UiState
 fun AiSettingsScreen(
     viewModel: LedgerViewModel,
     onShowMessage: (String) -> Unit,
+    onOpenTuningAndTest: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val aiConfig by viewModel.aiConfigState.collectAsStateWithLifecycle()
     val downloadState by viewModel.aiModelDownloadState.collectAsStateWithLifecycle()
     val customModels by viewModel.customModelsState.collectAsStateWithLifecycle()
-    val aiTestState by viewModel.aiTestState.collectAsStateWithLifecycle()
+    val runtimeStatus by viewModel.localLlmRuntimeStatus.collectAsStateWithLifecycle()
     val rulesState by viewModel.rulesState.collectAsStateWithLifecycle()
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val appearance by viewModel.appearanceState.collectAsStateWithLifecycle()
@@ -129,16 +136,21 @@ fun AiSettingsScreen(
         mutableStateOf(aiConfig.selectedPromptRuleIds)
     }
     var showPromptPreview by remember { mutableStateOf(false) }
+    var rulesReferenceExpanded by rememberSaveable { mutableStateOf(false) }
     var showApiKey by remember { mutableStateOf(false) }
-
-    var testSampleInput by remember { mutableStateOf("") }
 
     fun normalizedCustomPromptValue(raw: String): String {
         val cleaned = AiUnderstandingManager.sanitizeStoredCustomPrompt(raw)
         return if (cleaned == defaultSystemPrompt) "" else cleaned
     }
 
-    fun currentEditedConfig(): AiConfig = AiConfig(
+    fun formatModelBytes(bytes: Long): String = when {
+        bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+        bytes >= 1024L -> "${bytes / 1024L} KB"
+        else -> "$bytes B"
+    }
+
+    fun currentEditedConfig(): AiConfig = aiConfig.copy(
         providerMode = selectedMode,
         localModelId = selectedLocalModelId,
         localModelMirror = selectedMirror,
@@ -158,8 +170,8 @@ fun AiSettingsScreen(
             if (selectedMode == AiProviderMode.ONLINE_API) add("online_api_card")
             if (selectedMode != AiProviderMode.DISABLED) {
                 add("ai_prompt_card")
-                add("ai_test_card")
             }
+            add("ai_tuning_entry_card")
         }
     }
     SettingsAutoScrollEffect(
@@ -397,7 +409,7 @@ fun AiSettingsScreen(
                                                     Text(custom.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                                     val vocabText = if (custom.vocabTokenCount > 0) " · 词元 ${custom.vocabTokenCount}" else ""
                                                     Text(
-                                                        text = "${custom.formatLabel} · ${custom.fileName} (${custom.sizeBytes / 1024} KB$vocabText)",
+                                                        text = "${custom.formatLabel} · ${custom.fileName} (${formatModelBytes(custom.sizeBytes)}$vocabText)",
                                                         style = MaterialTheme.typography.labelSmall,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
@@ -498,6 +510,19 @@ fun AiSettingsScreen(
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                        if (status.isGgufModel && status.installed) {
+                                            Text(
+                                                text = "GGUF v${status.ggufVersion} 已校验通过（${status.ggufTensorCount} 张量）· 端侧 llama.cpp 推理引擎就绪",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = IncomeJade
+                                            )
+                                        } else if (status.validationError.isNotBlank()) {
+                                            Text(
+                                                text = "权重校验异常：${status.validationError}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ExpenseCoral
+                                            )
+                                        }
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -520,6 +545,7 @@ fun AiSettingsScreen(
                                                     Text(if (isDownloadingThis) "下载中..." else "按需下载模型")
                                                 }
                                             } else {
+                                                val sizeLabel = formatModelBytes(status.totalBytes)
                                                 Button(
                                                     onClick = {
                                                         selectedLocalModelId = preset.id
@@ -533,7 +559,7 @@ fun AiSettingsScreen(
                                                     },
                                                     modifier = Modifier.weight(1f)
                                                 ) {
-                                                    Text(if (isSelected) "当前已启用 (${status.totalBytes / 1024} KB)" else "切换使用 (${status.totalBytes / 1024} KB)")
+                                                    Text(if (isSelected) "当前已启用 ($sizeLabel)" else "切换使用 ($sizeLabel)")
                                                 }
                                                 OutlinedButton(
                                                     enabled = downloadState !is AiModelDownloadState.Downloading,
@@ -779,88 +805,110 @@ fun AiSettingsScreen(
                             HorizontalDivider()
 
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { rulesReferenceExpanded = !rulesReferenceExpanded }
+                                    .padding(vertical = 6.dp)
+                                    .testTag("ai_prompt_rules_collapse_header"),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("选择识别规则作为 AI 提示词参考", style = MaterialTheme.typography.labelLarge)
                                     Text(
-                                        text = "选中的规则会注入系统提示词并在本地/在线推理时优先参考",
+                                        text = "已选 ${selectedPromptRuleIds.size} / ${allRules.size} 条 · 点击${if (rulesReferenceExpanded) "收起" else "展开"}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                if (allRules.isNotEmpty()) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        AssistChip(
-                                            onClick = {
-                                                selectedPromptRuleIds = if (selectedPromptRuleIds.size >= allRules.size) {
-                                                    emptyList()
-                                                } else {
-                                                    allRules.map { it.id }
-                                                }
-                                                viewModel.saveAiConfig(
-                                                    currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
-                                                )
-                                            },
-                                            label = {
-                                                Text(if (selectedPromptRuleIds.size >= allRules.size) "全不选" else "全选")
-                                            },
-                                            modifier = Modifier.testTag("ai_prompt_rules_select_all")
-                                        )
-                                        AssistChip(
-                                            onClick = {
-                                                val currentSet = selectedPromptRuleIds.toSet()
-                                                selectedPromptRuleIds = allRules
-                                                    .map { it.id }
-                                                    .filter { it !in currentSet }
-                                                viewModel.saveAiConfig(
-                                                    currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
-                                                )
-                                            },
-                                            label = { Text("反选") },
-                                            modifier = Modifier.testTag("ai_prompt_rules_invert")
-                                        )
-                                    }
-                                }
+                                Icon(
+                                    imageVector = if (rulesReferenceExpanded) {
+                                        Icons.Rounded.KeyboardArrowUp
+                                    } else {
+                                        Icons.Rounded.KeyboardArrowDown
+                                    },
+                                    contentDescription = if (rulesReferenceExpanded) "收起参考规则" else "展开参考规则",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
 
-                            if (allRules.isEmpty()) {
-                                Text(
-                                    text = "暂无自定义或内置识别规则，前往「识别规则」添加后即可在此勾选。",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else {
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                            AnimatedVisibility(visible = rulesReferenceExpanded) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    allRules.forEach { rule ->
-                                        val isChecked = rule.id in selectedPromptRuleIds
-                                        val ruleLabel = buildString {
-                                            append(rule.name.ifBlank { rule.channelName.ifBlank { "规则" } })
-                                            if (rule.isIgnoreRule) append("(忽略)")
-                                            else if (rule.defaultCategory.isNotBlank() && rule.defaultCategory != "自动") {
-                                                append("·${rule.defaultCategory}")
+                                    if (allRules.isNotEmpty()) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            AssistChip(
+                                                onClick = {
+                                                    selectedPromptRuleIds = if (selectedPromptRuleIds.size >= allRules.size) {
+                                                        emptyList()
+                                                    } else {
+                                                        allRules.map { it.id }
+                                                    }
+                                                    viewModel.saveAiConfig(
+                                                        currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
+                                                    )
+                                                },
+                                                label = {
+                                                    Text(if (selectedPromptRuleIds.size >= allRules.size) "全不选" else "全选")
+                                                },
+                                                modifier = Modifier.testTag("ai_prompt_rules_select_all")
+                                            )
+                                            AssistChip(
+                                                onClick = {
+                                                    val currentSet = selectedPromptRuleIds.toSet()
+                                                    selectedPromptRuleIds = allRules
+                                                        .map { it.id }
+                                                        .filter { it !in currentSet }
+                                                    viewModel.saveAiConfig(
+                                                        currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
+                                                    )
+                                                },
+                                                label = { Text("反选") },
+                                                modifier = Modifier.testTag("ai_prompt_rules_invert")
+                                            )
+                                        }
+                                    }
+
+                                    if (allRules.isEmpty()) {
+                                        Text(
+                                            text = "暂无自定义或内置识别规则，前往「识别规则」添加后即可在此勾选。",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    } else {
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            allRules.forEach { rule ->
+                                                val isChecked = rule.id in selectedPromptRuleIds
+                                                val ruleLabel = buildString {
+                                                    append(rule.name.ifBlank { rule.channelName.ifBlank { "规则" } })
+                                                    if (rule.isIgnoreRule) append("(忽略)")
+                                                    else if (rule.defaultCategory.isNotBlank() && rule.defaultCategory != "自动") {
+                                                        append("·${rule.defaultCategory}")
+                                                    }
+                                                }
+                                                FilterChip(
+                                                    selected = isChecked,
+                                                    onClick = {
+                                                        selectedPromptRuleIds = if (isChecked) {
+                                                            selectedPromptRuleIds - rule.id
+                                                        } else {
+                                                            selectedPromptRuleIds + rule.id
+                                                        }
+                                                        viewModel.saveAiConfig(
+                                                            currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
+                                                        )
+                                                    },
+                                                    label = { Text(ruleLabel) },
+                                                    modifier = Modifier.testTag("ai_prompt_rule_chip_${rule.id}")
+                                                )
                                             }
                                         }
-                                        FilterChip(
-                                            selected = isChecked,
-                                            onClick = {
-                                                selectedPromptRuleIds = if (isChecked) {
-                                                    selectedPromptRuleIds - rule.id
-                                                } else {
-                                                    selectedPromptRuleIds + rule.id
-                                                }
-                                                viewModel.saveAiConfig(
-                                                    currentEditedConfig().copy(selectedPromptRuleIds = selectedPromptRuleIds)
-                                                )
-                                            },
-                                            label = { Text(ruleLabel) },
-                                            modifier = Modifier.testTag("ai_prompt_rule_chip_${rule.id}")
-                                        )
                                     }
                                 }
                             }
@@ -896,117 +944,95 @@ fun AiSettingsScreen(
                 }
             }
 
-            // 4. Live AI Parsing Test Card
-            if (selectedMode != AiProviderMode.DISABLED) {
-                item(key = "ai_test_card") {
-                    Card(
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                        modifier = Modifier.fillMaxWidth()
+            // 4. Bottom Sub-Menu Entry: 调参与测试
+            item(key = "ai_tuning_entry_card") {
+                val unloadDesc = when (aiConfig.localAutoUnloadSeconds) {
+                    0 -> "推理后立即释放"
+                    -1 -> "内存紧张时释放"
+                    else -> "${aiConfig.localAutoUnloadSeconds}s 空闲卸载"
+                }
+                val tuningSummary = buildString {
+                    append(String.format(Locale.US, "Temp %.2f · Top-P %.2f · 上下文 %d", aiConfig.temperature, aiConfig.topP, aiConfig.contextSize))
+                    if (selectedMode == AiProviderMode.LOCAL_SMALL_MODEL) {
+                        append(" · $unloadDesc")
+                    }
+                }
+                Card(
+                    onClick = {
+                        viewModel.saveAiConfig(currentEditedConfig())
+                        onOpenTuningAndTest()
+                    },
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumInteractiveComponentSize()
+                        .testTag("ai_open_tuning_and_test_card")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(
-                            modifier = Modifier.padding(18.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(42.dp)
                         ) {
-                            Text("AI理解测试", style = MaterialTheme.typography.titleMedium)
-
-                            AssistChip(
-                                onClick = {
-                                    testSampleInput = "【招商银行】您尾号8812储蓄卡于11月19日在星巴克（静安嘉里店）快捷支付人民币42.50元。"
-                                },
-                                label = { Text("填入示例通知文本测试") }
-                            )
-
-                            OutlinedTextField(
-                                value = testSampleInput,
-                                onValueChange = { testSampleInput = it },
-                                label = { Text("待理解测试文本") },
-                                placeholder = { Text("输入任意银行短信、支付通知或消费文本") },
-                                minLines = 2,
-                                maxLines = 4,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("ai_test_input")
-                            )
-
-                            Button(
-                                enabled = aiTestState !is AiTestState.Loading,
-                                onClick = {
-                                    val cfg = currentEditedConfig()
-                                    if (testSampleInput.isBlank()) {
-                                        onShowMessage("请先输入或填入测试通知文本")
-                                    } else {
-                                        viewModel.testAiUnderstanding(
-                                            context = context,
-                                            config = cfg,
-                                            sampleTitle = "AI理解测试",
-                                            sampleContent = testSampleInput
-                                        )
-                                    }
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("ai_run_test_button")
-                            ) {
-                                if (aiTestState is AiTestState.Loading) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        strokeWidth = 2.dp,
-                                        color = MaterialTheme.colorScheme.onPrimary
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("正在理解解析...")
-                                } else {
-                                    Icon(AppIcons.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("测试 AI理解")
-                                }
-                            }
-
-                            when (val state = aiTestState) {
-                                is AiTestState.Idle, is AiTestState.Loading -> Unit
-                                is AiTestState.Error -> {
-                                    Surface(
-                                        color = ExpenseCoral.copy(alpha = 0.12f),
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            text = state.message,
-                                            color = ExpenseCoral,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.padding(10.dp)
-                                        )
-                                    }
-                                }
-                                is AiTestState.Success -> {
-                                    val p = state.result
-                                    Surface(
-                                        color = IncomeJade.copy(alpha = 0.12f),
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(12.dp),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Text(
-                                                text = "识别成功：${p.merchant} · ${formatCurrency(p.amountCents, p.currencyCode, showSign = true, type = p.type)}",
-                                                style = MaterialTheme.typography.titleSmall,
-                                                color = IncomeJade,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                            Text(
-                                                text = "渠道：${p.channel} · 分类：${p.category} · 方式：${p.reasoning}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                    }
-                                }
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = AppIcons.Tune,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(22.dp)
+                                )
                             }
                         }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "调参与测试",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                if (runtimeStatus.isLoaded) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = IncomeJade.copy(alpha = 0.14f)
+                                    ) {
+                                        Text(
+                                            text = "模型已载入",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = IncomeJade,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = "大模型参数调节、对话测试、账单解析验证与内存释放",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = tuningSummary,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = "进入调参与测试",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

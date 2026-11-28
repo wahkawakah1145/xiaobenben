@@ -13,7 +13,7 @@ android {
     minSdk = 30
     targetSdk = 37
     versionCode = (project.findProperty("ciVersionCode") as? String)?.toIntOrNull() ?: 1
-    versionName = (project.findProperty("ciVersionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.1.4.530"
+    versionName = (project.findProperty("ciVersionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.1.4.531"
     val ciGithubRepo = (project.findProperty("ciGithubRepo") as? String)
       ?.trim()
       ?.takeIf { it.contains("/") }
@@ -151,6 +151,7 @@ dependencies {
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation(libs.llama.android)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

@@ -364,6 +364,18 @@ class LedgerViewModel(
     private val _forcingAiLogId = MutableStateFlow<String?>(null)
     val forcingAiLogId: StateFlow<String?> = _forcingAiLogId.asStateFlow()
 
+    val localLlmRuntimeStatus: StateFlow<com.example.data.LocalLlmRuntimeStatus> =
+        com.example.data.LocalGgufRuntimeManager.status
+
+    private val _aiChatMessages = MutableStateFlow<List<com.example.model.AiChatMessage>>(emptyList())
+    val aiChatMessages: StateFlow<List<com.example.model.AiChatMessage>> = _aiChatMessages.asStateFlow()
+
+    private val _aiChatSending = MutableStateFlow(false)
+    val aiChatSending: StateFlow<Boolean> = _aiChatSending.asStateFlow()
+
+    private val _localLlmPreloading = MutableStateFlow(false)
+    val localLlmPreloading: StateFlow<Boolean> = _localLlmPreloading.asStateFlow()
+
     val notificationLogCountState: StateFlow<Int> =
         repository.observeNotificationLogsCount()
             .catch { error ->
@@ -1793,6 +1805,113 @@ class LedgerViewModel(
         }
     }
 
+    /**
+     * Re-recognizes a historical notification log entry using active parsing rules & local semantic parser.
+     */
+    fun reRecognizeNotificationLogWithRules(
+        log: com.example.model.CapturedNotificationLog,
+        onResult: (Result<String>) -> Unit = {}
+    ) {
+        if (_forcingAiLogId.value != null) return
+        viewModelScope.launch {
+            _forcingAiLogId.value = log.id
+            try {
+                repository.ensureDefaultRulesSeeded()
+                val settings = repository.getSettingsOnce()
+                val customRules = repository.getRulesOnce()
+                val ignoreRule = ChinaNotificationParser.matchesIgnoreRule(
+                    packageName = log.packageName,
+                    title = log.title,
+                    content = log.content,
+                    customRules = customRules
+                )
+                if (ignoreRule != null) {
+                    val reason = "命中忽略规则「${ignoreRule.name}」"
+                    repository.updateNotificationLogStatus(
+                        id = log.id,
+                        status = "手动规则已忽略",
+                        summary = reason
+                    )
+                    loadNotificationLogs(_notificationLogsState.value.query)
+                    _actionMessage.value = "规则识别：$reason"
+                    onResult(Result.failure(IllegalStateException(reason)))
+                    return@launch
+                }
+
+                val activeChannels = com.example.model.ChannelCatalog.activeChannels(settings)
+                val collapseChannel = !settings.channelShowChildren
+                val parsed = ChinaNotificationParser.parse(
+                    packageName = log.packageName,
+                    title = log.title,
+                    content = log.content,
+                    customRules = customRules,
+                    enableLocalSemanticPass = true,
+                    referenceTimeMillis = log.capturedAtMillis,
+                    customChannels = activeChannels,
+                    channelParentMap = settings.channelParentMap,
+                    collapseChannelToParent = collapseChannel
+                )
+
+                if (parsed == null || !parsed.isFinancialTransaction || parsed.amountCents <= 0L) {
+                    val reason = "当前规则未能匹配该通知，可尝试切换为 AI 识别"
+                    repository.updateNotificationLogStatus(
+                        id = log.id,
+                        status = "手动规则未识别",
+                        summary = reason
+                    )
+                    loadNotificationLogs(_notificationLogsState.value.query)
+                    _actionMessage.value = reason
+                    onResult(Result.failure(IllegalStateException(reason)))
+                    return@launch
+                }
+
+                val resolvedOccurredAt = parsed.occurredAtMillis ?: log.capturedAtMillis
+                val needsManualConfirm = settings.requireManualConfirm || parsed.needsInquiry
+                val compactRaw = "${log.title}: ${log.content}"
+                    .replace(Regex("""\s+"""), " ")
+                    .trim()
+                    .take(220)
+                val tx = LedgerTransaction(
+                    amountCents = parsed.amountCents,
+                    currencyCode = parsed.currencyCode,
+                    type = parsed.type.name,
+                    category = parsed.category,
+                    merchant = parsed.merchant,
+                    channel = parsed.channel,
+                    cardLastFour = parsed.cardLastFour,
+                    sourceApp = parsed.sourceApp.name,
+                    parseMethod = parsed.parseMethod.name,
+                    rawNotification = compactRaw,
+                    note = parsed.reasoning.ifBlank { "通知日志手动规则识别" }.take(120),
+                    customFields = parsed.customFields,
+                    occurredAtMillis = resolvedOccurredAt,
+                    confirmed = !needsManualConfirm
+                )
+                repository.addTransaction(tx).getOrThrow()
+
+                val symbol = CurrencyCatalog.resolve(parsed.currencyCode).symbol
+                val formattedAmount = "$symbol%.2f".format(parsed.amountCents / 100.0)
+                val newStatus = if (needsManualConfirm) "手动规则待确认" else "手动规则已入账"
+                val newSummary = "${parsed.type.label} $formattedAmount · ${parsed.merchant} · ${parsed.category}"
+                repository.updateNotificationLogStatus(
+                    id = log.id,
+                    status = newStatus,
+                    summary = newSummary
+                )
+                loadNotificationLogs(_notificationLogsState.value.query)
+                val okMsg = "规则识别成功：$newSummary"
+                _actionMessage.value = okMsg
+                onResult(Result.success(okMsg))
+            } catch (err: Exception) {
+                val errMsg = err.localizedMessage ?: "规则识别失败"
+                _actionMessage.value = errMsg
+                onResult(Result.failure(err))
+            } finally {
+                _forcingAiLogId.value = null
+            }
+        }
+    }
+
     suspend fun saveAppearanceSettingsSuspend(settings: AppearanceSettings): Result<Unit> {
         return repository.saveAppearanceSettings(settings)
     }
@@ -2224,7 +2343,9 @@ class LedgerViewModel(
             repository.saveAiConfig(config)
             _aiTestState.value = AiTestState.Loading
             val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
-            val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settingsState.value)
+            val settings = settingsState.value
+            val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settings)
+            val activeChannels = com.example.model.ChannelCatalog.activeChannels(settings)
             aiManager.enhanceOrParseNotification(
                 context = context,
                 config = config,
@@ -2233,11 +2354,117 @@ class LedgerViewModel(
                 content = sampleContent,
                 fallbackParsed = null,
                 availableRules = rules,
-                activeCategories = activeCategories
+                activeCategories = activeCategories,
+                activeChannels = activeChannels,
+                billFieldsConfig = settings.billFieldsConfig,
+                categoryParentMap = settings.categoryParentMap,
+                channelParentMap = settings.channelParentMap,
+                collapseChannelToParent = !settings.channelShowChildren
             )
                 .onSuccess { parsed -> _aiTestState.value = AiTestState.Success(parsed) }
                 .onFailure { err -> _aiTestState.value = AiTestState.Error(err.message ?: "AI理解测试失败") }
         }
+    }
+
+    fun preloadLocalGgufModel(
+        context: android.content.Context,
+        config: AiConfig
+    ) {
+        if (_localLlmPreloading.value) return
+        viewModelScope.launch {
+            _localLlmPreloading.value = true
+            try {
+                repository.saveAiConfig(config)
+                aiManager.preloadLocalGgufModel(context.applicationContext, config)
+                    .onSuccess { msg -> _actionMessage.value = msg }
+                    .onFailure { err -> _actionMessage.value = err.message ?: "模型预加载失败" }
+            } finally {
+                _localLlmPreloading.value = false
+            }
+        }
+    }
+
+    fun unloadLocalGgufModel() {
+        viewModelScope.launch {
+            com.example.data.LocalGgufRuntimeManager.releaseModelNow()
+            _actionMessage.value = "已释放端侧大模型内存，后台监听保持运行"
+        }
+    }
+
+    fun sendAiChatTestMessage(
+        context: android.content.Context,
+        config: AiConfig,
+        userInput: String,
+        useLedgerSystemPrompt: Boolean
+    ) {
+        val cleanInput = userInput.trim()
+        if (cleanInput.isEmpty() || _aiChatSending.value) return
+        viewModelScope.launch {
+            _aiChatSending.value = true
+            val historySnapshot = _aiChatMessages.value
+            val userMsg = com.example.model.AiChatMessage(
+                id = java.util.UUID.randomUUID().toString(),
+                isUser = true,
+                content = cleanInput
+            )
+            _aiChatMessages.value = historySnapshot + userMsg
+            try {
+                repository.saveAiConfig(config)
+                val rules = (rulesState.value as? UiState.Success)?.data ?: repository.getRulesOnce()
+                val settings = settingsState.value
+                val activeCategories = com.example.model.CategoryCatalog.allActiveCategories(settings)
+                val activeChannels = com.example.model.ChannelCatalog.activeChannels(settings)
+                val result = aiManager.chatTest(
+                    context = context.applicationContext,
+                    config = config,
+                    history = historySnapshot,
+                    userInput = cleanInput,
+                    useLedgerSystemPrompt = useLedgerSystemPrompt,
+                    availableRules = rules,
+                    activeCategories = activeCategories,
+                    activeChannels = activeChannels,
+                    billFieldsConfig = settings.billFieldsConfig,
+                    categoryParentMap = settings.categoryParentMap,
+                    channelParentMap = settings.channelParentMap
+                )
+                result
+                    .onSuccess { reply ->
+                        val meta = buildString {
+                            append(reply.engineLabel)
+                            if (reply.tokensPerSecond > 0f) {
+                                append(String.format(java.util.Locale.US, " · %.1f tok/s", reply.tokensPerSecond))
+                            }
+                            if (reply.tokensGenerated > 0) {
+                                append(" · ${reply.tokensGenerated} tokens")
+                            }
+                            append(" · ${String.format(java.util.Locale.US, "%.1fs", reply.latencyMs / 1000f)}")
+                        }
+                        val assistantMsg = com.example.model.AiChatMessage(
+                            id = java.util.UUID.randomUUID().toString(),
+                            isUser = false,
+                            content = reply.text,
+                            meta = meta
+                        )
+                        _aiChatMessages.value = _aiChatMessages.value + assistantMsg
+                    }
+                    .onFailure { err ->
+                        val errMsg = com.example.model.AiChatMessage(
+                            id = java.util.UUID.randomUUID().toString(),
+                            isUser = false,
+                            content = err.message ?: "对话调用失败",
+                            meta = "调用失败",
+                            isError = true
+                        )
+                        _aiChatMessages.value = _aiChatMessages.value + errMsg
+                    }
+            } finally {
+                _aiChatSending.value = false
+            }
+        }
+    }
+
+    fun clearAiChatTestHistory() {
+        _aiChatMessages.value = emptyList()
     }
 
     fun previewManualImport(

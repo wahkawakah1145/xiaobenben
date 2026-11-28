@@ -3255,6 +3255,128 @@ class ExampleRobolectricTest {
       darkBmp.recycle()
     }
   }
+
+  @Test
+  fun `gguf header inspector validates real gguf v3 headers and rejects html or lfs pointers`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val tmpDir = java.io.File(context.cacheDir, "gguf_test_${System.nanoTime()}").apply { mkdirs() }
+    try {
+      // 1. Valid GGUF v3 header (magic="GGUF", version=3, tensors=128, kv=24)
+      val validGguf = java.io.File(tmpDir, "valid_lfm25.gguf")
+      val bb = java.nio.ByteBuffer.allocate(32).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+      bb.put("GGUF".toByteArray(Charsets.US_ASCII))
+      bb.putInt(3)
+      bb.putLong(128L)
+      bb.putLong(24L)
+      bb.putLong(0L)
+      validGguf.writeBytes(bb.array())
+
+      val validInfo = com.example.data.LocalGgufRuntimeManager.inspectGgufFile(validGguf)
+      org.junit.Assert.assertTrue(validInfo.valid)
+      assertEquals(3, validInfo.version)
+      assertEquals(128L, validInfo.tensorCount)
+      assertEquals(24L, validInfo.kvCount)
+
+      // 2. HTML 404 mirror response masquerading as .gguf
+      val htmlFile = java.io.File(tmpDir, "broken_404.gguf").apply {
+        writeText("<!DOCTYPE html><html><body>404 Not Found</body></html>")
+      }
+      val htmlInfo = com.example.data.LocalGgufRuntimeManager.inspectGgufFile(htmlFile)
+      org.junit.Assert.assertFalse(htmlInfo.valid)
+      org.junit.Assert.assertTrue(htmlInfo.errorMessage.contains("HTML"))
+
+      // 3. Git LFS pointer file masquerading as .gguf
+      val lfsFile = java.io.File(tmpDir, "lfs_pointer.gguf").apply {
+        writeText("version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 229000000\n")
+      }
+      val lfsInfo = com.example.data.LocalGgufRuntimeManager.inspectGgufFile(lfsFile)
+      org.junit.Assert.assertFalse(lfsInfo.valid)
+      org.junit.Assert.assertTrue(lfsInfo.errorMessage.contains("LFS"))
+
+      // 4. Safe idle release on JVM never crashes
+      com.example.data.LocalGgufRuntimeManager.releaseModelIfIdle(force = true)
+      org.junit.Assert.assertFalse(com.example.data.LocalGgufRuntimeManager.status.value.isLoaded)
+    } finally {
+      tmpDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `ai tuning parameters persist cleanly via repository and SettingsDataStore`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val original = repo.getAiConfigOnce()
+    try {
+      val tuned = original.copy(
+        temperature = 0.65f,
+        topP = 0.85f,
+        topK = 32,
+        maxTokens = 768,
+        contextSize = 2048,
+        threads = 6,
+        repeatPenalty = 1.15f,
+        seed = 42,
+        localAutoUnloadSeconds = 30
+      )
+      repo.saveAiConfig(tuned)
+      val reloaded = repo.getAiConfigOnce()
+      assertEquals(0.65f, reloaded.temperature, 0.001f)
+      assertEquals(0.85f, reloaded.topP, 0.001f)
+      assertEquals(32, reloaded.topK)
+      assertEquals(768, reloaded.maxTokens)
+      assertEquals(2048, reloaded.contextSize)
+      assertEquals(6, reloaded.threads)
+      assertEquals(1.15f, reloaded.repeatPenalty, 0.001f)
+      assertEquals(42, reloaded.seed)
+      assertEquals(30, reloaded.localAutoUnloadSeconds)
+    } finally {
+      repo.saveAiConfig(original)
+    }
+  }
+
+  @Test
+  fun `historical notification log supports manual rule re-recognition into ledger transaction`() = kotlinx.coroutines.runBlocking<Unit> {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.LedgerRepository(context)
+    val vm = com.example.viewmodel.LedgerViewModel(repo)
+    repo.recordNotificationLog(
+      packageName = "cmb.pb",
+      appLabel = "招商银行",
+      title = "招商银行消费提醒",
+      content = "【招商银行】您尾号8812储蓄卡在星巴克快捷支付人民币42.50元。",
+      status = "待手动处理",
+      summary = "等待人工选择规则或 AI 识别"
+    )
+    val logs = repo.loadNotificationLogsPage(query = "8812", limit = 10, offset = 0)
+    org.junit.Assert.assertTrue(logs.isNotEmpty())
+    val targetLog = logs.first()
+
+    var outcome: Result<String>? = null
+    vm.reRecognizeNotificationLogWithRules(targetLog) { result ->
+      outcome = result
+    }
+    val deadline = System.currentTimeMillis() + 5000L
+    while (outcome == null && System.currentTimeMillis() < deadline) {
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      kotlinx.coroutines.delay(25)
+    }
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+    org.junit.Assert.assertNotNull("Expected rule re-recognition callback", outcome)
+    org.junit.Assert.assertTrue(
+      "Expected rule re-recognition to succeed, got: ${outcome?.exceptionOrNull()?.message}",
+      outcome!!.isSuccess
+    )
+
+    val updatedLogs = repo.loadNotificationLogsPage(query = "8812", limit = 10, offset = 0)
+    val refreshed = updatedLogs.firstOrNull { it.id == targetLog.id }
+    org.junit.Assert.assertNotNull(refreshed)
+    org.junit.Assert.assertTrue(
+      "Expected rule status update, got: ${refreshed?.status}",
+      refreshed?.status?.startsWith("手动规则") == true
+    )
+    val txs = repo.getAllTransactionsOnce()
+    org.junit.Assert.assertTrue(txs.any { it.amountCents == 4250L && it.channel.contains("招商") })
+  }
 }
 
 

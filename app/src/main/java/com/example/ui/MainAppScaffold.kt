@@ -154,6 +154,7 @@ const val ROUTE_SETTINGS_CATEGORIES = "settings/categories"
 const val ROUTE_SETTINGS_BILL_BEHAVIOR = "settings/bill_behavior"
 const val ROUTE_SETTINGS_PARSER = "settings/parser"
 const val ROUTE_SETTINGS_AI = "settings/ai"
+const val ROUTE_SETTINGS_AI_TUNING = "settings/ai/tuning"
 const val ROUTE_SETTINGS_CURRENCY = "settings/currency"
 const val ROUTE_SETTINGS_DATA_HUB = "settings/data_hub"
 const val ROUTE_SETTINGS_LOCAL_BACKUP = "settings/local_backup"
@@ -522,6 +523,7 @@ fun AppNavigation(
                 ROUTE_SETTINGS_PARSER -> "通知识别与规则"
                 ROUTE_SETTINGS_NOTIFICATION_LOGS -> "通知读取日志"
                 ROUTE_SETTINGS_AI -> "AI理解"
+                ROUTE_SETTINGS_AI_TUNING -> "调参与测试"
                 ROUTE_SETTINGS_DATA_HUB, ROUTE_SETTINGS_LOCAL_BACKUP -> "备份与恢复"
                 ROUTE_SETTINGS_APPEARANCE -> "个性化设置"
                 ROUTE_SETTINGS_APPEARANCE_THEME -> "主题与配色"
@@ -736,6 +738,11 @@ fun AppNavigation(
                         onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
                     ROUTE_SETTINGS_AI -> AiSettingsScreen(
+                        viewModel = viewModel,
+                        onShowMessage = { msg -> showGlobalSnackbar(msg) },
+                        onOpenTuningAndTest = { navController.navigate(ROUTE_SETTINGS_AI_TUNING) }
+                    )
+                    ROUTE_SETTINGS_AI_TUNING -> AiTuningAndTestScreen(
                         viewModel = viewModel,
                         onShowMessage = { msg -> showGlobalSnackbar(msg) }
                     )
@@ -1160,6 +1167,7 @@ fun AppNavigation(
                                 ROUTE_SETTINGS_PARSER,
                                 ROUTE_SETTINGS_NOTIFICATION_LOGS,
                                 ROUTE_SETTINGS_AI,
+                                ROUTE_SETTINGS_AI_TUNING,
                                 ROUTE_SETTINGS_DATA_HUB,
                                 ROUTE_SETTINGS_LOCAL_BACKUP,
                                 ROUTE_SETTINGS_APPEARANCE,
